@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["gnap-compliance"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/davlgd/gnap"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+base64 = "0.22"
+sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8"] }
+url = { version = "2", features = ["serde"] }
+http = "1"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6"
+rand = "0.8"

@@ -1,0 +1,24 @@
+[package]
+name = "gnap-compliance"
+version = "0.1.0"
+description = "GNAP (RFC 9635 / RFC 9767) compliance test suite and canonical types"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/davlgd/gnap-compliance"
+keywords = ["gnap", "authorization", "rfc9635", "compliance", "security"]
+categories = ["authentication", "web-programming"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+wiremock = { workspace = true }
