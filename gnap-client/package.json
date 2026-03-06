@@ -1,0 +1,25 @@
+{
+  "name": "gnap-client",
+  "version": "0.1.0",
+  "description": "GNAP (RFC 9635) client implementation for testing and demonstrating the protocol",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/davlgd/gnap",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "demo": "bun run src/demo/run.ts",
+    "demo:web": "bun run src/demo/web.ts",
+    "demo:server": "bun run src/demo/server.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./crypto": "./src/crypto/index.ts",
+    "./types": "./src/types/index.ts",
+    "./validation": "./src/validation/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "latest"
+  }
+}
