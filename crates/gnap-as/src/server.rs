@@ -10,7 +10,9 @@ use crate::encoding::{
 };
 use crate::nonce::Nonces;
 use crate::policy::{Decision, KeyResolver, Policy, SubjectGround};
-use crate::storage::{GrantRecord, Storage, TokenRecord};
+use crate::storage::{
+    GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot, Storage, StoreError, TokenRecord,
+};
 use gnap_core::{Event, Grant, State};
 use gnap_crypto::hash::{interaction_hash_named, InteractionHashInput};
 use gnap_crypto::verify::{verify_request, Expectations, SignedRequest};
@@ -110,6 +112,8 @@ pub enum InteractionError {
     Hash(String),
     /// The callback body could not be built.
     Serialization(String),
+    /// Storage could not atomically publish this completion.
+    Storage(StoreError),
 }
 
 impl fmt::Display for InteractionError {
@@ -138,6 +142,7 @@ impl fmt::Display for InteractionError {
             Self::Misconfigured(what) => write!(f, "{what}"),
             Self::Hash(e) => write!(f, "the interaction hash could not be computed: {e}"),
             Self::Serialization(e) => write!(f, "the callback body could not be built: {e}"),
+            Self::Storage(e) => write!(f, "interaction completion was not published: {e}"),
         }
     }
 }
@@ -378,9 +383,24 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             return r;
         }
 
-        let mut grant = Grant::new();
         let decision = self.policy.evaluate(&body);
-        self.settle(&mut grant, body, decision, now, None, false)
+        let mut aggregate = GrantAggregate::new(GrantRecord {
+            grant: Grant::new(),
+            request: body,
+            continuation_token: None,
+            as_nonce: None,
+            interact_handle: None,
+            interact_expires_at: None,
+            interact_ref: None,
+            interaction_completed: false,
+        });
+        let response = self.settle(&mut aggregate, decision, now);
+        if aggregate.record.continuation_token.is_some() || !aggregate.tokens.is_empty() {
+            if let Err(failure) = self.storage.create(aggregate) {
+                return storage_failure(failure);
+            }
+        }
+        response
     }
 
     /// A call to the token management API (§6).
@@ -410,7 +430,12 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             );
         };
 
-        let Some(record) = self.storage.get_token(handle) else {
+        let snapshot = match self.storage.lookup(GrantSelector::Management(handle)) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return invalid_management_credentials(),
+            Err(failure) => return storage_failure(failure),
+        };
+        let Some(record) = snapshot.aggregate.tokens.get(handle) else {
             // §6 requires validation of the proof and its binding to the token.
             // This store retains no revoked-token key metadata, so it cannot
             // authenticate a request for a deleted handle. That prevents the
@@ -448,49 +473,56 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         }
 
         if rotating {
-            self.rotate_token(handle, request, now)
+            self.rotate_token(snapshot, handle, request, now)
         } else {
             // §6.2-M02 — "the AS MUST invalidate the access token, if possible,
             // and return an HTTP response code 204."
-            self.storage.take_token(handle);
+            let mut replacement = snapshot.aggregate.clone();
+            replacement.tokens.remove(handle);
+            if let Err(failure) =
+                self.storage
+                    .compare_exchange(snapshot.id, snapshot.revision, replacement)
+            {
+                return storage_failure(failure);
+            }
             no_content()
         }
     }
 
+    /// Value rotation is bodyless; key rotation is explicitly unsupported.
+    fn validate_rotation_content(request: &HttpRequest) -> Result<(), HttpResponse> {
+        if request.body.as_ref().is_none_or(Vec::is_empty) {
+            return Ok(());
+        }
+        require_json_content(request)?;
+        let body = Self::parse::<serde_json::Map<String, serde_json::Value>>(request)?;
+        if body.contains_key("key") {
+            return Err(error(
+                ErrorCode::KeyRotationNotSupported,
+                "this server does not rotate the key bound to an access token (RFC 9635 §6.1.1)",
+            ));
+        }
+        Err(error(
+            ErrorCode::InvalidRequest,
+            "value rotation has no message content; binding a new key requires a key field (RFC 9635 §6.1, §6.1.1)",
+        ))
+    }
+
     /// Rotates the value of a managed access token (§6.1).
-    fn rotate_token(&self, handle: &str, request: &HttpRequest, now: u64) -> HttpResponse {
-        // §6.1.1 — a rotation carrying a `key` asks to bind a new presentation
-        // key, which needs the two simultaneous proofs of §7.3.1.1. This server
-        // does not implement that, and §6.1.1-M08 names the answer for exactly
-        // this case: "If the AS does not allow rotation of the access token's
-        // key for any reason, including but not limited to [...] lack of
-        // capability by the AS, the AS MUST return a key_rotation_not_supported
-        // error code."
-        if request.body.as_ref().is_some_and(|b| !b.is_empty()) {
-            if let Err(r) = require_json_content(request) {
-                return r;
-            }
-            let body = match Self::parse::<serde_json::Map<String, serde_json::Value>>(request) {
-                Ok(body) => body,
-                Err(response) => return response,
-            };
-            if body.contains_key("key") {
-                return error(
-                    ErrorCode::KeyRotationNotSupported,
-                    "this server does not rotate the key bound to an access token \
-                     (RFC 9635 §6.1.1)",
-                );
-            }
-            return error(
-                ErrorCode::InvalidRequest,
-                "value rotation has no message content; binding a new key requires a key \
-                 field (RFC 9635 §6.1, §6.1.1)",
-            );
+    fn rotate_token(
+        &self,
+        mut snapshot: GrantSnapshot,
+        handle: &str,
+        request: &HttpRequest,
+        now: u64,
+    ) -> HttpResponse {
+        if let Err(response) = Self::validate_rotation_content(request) {
+            return response;
         }
 
-        // Claim it: rotation replaces the token, and two callers must not both
-        // succeed and walk away with different values for the same grant.
-        let Some(record) = self.storage.take_token(handle) else {
+        // Work on the authenticated snapshot. Publication is a single CAS;
+        // the original stays visible while policy and encoding run.
+        let Some(record) = snapshot.aggregate.tokens.get(handle).cloned() else {
             return error(
                 ErrorCode::InvalidRotation,
                 "no access token is managed at this URI (RFC 9635 §6)",
@@ -500,10 +532,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // §6.1 — "If the AS is unable or unwilling to rotate the value of the
         // access token, the AS responds with an invalid_rotation error." The
         // client then "MUST consider the access token to not have changed its
-        // state", so the record goes back exactly as it was.
+        // state", so a refusal performs no storage write.
         // SDK policy, not an RFC requirement: an expired or not-yet-issued
         // value cannot be renewed. A clock rollback or an unrepresentable new
-        // deadline must not extend it either. Restore all original metadata.
+        // deadline must not extend it either. Keep all original metadata.
         if !record.is_valid_at(now)
             || record
                 .token
@@ -511,7 +543,6 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 .is_some_and(|seconds| now.checked_add(seconds).is_none())
             || !self.policy.may_rotate(&record.token)
         {
-            self.storage.put_token(handle, record);
             return error(
                 ErrorCode::InvalidRotation,
                 "token lifetime or server policy prevents rotation (RFC 9635 §6.1)",
@@ -522,7 +553,6 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             TokenValue::new(self.nonces.next()),
             TokenValue::new(self.nonces.next()),
         ) else {
-            self.storage.put_token(handle, record);
             return error(
                 ErrorCode::InvalidRotation,
                 "unable to generate valid token values",
@@ -538,7 +568,6 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         let rotated_handle = self.nonces.next();
         let encoded = self.encode_rotated_token(&record, now, &candidate, &management_token);
         let Ok(encoded) = encoded else {
-            self.storage.put_token(handle, record);
             return error(
                 ErrorCode::InvalidRotation,
                 "unable to encode a replacement access token",
@@ -576,7 +605,6 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             rotated.token.validate().err().map(|e| e.to_string())
         };
         if let Some(reason) = invalid {
-            self.storage.put_token(handle, record);
             return error(ErrorCode::InvalidRotation, &reason);
         }
 
@@ -587,9 +615,33 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             }),
             ..GrantResponse::default()
         };
-        // The old handle went with `take_token` and does not come back, which
-        // is the invalidation §6.1-M01 asks for.
-        self.storage.put_token(&rotated_handle, rotated);
+        // §6.1-M01 — "the AS MUST invalidate the current access token value
+        // associated with this URI, if possible". The replacement and removal of all
+        // old indexes publish together; a stale candidate cannot restore them.
+        if rotated_handle != handle && snapshot.aggregate.tokens.contains_key(&rotated_handle) {
+            return error(
+                ErrorCode::InvalidRotation,
+                "token management handle collision",
+            );
+        }
+        snapshot.aggregate.tokens.remove(handle);
+        snapshot.aggregate.tokens.insert(rotated_handle, rotated);
+        if let Err(failure) =
+            self.storage
+                .compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate)
+        {
+            return if matches!(
+                failure,
+                StoreError::Conflict | StoreError::Collision | StoreError::Invalid
+            ) {
+                error(
+                    ErrorCode::InvalidRotation,
+                    "the replacement token could not be committed",
+                )
+            } else {
+                storage_failure(failure)
+            };
+        }
         ok(&response)
     }
 
@@ -612,21 +664,40 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             }
         }
 
-        let token = match self.authenticate_continuation(request, now) {
-            Ok(t) => t,
+        let snapshot = match self.authenticate_continuation(request, now) {
+            Ok(snapshot) => snapshot,
             Err(r) => return r,
         };
 
-        // Everything that could refuse the call without touching the grant has
-        // now run, so this is where the grant is claimed. §5 rotates the
-        // continuation token on every call: taking it atomically is what stops
-        // two concurrent calls from both succeeding and forking the grant.
-        let Some(mut record) = self.storage.take(&token) else {
-            return unknown_continuation();
-        };
+        let mut aggregate = snapshot.aggregate.clone();
+        let response =
+            self.continue_authenticated(request, now, modifying, revoking, &mut aggregate);
+        if aggregate.record.continuation_token.is_none() {
+            aggregate.record.interact_handle = None;
+            aggregate.record.interact_ref = None;
+            aggregate.record.interact_expires_at = None;
+            aggregate.record.grant.withhold_continuation();
+        }
+        match self
+            .storage
+            .compare_exchange(snapshot.id, snapshot.revision, aggregate)
+        {
+            Ok(_) => response,
+            Err(failure) => storage_failure(failure),
+        }
+    }
 
-        // From here the caller is authenticated, so every refusal below hands
-        // the grant back with a new way to reach it (§5-M11).
+    // Only prepares a replacement. No intermediate state is externally visible.
+    fn continue_authenticated(
+        &self,
+        request: &HttpRequest,
+        now: u64,
+        modifying: bool,
+        revoking: bool,
+        aggregate: &mut GrantAggregate,
+    ) -> HttpResponse {
+        let record = &mut aggregate.record;
+        record.continuation_token = None;
         let has_content = request.body.as_ref().is_some_and(|b| !b.is_empty());
         let continuation: ContinueRequest = if revoking || !has_content {
             ContinueRequest::default()
@@ -701,8 +772,8 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // gnap-core owns the guards: wait period, one-time references, the
         // states a modification is allowed from, and the absorbing finalized.
         if let Err(e) = record.grant.apply(event, now) {
-            // `take` removed the record, so a refusal has to hand the grant
-            // back: being told `too_fast` must not cost the client its request.
+            // A recoverable refusal keeps a continuation in the candidate:
+            // being told `too_fast` must not cost the client its request.
             // The exception is a guard that finalizes, where §5.1 wants the
             // request invalidated and no way back offered.
             if e.finalizes {
@@ -719,21 +790,24 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         }
 
         if revoking {
+            aggregate.revoked = true;
+            aggregate.tokens.clear();
             return no_content();
         }
 
-        self.resume_grant(record, continuation, modifying, returning, now)
+        self.resume_grant(aggregate, continuation, modifying, returning, now)
     }
 
     /// Re-evaluates an authenticated continuation after its state guards pass.
     fn resume_grant(
         &self,
-        mut record: GrantRecord,
+        aggregate: &mut GrantAggregate,
         continuation: ContinueRequest,
         modifying: bool,
         returning: bool,
         now: u64,
     ) -> HttpResponse {
+        let record = &mut aggregate.record;
         // §4 — coming back from interaction, the AS re-evaluates the whole
         // context, whether the RO approved or denied.
         //
@@ -781,16 +855,8 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             return self.hand_back(record, None, now);
         }
 
-        // The token was consumed by `take`; §5 rotates it, so the old one is
-        // already gone by the time a reply is built.
-        self.settle(
-            &mut record.grant,
-            request_now,
-            decision,
-            now,
-            record.as_nonce,
-            record.interaction_completed,
-        )
+        record.request = request_now;
+        self.settle(aggregate, decision, now)
     }
 
     /// Signals that the RO is done interacting (§4.2).
@@ -799,6 +865,11 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     /// client; it names the grant the RO was working on. The AS creates the
     /// interaction reference here, binds it to that grant, computes the hash of
     /// §4.2.3, and returns what has to happen next.
+    ///
+    /// §4.2 associates the reference with "the current interaction and the
+    /// underlying pending request". Spending the interaction handle and
+    /// publishing that reference use one compare-and-exchange; only its winner
+    /// receives a finish directive to carry out.
     ///
     /// Carrying the directive out is left to the caller, which is what keeps
     /// this crate free of an HTTP client. [`Finish::Push`] in particular is an
@@ -810,18 +881,17 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     /// Returns the cases in which §4.2 says the AS MUST NOT follow the finish
     /// method: an unknown interaction, or a grant that is no longer pending.
     pub fn complete_interaction(&self, handle: &str, now: u64) -> Result<Finish, InteractionError> {
-        let mut outcome = None;
-        let found = self.storage.update_by_interaction(handle, &mut |record| {
-            let decided = self.finish_interaction(record, now);
-            let keep = decided.is_ok();
-            outcome = Some(decided);
-            keep
-        });
-
-        if !found {
-            return Err(InteractionError::UnknownInteraction);
-        }
-        outcome.unwrap_or(Err(InteractionError::UnknownInteraction))
+        let snapshot = self
+            .storage
+            .lookup(GrantSelector::Interaction(handle))
+            .map_err(InteractionError::Storage)?
+            .ok_or(InteractionError::UnknownInteraction)?;
+        let mut aggregate = snapshot.aggregate.clone();
+        let outcome = self.finish_interaction(&mut aggregate.record, now)?;
+        self.storage
+            .compare_exchange(snapshot.id, snapshot.revision, aggregate)
+            .map_err(InteractionError::Storage)?;
+        Ok(outcome)
     }
 
     /// Decides what a completed interaction owes the client, mutating `record`.
@@ -959,9 +1029,14 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         &self,
         request: &HttpRequest,
         now: u64,
-    ) -> Result<String, HttpResponse> {
+    ) -> Result<GrantSnapshot, HttpResponse> {
         let token = Self::continuation_token(request)?;
-        let record = self.storage.get(&token).ok_or_else(unknown_continuation)?;
+        let snapshot = self
+            .storage
+            .lookup(GrantSelector::Continuation(&token))
+            .map_err(storage_failure)?
+            .ok_or_else(unknown_continuation)?;
+        let record = &snapshot.aggregate.record;
 
         let verifier = self.keys.resolve(&record.request.client).ok_or_else(|| {
             error(
@@ -974,7 +1049,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             Some(key) => check_presented_key(key, verifier.as_ref())?,
         };
         self.verify_signature(request, verifier.as_ref(), presented_kid, now)?;
-        Ok(token)
+        Ok(snapshot)
     }
 
     /// Answers an error the grant can survive, and hands the client the way
@@ -996,7 +1071,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     /// is exactly what §5-M14 asks for.
     fn recover(
         &self,
-        record: GrantRecord,
+        record: &mut GrantRecord,
         code: ErrorCode,
         reason: &str,
         now: u64,
@@ -1009,13 +1084,15 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
 
     /// Answers a call the AS is not going to act on, and hands the grant back.
     ///
-    /// The grant survives, so §5-M11 requires a new continuation response to
-    /// come with the answer and §5-M12 requires a new token in it. The old one
-    /// was removed by `take` and does not come back, which is the invalidation
-    /// §5-M12 asks for.
+    /// §5-M11 — "the AS MUST include a new continuation response" when the
+    /// grant can continue. §5-M12 says the response "MUST include a continuation
+    /// access token as well, and this token SHOULD be a new access token, invalidating
+    /// the previous access token". This SDK follows that recommendation:
+    /// committing the candidate removes the old index and publishes the new
+    /// one together. A failed transaction publishes neither response nor token.
     fn hand_back(
         &self,
-        mut record: GrantRecord,
+        record: &mut GrantRecord,
         failure: Option<GnapError>,
         now: u64,
     ) -> HttpResponse {
@@ -1029,7 +1106,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         record
             .grant
             .offer_continuation(now, Some(gnap_core::DEFAULT_WAIT));
-        record.continuation_token.clone_from(&token);
+        record.continuation_token = Some(token);
 
         let status = if failure.is_some() { 400 } else { 200 };
         let response = GrantResponse {
@@ -1042,7 +1119,6 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             }),
             ..GrantResponse::default()
         };
-        self.storage.put(&token, record);
 
         HttpResponse {
             status,
@@ -1157,16 +1233,12 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         }
     }
 
-    /// Applies a decision, builds the response, and stores what follows.
-    fn settle(
-        &self,
-        grant: &mut Grant,
-        request: GrantRequest,
-        decision: Decision,
-        now: u64,
-        as_nonce: Option<String>,
-        interacted: bool,
-    ) -> HttpResponse {
+    /// Prepares a decision and its response; the caller commits the aggregate.
+    fn settle(&self, aggregate: &mut GrantAggregate, decision: Decision, now: u64) -> HttpResponse {
+        let record = &mut aggregate.record;
+        let request = &record.request;
+        let interacted = record.interaction_completed;
+        let grant = &mut record.grant;
         let event = match &decision {
             Decision::Approve { .. } => Event::AsNeedsNoInteraction,
             Decision::RequireInteraction => Event::AsRequiresInteraction,
@@ -1202,7 +1274,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                     }
                 }
                 let (encoded, expires_in, management, management_token) =
-                    match self.encode_issued_token(&request, &access, now) {
+                    match self.encode_issued_token(request, &access, now) {
                         Ok(encoded) => encoded,
                         Err(response) => return response,
                     };
@@ -1240,8 +1312,11 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 }
                 // §6 — the AS has to find this token again from the management
                 // URI and the management token, so it remembers both.
-                self.storage.put_token(
-                    &management,
+                if aggregate.tokens.contains_key(&management) {
+                    return misconfigured("token management handle collision");
+                }
+                aggregate.tokens.insert(
+                    management,
                     TokenRecord {
                         identifier: encoded.identifier,
                         issued_at: now,
@@ -1273,12 +1348,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 grant.withhold_continuation();
             }
 
-            Decision::RequireInteraction => {
-                match self.offer_interaction(grant, request, as_nonce, now) {
-                    Ok(pending) => response = pending,
-                    Err(r) => return r,
-                }
-            }
+            Decision::RequireInteraction => match self.offer_interaction(record, now) {
+                Ok(pending) => response = pending,
+                Err(r) => return r,
+            },
         }
 
         ok(&response)
@@ -1287,12 +1360,14 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     /// Answers `pending`: somewhere to send the end user, and a way back (§3.3).
     fn offer_interaction(
         &self,
-        grant: &mut Grant,
-        request: GrantRequest,
-        as_nonce: Option<String>,
+        record: &mut GrantRecord,
         now: u64,
     ) -> Result<GrantResponse, HttpResponse> {
-        let nonce = as_nonce.unwrap_or_else(|| self.nonces.next());
+        let request = &record.request;
+        let nonce = record
+            .as_nonce
+            .clone()
+            .unwrap_or_else(|| self.nonces.next());
         let mut interact = InteractResponse::default();
 
         // §3.3 — never answer with a mode the client did not offer.
@@ -1349,21 +1424,15 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             wait: Some(gnap_core::DEFAULT_WAIT),
             extra: serde_json::Map::default(),
         });
-        grant.offer_continuation(now, Some(gnap_core::DEFAULT_WAIT));
-
-        self.storage.put(
-            &token,
-            GrantRecord {
-                grant: grant.clone(),
-                request,
-                continuation_token: token.clone(),
-                as_nonce: Some(nonce),
-                interact_handle: handle,
-                interact_expires_at: Some(now.saturating_add(INTERACTION_LIFETIME)),
-                interact_ref: None,
-                interaction_completed: false,
-            },
-        );
+        record
+            .grant
+            .offer_continuation(now, Some(gnap_core::DEFAULT_WAIT));
+        record.continuation_token = Some(token);
+        record.as_nonce = Some(nonce);
+        record.interact_handle = handle;
+        record.interact_expires_at = Some(now.saturating_add(INTERACTION_LIFETIME));
+        record.interact_ref = None;
+        record.interaction_completed = false;
         Ok(response)
     }
 
@@ -1742,6 +1811,19 @@ fn unsupported_media_type() -> HttpResponse {
 fn not_found() -> HttpResponse {
     HttpResponse {
         status: 404,
+        headers: vec![("Cache-Control".into(), "no-store".into())],
+        body: Vec::new(),
+    }
+}
+
+// A transaction failure is not a committed GNAP decision. In particular, do not
+// return a fabricated continuation or success whose indexes were never published.
+fn storage_failure(failure: StoreError) -> HttpResponse {
+    HttpResponse {
+        status: match failure {
+            StoreError::Invalid | StoreError::Collision => 500,
+            _ => 503,
+        },
         headers: vec![("Cache-Control".into(), "no-store".into())],
         body: Vec::new(),
     }

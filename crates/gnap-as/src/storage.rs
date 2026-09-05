@@ -10,7 +10,7 @@ use gnap_types::client::Client;
 use gnap_types::message::GrantRequest;
 use gnap_types::token::AccessToken;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 /// Everything the AS remembers about one grant request.
 #[derive(Debug, Clone)]
@@ -19,8 +19,8 @@ pub struct GrantRecord {
     pub grant: Grant,
     /// The request as it was last received, after any modification (§5.3).
     pub request: GrantRequest,
-    /// The continuation token value the client must present (§3.1).
-    pub continuation_token: String,
+    /// Current continuation credential (§3.1), or `None` after continuation ends.
+    pub continuation_token: Option<String>,
     /// The nonce the AS returned in `interact.finish` (§3.3.5).
     pub as_nonce: Option<String>,
     /// The handle the AS put in the interaction URI it handed the client
@@ -91,195 +91,309 @@ impl TokenRecord {
     }
 }
 
-/// Where the AS keeps grant requests, by continuation token (§5).
+/// A stable, internal grant identity. It is never a bearer credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GrantId(pub u64);
+
+/// A monotonically increasing version of one grant aggregate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Revision(pub u64);
+
+/// All state whose changes must be published together for one grant.
+#[derive(Debug, Clone)]
+pub struct GrantAggregate {
+    /// Request, interaction and continuation state.
+    pub record: GrantRecord,
+    /// Issued tokens, keyed by their management URI handle.
+    pub tokens: HashMap<String, TokenRecord>,
+    /// Explicit revocation, distinct from ending continuation normally.
+    /// A revoked aggregate cannot be reactivated or acquire new tokens.
+    pub revoked: bool,
+}
+
+impl GrantAggregate {
+    /// Starts an aggregate without issued tokens.
+    #[must_use]
+    pub fn new(record: GrantRecord) -> Self {
+        Self {
+            record,
+            tokens: HashMap::new(),
+            revoked: false,
+        }
+    }
+}
+
+/// A consistent read of an aggregate and its compare-and-exchange version.
+#[derive(Debug, Clone)]
+pub struct GrantSnapshot {
+    /// Internal identity, allocated once by the store and never reused.
+    pub id: GrantId,
+    /// Version against which a replacement must be committed.
+    pub revision: Revision,
+    /// Owned snapshot; changing this copy does not change the store.
+    pub aggregate: GrantAggregate,
+}
+
+/// An index through which a caller locates one grant aggregate.
+#[derive(Debug, Clone, Copy)]
+pub enum GrantSelector<'a> {
+    /// Internal identity.
+    Id(GrantId),
+    /// Current continuation credential.
+    Continuation(&'a str),
+    /// Unspent interaction handle.
+    Interaction(&'a str),
+    /// Current token-management URI handle.
+    ///
+    /// §6-M04 requires the AS to "uniquely identify the token being managed
+    /// from the token management URI, the token management access token, or a
+    /// combination of both". This selector locates the record; the server must
+    /// still authenticate its management credential and associated proof.
+    Management(&'a str),
+    /// Current access-token value, for a resource-server adapter.
+    AccessToken(&'a str),
+    /// Current format-native token identifier, for a live-state adapter.
+    TokenIdentifier(&'a [u8]),
+}
+
+/// A storage failure; none of these outcomes may partially publish a write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreError {
+    /// The aggregate disappeared, was revoked, or no longer has that revision.
+    Conflict,
+    /// An index value is already in use, including within the candidate.
+    Collision,
+    /// The candidate violates structural or terminal-state invariants.
+    Invalid,
+    /// The backing store cannot establish a reliable result.
+    Unavailable,
+    /// The identity or revision counter cannot advance without wrapping.
+    Exhausted,
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Conflict => "grant snapshot is no longer current",
+            Self::Collision => "grant index value is already in use",
+            Self::Invalid => "grant aggregate violates storage invariants",
+            Self::Unavailable => "grant storage is unavailable",
+            Self::Exhausted => "grant storage counter is exhausted",
+        })
+    }
+}
+impl std::error::Error for StoreError {}
+
+/// Transactional grant storage, including every token issued by that grant.
 ///
-/// The token is the handle: §5 requires the AS to identify the grant from the
-/// continuation URI, the continuation token, or both.
+/// Reads include the version of the aggregate used to authenticate a request.
+/// A replacement commits only against that version. The aggregate and all its
+/// indexes change atomically; there is no take/restore operation. Implementations
+/// must reject collisions before publication, never reuse IDs or wrap revisions,
+/// and must not resurrect missing or revoked aggregates through `compare_exchange`.
 ///
-/// This is one of three stores the server needs, and they are separate traits
-/// on purpose. They hold different things with different lifetimes — a grant
-/// lives until it is finalized, an issued token until it is revoked, a nonce
-/// for minutes — and a deployment will often want them in different places. A
-/// single type may implement all three, as [`MemoryStorage`] does.
+/// The server prepares policy decisions, proofs and encodings outside the store.
+/// A conflict does not automatically retry those operations.
 pub trait GrantStore {
-    /// Stores a new or updated grant.
-    fn put(&self, token: &str, record: GrantRecord);
+    /// Creates a new aggregate and all its indexes, allocating a fresh identity.
+    /// # Errors
+    /// Returns a collision, invalid candidate, capacity or availability failure.
+    fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError>;
 
-    /// Retrieves a grant by its continuation token, without consuming it.
-    fn get(&self, token: &str) -> Option<GrantRecord>;
+    /// Reads one consistent snapshot through an index.
+    /// # Errors
+    /// Returns an availability failure rather than disguising it as absence.
+    fn lookup(&self, selector: GrantSelector<'_>) -> Result<Option<GrantSnapshot>, StoreError>;
 
-    /// Takes the grant a continuation token names, removing it in one step.
-    ///
-    /// §5 rotates the continuation token on every call, so the old one must
-    /// stop working the moment it is used. Reading and removing separately
-    /// leaves a window in which two concurrent calls both succeed and the grant
-    /// forks; this is the operation that closes it.
-    fn take(&self, token: &str) -> Option<GrantRecord>;
-
-    /// Runs `update` on the grant an interaction handle names, atomically.
-    ///
-    /// §4.2 has the AS create the interaction reference, associate it with "the
-    /// current interaction and the underlying pending request", and spend the
-    /// interaction — three writes that have to land as one. Reading a copy,
-    /// deciding, and writing it back leaves a window in which a concurrent
-    /// continuation takes the grant and the late write puts it back, reviving a
-    /// request that was already finished.
-    ///
-    /// Returns `false` when no grant is waiting on this handle. When `update`
-    /// returns `false` the record is left exactly as it was, so a completion
-    /// the AS refuses costs the grant nothing.
-    fn update_by_interaction(
+    /// Replaces an existing aggregate and all indexes in one atomic operation.
+    /// # Errors
+    /// A stale version, revoked/missing aggregate or invalid/colliding replacement
+    /// is refused without publishing any part of the candidate.
+    fn compare_exchange(
         &self,
-        handle: &str,
-        update: &mut dyn FnMut(&mut GrantRecord) -> bool,
-    ) -> bool;
+        id: GrantId,
+        revision: Revision,
+        replacement: GrantAggregate,
+    ) -> Result<GrantSnapshot, StoreError>;
+
+    /// Removes an aggregate and every index at an expected revision.
+    ///
+    /// This is deployment maintenance (retention or expiration), not GNAP
+    /// revocation. The removed identity must never be allocated again, and a
+    /// stale compare-and-exchange must not recreate it. Protocol DELETE uses
+    /// compare-and-exchange so its terminal state remains distinguishable.
+    /// # Errors
+    /// A missing identity or stale revision is a conflict; failures publish no
+    /// partial removal.
+    fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError>;
 }
 
-/// Where the AS keeps the tokens it issued, by management handle (§6).
-///
-/// Only a token that offers a `manage` field needs to be here: this store is
-/// what makes §6 answerable, and an AS that issues no management API needs
-/// none of it.
-pub trait TokenStore {
-    /// Stores an issued access token under its management handle (§6).
-    ///
-    /// The handle is what the AS puts in the management URI. §6-M04 requires
-    /// the AS to "uniquely identify the token being managed from the token
-    /// management URI, the token management access token, or a combination of
-    /// both"; this server uses both, so the handle finds the record and the
-    /// management token still has to match it.
-    fn put_token(&self, handle: &str, record: TokenRecord);
-
-    /// Takes the token a management handle names, removing it in one step.
-    ///
-    /// Rotation replaces a token and revocation destroys it; both have to be
-    /// atomic, for the same reason continuation does (§6.1, §6.2).
-    fn take_token(&self, handle: &str) -> Option<TokenRecord>;
-
-    /// Reads an issued token without consuming it.
-    ///
-    /// The client's key is only known through the record, and it has to be read
-    /// before the request can be verified — so reading and consuming are two
-    /// steps here, exactly as they are for a continuation call.
-    fn get_token(&self, handle: &str) -> Option<TokenRecord>;
-}
-
-/// Where the AS remembers the signature nonces it has already seen (§7.3.1).
-///
-/// The shortest-lived of the three, and the one most likely to live somewhere
-/// else: a shared cache in front of several servers, rather than a database.
+/// Signature replay state may use a separate, short-lived shared store.
 pub trait NonceStore {
-    /// Records a signature nonce, returning `false` if it was already seen.
-    ///
-    /// §7.3.1: "the verifier MUST determine that the nonce value is unique
-    /// within a reasonably short time period such as several minutes". A real
-    /// deployment bounds this set by time; [`MemoryStorage`] keeps a nonce for
-    /// as long as a signature carrying it could still be accepted, and drops it
-    /// after that.
+    /// Atomically remembers a nonce at `now`, or returns false for replay/failure.
+    /// Retain entries for the entire signature acceptance window.
     fn remember_nonce(&self, nonce: &str, now: u64) -> bool;
 }
 
-/// Everything the server stores, in one bound.
-///
-/// A convenience, so a signature reads `S: Storage` rather than naming the
-/// three. Implementing the three is what gives you this one.
-pub trait Storage: GrantStore + TokenStore + NonceStore {}
+/// The state required by an authorization server.
+pub trait Storage: GrantStore + NonceStore {}
+impl<T: GrantStore + NonceStore> Storage for T {}
 
-impl<T: GrantStore + TokenStore + NonceStore> Storage for T {}
-
-// A store behind a shared or borrowed pointer is the same store. The server
-// takes its storage by value, and a deployment that also runs a resource
-// server, or several servers, over the same records hands each of them an
-// `Arc` of it; without these, every such deployment writes the same three
-// forwarding impls on a newtype of its own.
-
-impl<T: GrantStore + ?Sized> GrantStore for Arc<T> {
-    fn put(&self, token: &str, record: GrantRecord) {
-        (**self).put(token, record);
-    }
-    fn get(&self, token: &str) -> Option<GrantRecord> {
-        (**self).get(token)
-    }
-    fn take(&self, token: &str) -> Option<GrantRecord> {
-        (**self).take(token)
-    }
-    fn update_by_interaction(
-        &self,
-        handle: &str,
-        update: &mut dyn FnMut(&mut GrantRecord) -> bool,
-    ) -> bool {
-        (**self).update_by_interaction(handle, update)
-    }
+macro_rules! forward_storage {
+    ($pointer:ty) => {
+        impl<T: GrantStore + ?Sized> GrantStore for $pointer {
+            fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
+                (**self).create(aggregate)
+            }
+            fn lookup(
+                &self,
+                selector: GrantSelector<'_>,
+            ) -> Result<Option<GrantSnapshot>, StoreError> {
+                (**self).lookup(selector)
+            }
+            fn compare_exchange(
+                &self,
+                id: GrantId,
+                revision: Revision,
+                replacement: GrantAggregate,
+            ) -> Result<GrantSnapshot, StoreError> {
+                (**self).compare_exchange(id, revision, replacement)
+            }
+            fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError> {
+                (**self).remove(id, revision)
+            }
+        }
+        impl<T: NonceStore + ?Sized> NonceStore for $pointer {
+            fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
+                (**self).remember_nonce(nonce, now)
+            }
+        }
+    };
 }
+forward_storage!(Arc<T>);
+forward_storage!(&T);
 
-impl<T: GrantStore + ?Sized> GrantStore for &T {
-    fn put(&self, token: &str, record: GrantRecord) {
-        (**self).put(token, record);
-    }
-    fn get(&self, token: &str) -> Option<GrantRecord> {
-        (**self).get(token)
-    }
-    fn take(&self, token: &str) -> Option<GrantRecord> {
-        (**self).take(token)
-    }
-    fn update_by_interaction(
-        &self,
-        handle: &str,
-        update: &mut dyn FnMut(&mut GrantRecord) -> bool,
-    ) -> bool {
-        (**self).update_by_interaction(handle, update)
-    }
-}
-
-impl<T: TokenStore + ?Sized> TokenStore for Arc<T> {
-    fn put_token(&self, handle: &str, record: TokenRecord) {
-        (**self).put_token(handle, record);
-    }
-    fn take_token(&self, handle: &str) -> Option<TokenRecord> {
-        (**self).take_token(handle)
-    }
-    fn get_token(&self, handle: &str) -> Option<TokenRecord> {
-        (**self).get_token(handle)
-    }
-}
-
-impl<T: TokenStore + ?Sized> TokenStore for &T {
-    fn put_token(&self, handle: &str, record: TokenRecord) {
-        (**self).put_token(handle, record);
-    }
-    fn take_token(&self, handle: &str) -> Option<TokenRecord> {
-        (**self).take_token(handle)
-    }
-    fn get_token(&self, handle: &str) -> Option<TokenRecord> {
-        (**self).get_token(handle)
-    }
-}
-
-impl<T: NonceStore + ?Sized> NonceStore for Arc<T> {
-    fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
-        (**self).remember_nonce(nonce, now)
-    }
-}
-
-impl<T: NonceStore + ?Sized> NonceStore for &T {
-    fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
-        (**self).remember_nonce(nonce, now)
-    }
-}
-
-/// How long a nonce stays remembered.
-///
-/// A signature is accepted while its `created` sits within [`MAX_CLOCK_SKEW`]
-/// of now, on either side, so the same nonce can come back for at most twice
-/// that span. Past it the `created` check refuses the replay on its own and
-/// holding the nonce any longer would only grow the set.
 const NONCE_MEMORY: u64 = 2 * MAX_CLOCK_SKEW;
 
-/// An in-memory store, enough for tests and single-process deployments.
+#[derive(Debug, Default)]
+struct Indices {
+    continuation: HashMap<String, GrantId>,
+    interaction: HashMap<String, GrantId>,
+    management: HashMap<String, GrantId>,
+    values: HashMap<String, GrantId>,
+    identifiers: HashMap<Vec<u8>, GrantId>,
+}
+
+impl Indices {
+    fn locate(&self, selector: GrantSelector<'_>) -> Option<GrantId> {
+        match selector {
+            GrantSelector::Id(id) => Some(id),
+            GrantSelector::Continuation(key) => self.continuation.get(key).copied(),
+            GrantSelector::Interaction(key) => self.interaction.get(key).copied(),
+            GrantSelector::Management(key) => self.management.get(key).copied(),
+            GrantSelector::AccessToken(key) => self.values.get(key).copied(),
+            GrantSelector::TokenIdentifier(key) => self.identifiers.get(key).copied(),
+        }
+    }
+
+    fn candidate(aggregate: &GrantAggregate, id: GrantId) -> Result<Self, StoreError> {
+        let mut indices = Self::default();
+        if aggregate.revoked
+            && (aggregate.record.continuation_token.is_some()
+                || aggregate.record.interact_handle.is_some()
+                || !aggregate.tokens.is_empty())
+        {
+            return Err(StoreError::Invalid);
+        }
+        if let Some(key) = &aggregate.record.continuation_token {
+            if key.is_empty() {
+                return Err(StoreError::Invalid);
+            }
+            indices.continuation.insert(key.clone(), id);
+        }
+        if let Some(key) = &aggregate.record.interact_handle {
+            if key.is_empty() || aggregate.record.continuation_token.is_none() {
+                return Err(StoreError::Invalid);
+            }
+            indices.interaction.insert(key.clone(), id);
+        }
+        for (handle, token) in &aggregate.tokens {
+            if handle.is_empty()
+                || token.management_token.is_empty()
+                || token.client != aggregate.record.request.client
+            {
+                return Err(StoreError::Invalid);
+            }
+            indices.management.insert(handle.clone(), id);
+            if indices
+                .values
+                .insert(token.token.value.as_str().to_owned(), id)
+                .is_some()
+            {
+                return Err(StoreError::Collision);
+            }
+            if let Some(identifier) = &token.identifier {
+                if identifier.is_empty() {
+                    return Err(StoreError::Invalid);
+                }
+                if indices.identifiers.insert(identifier.clone(), id).is_some() {
+                    return Err(StoreError::Collision);
+                }
+            }
+        }
+        Ok(indices)
+    }
+
+    fn check(&self, candidate: &Self, own_id: GrantId) -> Result<(), StoreError> {
+        fn collides<K: Eq + std::hash::Hash>(
+            current: &HashMap<K, GrantId>,
+            candidate: &HashMap<K, GrantId>,
+            own: GrantId,
+        ) -> bool {
+            candidate
+                .keys()
+                .any(|key| current.get(key).is_some_and(|id| *id != own))
+        }
+        if collides(&self.continuation, &candidate.continuation, own_id)
+            || collides(&self.interaction, &candidate.interaction, own_id)
+            || collides(&self.management, &candidate.management, own_id)
+            || collides(&self.values, &candidate.values, own_id)
+            || collides(&self.identifiers, &candidate.identifiers, own_id)
+        {
+            return Err(StoreError::Collision);
+        }
+        Ok(())
+    }
+
+    fn replace(&mut self, id: GrantId, candidate: Self) {
+        self.continuation.retain(|_, owner| *owner != id);
+        self.interaction.retain(|_, owner| *owner != id);
+        self.management.retain(|_, owner| *owner != id);
+        self.values.retain(|_, owner| *owner != id);
+        self.identifiers.retain(|_, owner| *owner != id);
+        self.continuation.extend(candidate.continuation);
+        self.interaction.extend(candidate.interaction);
+        self.management.extend(candidate.management);
+        self.values.extend(candidate.values);
+        self.identifiers.extend(candidate.identifiers);
+    }
+}
+
+#[derive(Debug, Default)]
+struct State {
+    last_id: u64,
+    grants: HashMap<GrantId, GrantSnapshot>,
+    indices: Indices,
+}
+
+/// Reference single-process store. One lock publishes aggregates and all indexes.
+///
+/// Revoked/closed aggregates are retained until explicit maintenance removal.
+/// Production stores must define retention and capacity limits. Removed IDs
+/// are never reused. No policy callback or cryptographic work runs under this lock.
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
-    grants: Mutex<HashMap<String, GrantRecord>>,
-    tokens: Mutex<HashMap<String, TokenRecord>>,
+    state: Mutex<State>,
     nonces: Mutex<HashMap<String, u64>>,
 }
 
@@ -290,101 +404,217 @@ impl MemoryStorage {
         Self::default()
     }
 
-    /// How many grants are held.
-    pub fn len(&self) -> usize {
-        self.lock().len()
-    }
-
-    /// Whether the store holds nothing.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// How many nonces are remembered.
-    pub fn remembered_nonces(&self) -> usize {
-        self.nonces
+    /// Number of grants currently reachable through a continuation token.
+    /// # Errors
+    /// Fails closed when the store lock is poisoned.
+    pub fn len(&self) -> Result<usize, StoreError> {
+        Ok(self
+            .state
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len()
+            .map_err(|_| StoreError::Unavailable)?
+            .indices
+            .continuation
+            .len())
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, GrantRecord>> {
-        // A poisoned lock means another thread panicked mid-update. The map is
-        // still structurally sound, so recovering beats bringing the AS down.
-        self.grants.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Whether no grant is currently continuable.
+    /// # Errors
+    /// Returns storage unavailability.
+    pub fn is_empty(&self) -> Result<bool, StoreError> {
+        Ok(self.len()? == 0)
+    }
+
+    /// Number of locally remembered signature nonces.
+    /// # Errors
+    /// Returns storage unavailability.
+    pub fn remembered_nonces(&self) -> Result<usize, StoreError> {
+        Ok(self
+            .nonces
+            .lock()
+            .map_err(|_| StoreError::Unavailable)?
+            .len())
     }
 }
 
 impl GrantStore for MemoryStorage {
-    fn put(&self, token: &str, record: GrantRecord) {
-        self.lock().insert(token.to_owned(), record);
-    }
-
-    fn get(&self, token: &str) -> Option<GrantRecord> {
-        self.lock().get(token).cloned()
-    }
-
-    fn take(&self, token: &str) -> Option<GrantRecord> {
-        // One lock, one lookup, one removal: no window for a second caller.
-        self.lock().remove(token)
-    }
-
-    #[allow(clippy::significant_drop_tightening)]
-    fn update_by_interaction(
-        &self,
-        handle: &str,
-        update: &mut dyn FnMut(&mut GrantRecord) -> bool,
-    ) -> bool {
-        // Holding the lock across the whole read-decide-write is the point of
-        // this method, so the usual advice to narrow its scope does not apply.
-        let mut grants = self.lock();
-        let Some(record) = grants
-            .values_mut()
-            .find(|record| record.interact_handle.as_deref() == Some(handle))
-        else {
-            return false;
+    fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
+        let next = state.last_id.checked_add(1).ok_or(StoreError::Exhausted)?;
+        let id = GrantId(next);
+        let indices = Indices::candidate(&aggregate, id)?;
+        state.indices.check(&indices, id)?;
+        let snapshot = GrantSnapshot {
+            id,
+            revision: Revision(0),
+            aggregate,
         };
+        state.indices.replace(id, indices);
+        state.grants.insert(id, snapshot.clone());
+        state.last_id = next;
+        drop(state);
+        Ok(snapshot)
+    }
 
-        // The update works on a copy, so refusing leaves the original intact.
-        let mut candidate = record.clone();
-        if update(&mut candidate) {
-            *record = candidate;
+    fn lookup(&self, selector: GrantSelector<'_>) -> Result<Option<GrantSnapshot>, StoreError> {
+        let state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
+        Ok(state
+            .indices
+            .locate(selector)
+            .and_then(|id| state.grants.get(&id))
+            .cloned())
+    }
+
+    fn compare_exchange(
+        &self,
+        id: GrantId,
+        revision: Revision,
+        replacement: GrantAggregate,
+    ) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
+        let previous = state.grants.get(&id).ok_or(StoreError::Conflict)?;
+        if previous.revision != revision || previous.aggregate.revoked {
+            return Err(StoreError::Conflict);
         }
-        true
+        if previous.aggregate.record.grant.state() == gnap_core::State::Finalized
+            && replacement.record.grant.state() != gnap_core::State::Finalized
+        {
+            return Err(StoreError::Invalid);
+        }
+        if previous.aggregate.record.request.client != replacement.record.request.client {
+            return Err(StoreError::Invalid);
+        }
+        let next = revision.0.checked_add(1).ok_or(StoreError::Exhausted)?;
+        let indices = Indices::candidate(&replacement, id)?;
+        state.indices.check(&indices, id)?;
+        let snapshot = GrantSnapshot {
+            id,
+            revision: Revision(next),
+            aggregate: replacement,
+        };
+        state.indices.replace(id, indices);
+        state.grants.insert(id, snapshot.clone());
+        drop(state);
+        Ok(snapshot)
     }
-}
 
-impl TokenStore for MemoryStorage {
-    fn put_token(&self, handle: &str, record: TokenRecord) {
-        self.tokens
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(handle.to_owned(), record);
-    }
-
-    fn take_token(&self, handle: &str) -> Option<TokenRecord> {
-        self.tokens
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(handle)
-    }
-
-    fn get_token(&self, handle: &str) -> Option<TokenRecord> {
-        self.tokens
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(handle)
-            .cloned()
+    fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError> {
+        let mut state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
+        let previous = state.grants.get(&id).ok_or(StoreError::Conflict)?;
+        if previous.revision != revision {
+            return Err(StoreError::Conflict);
+        }
+        state.indices.replace(id, Indices::default());
+        state.grants.remove(&id);
+        drop(state);
+        Ok(())
     }
 }
 
 impl NonceStore for MemoryStorage {
     fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
-        let mut seen = self.nonces.lock().unwrap_or_else(PoisonError::into_inner);
-        // Expiring on the way in keeps the set bounded without a background
-        // task. It costs one pass over a set whose size is the traffic of the
-        // last few minutes, which is the trade a reference store should make.
+        let Ok(mut seen) = self.nonces.lock() else {
+            return false;
+        };
         seen.retain(|_, first| now.saturating_sub(*first) <= NONCE_MEMORY);
         seen.insert(nonce.to_owned(), now).is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn aggregate() -> GrantAggregate {
+        GrantAggregate::new(GrantRecord {
+            grant: Grant::new(),
+            request: serde_json::from_str(r#"{"client":"client"}"#).unwrap(),
+            continuation_token: Some("continuation".into()),
+            as_nonce: None,
+            interact_handle: None,
+            interact_expires_at: None,
+            interact_ref: None,
+            interaction_completed: false,
+        })
+    }
+
+    #[test]
+    fn identity_overflow_publishes_nothing_and_purge_does_not_reset_it() {
+        let storage = MemoryStorage::new();
+        storage.state.lock().unwrap().last_id = u64::MAX - 1;
+        let last = storage.create(aggregate()).unwrap();
+        assert_eq!(last.id, GrantId(u64::MAX));
+        storage.remove(last.id, last.revision).unwrap();
+        assert!(matches!(
+            storage.create(aggregate()),
+            Err(StoreError::Exhausted)
+        ));
+        assert!(storage
+            .lookup(GrantSelector::Continuation("continuation"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn revision_overflow_preserves_record_and_indexes() {
+        let storage = MemoryStorage::new();
+        let original = storage.create(aggregate()).unwrap();
+        storage
+            .state
+            .lock()
+            .unwrap()
+            .grants
+            .get_mut(&original.id)
+            .unwrap()
+            .revision = Revision(u64::MAX);
+        let mut candidate = original.aggregate;
+        candidate.record.continuation_token = Some("replacement".into());
+        assert!(matches!(
+            storage.compare_exchange(original.id, Revision(u64::MAX), candidate),
+            Err(StoreError::Exhausted)
+        ));
+        assert_eq!(
+            storage
+                .lookup(GrantSelector::Continuation("continuation"))
+                .unwrap()
+                .unwrap()
+                .revision,
+            Revision(u64::MAX)
+        );
+        assert!(storage
+            .lookup(GrantSelector::Continuation("replacement"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn poisoned_locks_are_failures_not_absence_or_replay_acceptance() {
+        let storage = MemoryStorage::new();
+        let _ = std::panic::catch_unwind(|| {
+            let _lock = storage.state.lock().unwrap();
+            panic!("poison aggregate state");
+        });
+        assert!(matches!(
+            storage.lookup(GrantSelector::Id(GrantId(1))),
+            Err(StoreError::Unavailable)
+        ));
+        assert!(matches!(
+            storage.create(aggregate()),
+            Err(StoreError::Unavailable)
+        ));
+        assert!(matches!(
+            storage.compare_exchange(GrantId(1), Revision(0), aggregate()),
+            Err(StoreError::Unavailable)
+        ));
+        assert_eq!(
+            storage.remove(GrantId(1), Revision(0)),
+            Err(StoreError::Unavailable)
+        );
+        assert_eq!(storage.len(), Err(StoreError::Unavailable));
+        let _ = std::panic::catch_unwind(|| {
+            let _lock = storage.nonces.lock().unwrap();
+            panic!("poison replay state");
+        });
+        assert!(!storage.remember_nonce("fresh", 1_000));
+        assert_eq!(storage.remembered_nonces(), Err(StoreError::Unavailable));
     }
 }

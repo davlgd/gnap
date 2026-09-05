@@ -4,6 +4,9 @@
 //! sides use the protocol implementations, with test policies and keys. These
 //! tests cover their local interactions, not interoperability over a network.
 
+pub mod support;
+use support::TokenLookup;
+
 use gnap_as::{
     AuthorizationServer, Decision, Endpoints, Finish, InteractionError, KeyResolver, MemoryStorage,
     Nonces, Policy, ReleasedSubject, SubjectGround,
@@ -24,6 +27,30 @@ const RSA_SPKI: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.spki.pe
 const GRANT: &str = "https://as.example/gnap";
 const CONTINUE: &str = "https://as.example/continue";
 const CLIENT_NONCE: &str = "VJLO6A4CATR0KRO";
+
+/// Installs deliberately chosen fixtures through the same atomic API as the AS.
+fn install_token(storage: &MemoryStorage, handle: &str, token: gnap_as::TokenRecord) {
+    use gnap_as::{GrantAggregate, GrantRecord, GrantSelector, GrantStore};
+    if let Some(mut snapshot) = storage.lookup(GrantSelector::Management(handle)).unwrap() {
+        snapshot.aggregate.tokens.insert(handle.into(), token);
+        storage
+            .compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate)
+            .unwrap();
+    } else {
+        let mut aggregate = GrantAggregate::new(GrantRecord {
+            grant: gnap_core::Grant::new(),
+            request: serde_json::from_value(serde_json::json!({"client": token.client})).unwrap(),
+            continuation_token: None,
+            as_nonce: None,
+            interact_handle: None,
+            interact_expires_at: None,
+            interact_ref: None,
+            interaction_completed: false,
+        });
+        aggregate.tokens.insert(handle.into(), token);
+        storage.create(aggregate).unwrap();
+    }
+}
 
 /// Grants what was asked for, once an RO has been consulted.
 struct AlwaysInteract {
@@ -150,8 +177,8 @@ fn options_discovery_returns_only_known_engine_capabilities_without_grant_state(
     );
     let typed: gnap_types::message::AsDiscovery = serde_json::from_slice(&response.body).unwrap();
     assert_eq!(typed.validate_for(GRANT), Ok(()));
-    assert!(as_.storage().is_empty());
-    assert_eq!(as_.storage().remembered_nonces(), 0);
+    assert!(as_.storage().is_empty().unwrap());
+    assert_eq!(as_.storage().remembered_nonces().unwrap(), 0);
 }
 
 #[test]
@@ -171,7 +198,7 @@ fn encoder_builder_preserves_discovery_configuration_in_either_order() {
             response.header_value("gnap-development-only"),
             Some("insecure-loopback-discovery")
         );
-        assert!(as_.storage().is_empty());
+        assert!(as_.storage().is_empty().unwrap());
     }
     let as_ = server_at(endpoint).with_token_encoder(gnap_as::OpaqueTokenEncoder);
     assert_eq!(
@@ -223,7 +250,7 @@ fn discovery_rejects_invalid_public_configuration_without_echoing_endpoint() {
         assert!(!String::from_utf8(response.body)
             .unwrap()
             .contains("TOP-SECRET"));
-        assert!(as_.storage().is_empty());
+        assert!(as_.storage().is_empty().unwrap());
     }
 }
 
@@ -299,7 +326,11 @@ fn a_client_and_a_server_complete_a_grant() {
     let redirect = interact.redirect.expect("the AS offered no redirect");
     assert!(redirect.starts_with("https://as.example/i/"), "{redirect}");
     let as_nonce = interact.finish.expect("the AS returned no finish nonce");
-    assert_eq!(as_.storage().len(), 1, "the AS remembers the pending grant");
+    assert_eq!(
+        as_.storage().len().unwrap(),
+        1,
+        "the AS remembers the pending grant"
+    );
 
     // 2. The end user follows the redirect and the RO answers. The AS creates
     //    the interaction reference, binds it to this grant, hashes it with the
@@ -338,7 +369,7 @@ fn a_client_and_a_server_complete_a_grant() {
 
     // The continuation token was rotated: the old one no longer resolves.
     assert_eq!(
-        as_.storage().len(),
+        as_.storage().len().unwrap(),
         0,
         "the approved grant left no pending record"
     );
@@ -682,7 +713,7 @@ fn no_usable_interaction_mechanism_is_refused() {
     );
 
     // And nothing was stored: there is no grant to continue.
-    assert_eq!(as_.storage().len(), 0);
+    assert_eq!(as_.storage().len().unwrap(), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1015,7 +1046,7 @@ fn a_refused_signature_leaves_the_grant_alive() {
     );
     assert_eq!(as_.handle(&forged, 1_010).status, 400);
     assert_eq!(
-        as_.storage().len(),
+        as_.storage().len().unwrap(),
         1,
         "the grant must survive a call that fails signature verification"
     );
@@ -1051,7 +1082,7 @@ fn a_forged_signature_cannot_spend_a_nonce() {
         Component::Authorization,
     ];
     let cont = pending_grant(&as_, &signer);
-    let remembered_before = as_.storage().remembered_nonces();
+    let remembered_before = as_.storage().remembered_nonces().unwrap();
     let auth = format!("GNAP {}", cont.access_token.value.as_str());
 
     let elsewhere = signed_with(
@@ -1077,7 +1108,7 @@ fn a_forged_signature_cannot_spend_a_nonce() {
     );
     assert_eq!(as_.handle(&forged, 1_010).status, 400);
     assert_eq!(
-        as_.storage().remembered_nonces(),
+        as_.storage().remembered_nonces().unwrap(),
         remembered_before,
         "an unverified signature must not have spent the nonce"
     );
@@ -1170,7 +1201,7 @@ fn revoking_before_the_wait_elapses_is_refused_without_losing_the_grant() {
         body_of(&response)
     );
     assert_eq!(
-        as_.storage().len(),
+        as_.storage().len().unwrap(),
         1,
         "the grant must survive a refused call"
     );
@@ -1207,7 +1238,7 @@ fn an_interaction_reference_the_as_never_issued_is_refused() {
         body_of(&response)
     );
     assert_eq!(
-        as_.storage().len(),
+        as_.storage().len().unwrap(),
         1,
         "a wrong reference must not cost the client its grant"
     );
@@ -2157,7 +2188,7 @@ fn only_this_grants_continuation_token_reaches_this_grant() {
         first.access_token.value.as_str(),
         second.access_token.value.as_str()
     );
-    assert_eq!(as_.storage().len(), 2);
+    assert_eq!(as_.storage().len().unwrap(), 2);
 
     // §5-M05 — each token reaches its own grant, and the store loses only it.
     let poll = signed_continuation(
@@ -2169,7 +2200,11 @@ fn only_this_grants_continuation_token_reaches_this_grant() {
         1_010,
     );
     assert_eq!(as_.handle(&poll, 1_010).status, 200);
-    assert_eq!(as_.storage().len(), 2, "the other grant is untouched");
+    assert_eq!(
+        as_.storage().len().unwrap(),
+        2,
+        "the other grant is untouched"
+    );
 
     // §5-MN03 — a token that is not a continuation token reaches nothing, even
     // a well-formed one the AS itself could have issued.
@@ -3021,7 +3056,7 @@ fn a_token_for_one_endpoint_is_worthless_at_the_other() {
 fn management_server<N: Nonces>(
     nonces: N,
 ) -> AuthorizationServer<AlwaysInteract, OneKey, MemoryStorage, N> {
-    use gnap_as::{TokenRecord, TokenStore};
+    use gnap_as::TokenRecord;
     let storage = MemoryStorage::new();
     let token = serde_json::from_str(
         r#"{"value":"oldaccess","access":["read"],
@@ -3029,7 +3064,8 @@ fn management_server<N: Nonces>(
                       "access_token":{"value":"oldmanagement"}}}"#,
     )
     .unwrap();
-    storage.put_token(
+    install_token(
+        &storage,
         "oldhandle",
         TokenRecord {
             identifier: None,
@@ -3060,7 +3096,6 @@ fn management_server<N: Nonces>(
 /// which this AS rejects. Invalid content must not silently rotate a token.
 #[test]
 fn malformed_rotation_content_does_not_rotate_the_token() {
-    use gnap_as::TokenStore;
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
     for body in ["{", "[]", "null", "{}", r#"{"access":["write"]}"#] {
         let as_ = management_server(Counted(Cell::new(0)));
@@ -3099,7 +3134,6 @@ fn malformed_rotation_content_does_not_rotate_the_token() {
 /// existing token (§6.1, `invalid_rotation`).
 #[test]
 fn an_unusable_rotation_preserves_the_original_token() {
-    use gnap_as::TokenStore;
     struct Scripted(RefCell<std::collections::VecDeque<String>>);
     impl Nonces for Scripted {
         fn next(&self) -> String {
@@ -3512,7 +3546,6 @@ impl HttpTransport for LifetimeDirect<'_> {
 
 #[test]
 fn issued_lifetime_reaches_the_client_and_rotation_renews_it() {
-    use gnap_as::TokenStore;
     let as_ = lifetime_server(Some(20), true);
     let transport = LifetimeDirect(&as_, Cell::new(1_000));
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
@@ -3555,7 +3588,7 @@ fn issued_lifetime_reaches_the_client_and_rotation_renews_it() {
 
 #[test]
 fn rotation_refusal_preserves_value_rights_lifetime_and_timestamp() {
-    use gnap_as::{TokenRecord, TokenStore};
+    use gnap_as::TokenRecord;
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
     // Expired exactly, expired later, future timestamp, policy refusal,
     // overflowing renewal, and an externally supplied overflowing deadline.
@@ -3579,7 +3612,7 @@ fn rotation_refusal_preserves_value_rights_lifetime_and_timestamp() {
             client: request().client,
             management_token: "oldmanagement".into(),
         };
-        as_.storage().put_token("oldhandle", original.clone());
+        install_token(as_.storage(), "oldhandle", original.clone());
         let response = as_.handle(
             &signed_continuation(
                 &signer,
@@ -3603,7 +3636,6 @@ fn rotation_refusal_preserves_value_rights_lifetime_and_timestamp() {
 
 #[test]
 fn lifetime_omission_is_preserved_and_overflowing_issuance_fails() {
-    use gnap_as::TokenStore;
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
     let as_ = lifetime_server(None, true);
     let transport = LifetimeDirect(&as_, Cell::new(1_000));
@@ -3634,7 +3666,6 @@ fn lifetime_omission_is_preserved_and_overflowing_issuance_fails() {
 }
 #[test]
 fn invalid_generated_values_preserve_the_existing_deadline() {
-    use gnap_as::TokenStore;
     struct InvalidNonces;
     impl Nonces for InvalidNonces {
         fn next(&self) -> String {
@@ -3644,7 +3675,7 @@ fn invalid_generated_values_preserve_the_existing_deadline() {
     let as_ = management_server(InvalidNonces);
     let mut original = as_.storage().get_token("oldhandle").unwrap();
     original.token.expires_in = Some(20);
-    as_.storage().put_token("oldhandle", original.clone());
+    install_token(as_.storage(), "oldhandle", original.clone());
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
     let response = as_.handle(
         &signed_continuation(

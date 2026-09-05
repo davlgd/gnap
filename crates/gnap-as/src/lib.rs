@@ -83,7 +83,12 @@
 //! proof and rights. [`MemoryStorage`] does not sweep expired tokens. Production
 //! clock handling, authoritative RS metadata, persistence and garbage collection
 //! remain deployment responsibilities; these helpers do not implement RFC 9767
-//! introspection or grant-to-token revocation cascades.
+//! introspection. The aggregate can atomically clear associated tokens when a
+//! grant is revoked, but this is not yet an exercisable grant-to-token cascade:
+//! approval currently removes continuation, so an issued grant cannot be revoked
+//! through that endpoint. Token-management DELETE remains available. Supporting
+//! continuation after approval and propagating revocation to a separate resource
+//! server remain unfinished work.
 
 //! # Access-token representation
 //!
@@ -103,8 +108,49 @@
 //! Identifiers remain optional on rotation, including after a token with an
 //! identifier. Deployments that rely on them must enforce their presence in
 //! the encoder and resource-server adapter. Changing an encoder or its
-//! configuration does not guarantee continuity between token formats, and
-//! storage does not enforce identifier uniqueness across independent grants.
+//! configuration does not guarantee continuity between token formats. Storage
+//! rejects duplicate live identifiers and access-token values across grants
+//! before publishing either an issuance or a rotation.
+//!
+//! # Migrating a storage adapter
+//!
+//! The former independent grant/token stores are replaced by [`GrantStore`].
+//! A [`GrantAggregate`] owns a [`GrantRecord`] and every [`TokenRecord`] issued
+//! by that grant, keyed by token-management handle. Its [`GrantId`] stays fixed
+//! when credentials rotate. [`GrantRecord::continuation_token`] is now optional:
+//! ending continuation does not itself revoke the issued tokens.
+//!
+//! Implement [`GrantStore::create`], [`GrantStore::lookup`],
+//! [`GrantStore::compare_exchange`] and [`GrantStore::remove`] as transactions.
+//! A lookup returns one [`GrantSnapshot`], including its [`Revision`]. Authenticate
+//! and prepare changes from that snapshot, then replace the whole aggregate
+//! against that revision. All continuation, interaction, management, access-value
+//! and native-identifier indexes must change in that same transaction. A missing
+//! aggregate cannot be recreated through compare-and-exchange; IDs must never be
+//! reused, revisions must never wrap, and explicit revocation is terminal.
+//!
+//! [`GrantSelector::Management`] replaces token-handle reads; select the token
+//! from the returned aggregate. [`GrantSelector::AccessToken`] and
+//! [`GrantSelector::TokenIdentifier`] support live resource-server adapters, but
+//! a snapshot alone is not an authorization decision: verify proof, rights and
+//! time, and coordinate the final live-state check with concurrent revocation.
+//! Storage absence and storage failure are distinct results. [`NonceStore`]
+//! remains separate, with atomic replay reservation and failure closed.
+//!
+//! The AS never automatically reruns proof verification or policy on a CAS
+//! conflict. A stale, colliding or structurally invalid rotation returns
+//! `invalid_rotation` (§6.1); other transaction
+//! conflicts and unavailable storage return HTTP 503 without a GNAP response
+//! claiming that the candidate committed. Broken/colliding state generated
+//! outside rotation returns HTTP 500. Every response still has `Cache-Control: no-store`.
+//! Deployments decide whether to retry with a fresh signed request.
+//!
+//! [`GrantStore::remove`] is explicit retention/expiration maintenance, not the
+//! protocol DELETE operation. It removes all indexes at an expected revision,
+//! without making the ID reusable. [`MemoryStorage`] otherwise retains closed
+//! aggregates, does not enforce capacity limits and is not persistent. Its
+//! fallible `len` and `is_empty` inspect continuable grants, not retained history.
+//! This migration does not add continuation after an approved grant.
 
 pub mod encoding;
 pub mod nonce;
@@ -121,5 +167,6 @@ pub use server::{
     AuthorizationServer, Endpoints, Finish, InteractionError, INTERACTION_LIFETIME, MAX_CLOCK_SKEW,
 };
 pub use storage::{
-    GrantRecord, GrantStore, MemoryStorage, NonceStore, Storage, TokenRecord, TokenStore,
+    GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantSnapshot, GrantStore, MemoryStorage,
+    NonceStore, Revision, Storage, StoreError, TokenRecord,
 };

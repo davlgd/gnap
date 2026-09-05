@@ -170,6 +170,6 @@ mod tests {
             panic!("the AS should reject the unproven key: {error}");
         };
         assert_eq!(error.code.as_str(), "invalid_client");
-        assert_eq!(server.storage().len(), 0);
+        assert_eq!(server.storage().len().unwrap(), 0);
     }
 }
