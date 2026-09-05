@@ -58,7 +58,7 @@ impl CanonicalOrigin {
         }
         if parsed.scheme() != "https"
             && !(parsed.scheme() == "http"
-                && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")))
+                && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")))
         {
             return Err("Public deployments require HTTPS; HTTP is only allowed on loopback");
         }
@@ -1071,17 +1071,20 @@ mod tests {
             "https://demo.example?next=x",
             "https://demo.example#fragment",
             "http://demo.example",
+            "http://[::2]:18081",
             "ftp://demo.example",
         ] {
             assert!(CanonicalOrigin::parse(value).is_err(), "{value}");
         }
         assert!(CanonicalOrigin::parse("https://demo.example").is_ok());
         assert!(CanonicalOrigin::parse("http://127.0.0.1:18081").is_ok());
+        assert!(CanonicalOrigin::parse("http://[::1]:18081").is_ok());
     }
 
     #[test]
     fn ipv6_authorities_preserve_the_bracketed_host_and_port() {
         for (value, host) in [
+            ("http://[::1]:18081", "[::1]:18081"),
             ("https://[::1]", "[::1]"),
             ("https://[::1]:8443", "[::1]:8443"),
             ("https://[2001:db8::1]:8443", "[2001:db8::1]:8443"),
