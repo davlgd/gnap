@@ -517,7 +517,7 @@ fn client_worker(
                         InteractCallback::from_redirect(&action[9..]).map_err(|e| e.to_string())?;
                     session
                         .client
-                        .accept_callback(&callback)
+                        .accept_callback(&callback, now())
                         .map_err(|e| e.to_string())?;
                     session.state = "ready";
                     session.events.push("Client validated the interaction callback hash; continuation is now available.".into());
