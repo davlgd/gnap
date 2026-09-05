@@ -45,6 +45,8 @@ jobs:
         # They are documentation as much as code, so they must keep working.
         run: |
           cargo run -p gnap-as --example flow
+          cargo test -p gnap-as --example jwk_client --locked
+          cargo run -p gnap-as --example jwk_client --locked
           cargo run -p gnap-crypto --example sign
           echo '{"client":"example-client"}' | cargo run -p gnap-types --example lint -- request
 

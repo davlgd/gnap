@@ -286,8 +286,23 @@ Access-token values are opaque references: the SDK does not yet issue or validat
 JWT, Biscuit, Macaroon or ZCAP access tokens. Registry entries alone are not
 implementations. The AS issues neither bearer nor `durable` tokens.
 
-Key objects reach the deployment's `KeyResolver`, but no JWK or X.509 conversion
-to a verifier is supplied. Subject assertions are represented, not authenticated:
+Key objects reach the deployment's `KeyResolver`. For public RSA/PS256 JWKs,
+`Ps256Signer::public_jwk` exports a public key and
+`Ps256Verifier::from_public_jwk` builds a verifier without prior registration.
+The [JWK client example](crates/gnap-as/examples/jwk_client.rs) exercises this
+path through grant issuance, rotation and revocation:
+
+```sh
+cargo run -p gnap-as --example jwk_client --locked
+```
+
+This adapter accepts 2048–4096-bit RSA keys, requires GNAP's `alg` and `kid`,
+and checks usage metadata. It rejects private and certificate parameters;
+no X.509 conversion or trust service is supplied. A valid key and proof do not
+establish a client's identity or entitlement. The example uses an in-process
+transport and a synthetic policy, not a network or production identity service.
+
+Subject assertions are represented, not authenticated:
 the `id_token` payload is decoded only for within-response consistency checks,
 and no ID-token or SAML validation service is provided. Push-finish callbacks
 are constructed and validated in protocol tests; sending them over HTTP remains

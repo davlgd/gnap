@@ -1,10 +1,10 @@
 # GNAP scope and support matrix
 
-Decision recorded on **5 September 2026**. The implementation baseline is
+Decision recorded on **5 September 2026**. The initial code inventory used
 [e84e47c](https://github.com/davlgd/gnap/commit/e84e47caedf66f5a472e076f9b3489d5517ef346),
-the code snapshot audited before this matrix was added. It is intentionally not
-the documentation commit or a moving reference to the branch head: the initial
-matrix adds no implementation changes. Documentation changes do not turn a
+the code snapshot audited before this matrix was added. That reference records
+the initial audit, not the current branch head. The rows below track subsequent
+implementation changes and their evidence. Documentation changes do not turn a
 planned feature into an implemented one. Update the relevant rows with each
 implementation change and link its tests and application evidence.
 
@@ -98,7 +98,7 @@ interoperability is currently claimed.
 | PS256 request signatures | C1/C2 required | Required baseline | **Implemented and tested**: `sign_and_verify_with_ps256` in the HTTPSig tests. This is not JWT support. |
 | mTLS | Conditional if selected as a proof; [§7.3.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.2) | Allowed additional implementation | **Model only**: proof name exists; no GNAP client-certificate adapter or live mTLS scenario. |
 | `jwsd` and `jws` request proofs | Conditional if selected; [§§7.3.3–7.3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.3) | Deferred from the next milestone | **Model only**, no proof adapters. JWT access-token alternatives do not change this status. |
-| JWK key representation and resolution | C1/C2 require the JWK representation and key algorithm information; [§7.1](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.1) | Required target | **Partial**: presentation checks are [tested](../crates/gnap-types/tests/conformance.rs). The SDK ships no JWK-to-verifier conversion. [`KeyResolver`](../crates/gnap-as/src/policy.rs) receives the client key; deployment code can derive or look up a verifier. |
+| JWK key representation and resolution | C1/C2 require the JWK representation and key algorithm information; [§7.1](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.1) | Required target | **Implemented and tested** for public RSA/PS256 keys: [import/export tests](../crates/gnap-crypto/tests/ps256_jwk.rs) cover encoding, size, metadata and exact signature key ID. The [JWK client example](../crates/gnap-as/examples/jwk_client.rs) derives a verifier through `KeyResolver`, then exercises issuance, rotation and revocation without pre-registration. This bounded bare-key adapter does not supply other algorithms, certificate trust or client identity. |
 | Certificate and certificate-thumbprint keys | Conditional on selecting `cert` or `cert#S256`; §7.1 | Deferred unless needed by the mTLS consumer | **Model only**: representation fields are present; no X.509 parsing/trust adapter supplied. A certificate representation is distinct from an mTLS proof. |
 | Browser redirect start and finish | C1 required; [§2.5 and §4.2.1](https://www.rfc-editor.org/rfc/rfc9635.html#section-4.2.1) | Required target | **Implemented and tested** in [client tests](../crates/gnap-client/tests/flow.rs), AS interop tests and the HTTP acceptance script. Browser consent is synthetic. |
 | `user_code` and `user_code_uri` start | C2 required; [§2.5.1](https://www.rfc-editor.org/rfc/rfc9635.html#section-2.5.1) | Planned secondary-device milestone | **Model only**: no AS implementation starts these modes. |
