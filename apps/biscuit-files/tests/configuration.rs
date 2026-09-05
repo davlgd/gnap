@@ -109,6 +109,46 @@ fn complete_environment_configuration_loads_only_its_role_and_never_uses_disk() 
         }
     }
 }
+
+#[test]
+fn listener_selection_uses_each_roles_origin_in_mixed_configurations() {
+    for role in [Role::As, Role::Rs, Role::Client] {
+        for (origin, expected) in [
+            ("http://127.0.0.1:18080", "127.0.0.1"),
+            ("http://localhost:18080", "127.0.0.1"),
+            ("http://[::1]:18080", "::1"),
+            ("https://role.example", "0.0.0.0"),
+        ] {
+            let mut values = environment(role);
+            // The other roles deliberately use a different listener policy.
+            if origin.starts_with("https:") {
+                for (name, port) in [
+                    ("AS_ORIGIN", 18081),
+                    ("RS_ORIGIN", 18082),
+                    ("CLIENT_ORIGIN", 18083),
+                ] {
+                    values.insert(name.into(), format!("http://127.0.0.1:{port}"));
+                }
+            }
+            let name = match role {
+                Role::As => "AS_ORIGIN",
+                Role::Rs => "RS_ORIGIN",
+                Role::Client => "CLIENT_ORIGIN",
+            };
+            values.insert(name.into(), origin.into());
+            let config = load_environment(role, &values).unwrap();
+            let origin = match role {
+                Role::As => config.as_origin,
+                Role::Rs => config.rs_origin,
+                Role::Client => config.client_origin,
+            };
+            assert_eq!(
+                origin.listener_ip(),
+                expected.parse::<std::net::IpAddr>().unwrap()
+            );
+        }
+    }
+}
 #[test]
 fn directory_mode_reads_only_required_files_and_has_no_secret_environment_fallback() {
     for role in [Role::As, Role::Rs, Role::Client] {

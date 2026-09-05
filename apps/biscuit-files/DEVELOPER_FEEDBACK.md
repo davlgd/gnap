@@ -75,3 +75,11 @@ Deployment uses an explicit choice between local key files and role-scoped
 environment material. Both reject mixed or incomplete configuration, including
 recognized variables belonging to another role. Injected lookup tests verify
 the boundaries without modifying global process environment or printing keys.
+
+Review also exposed a listener boundary: validating an HTTP loopback origin
+did not help while the process listened on every interface, because a remote
+caller can choose its Host header. Each role now binds cleartext local origins
+only to their loopback interface; HTTPS deployments keep a network listener for
+the upstream TLS proxy. The same listener policy needs a separate review in
+the delegation demo and conformance web app; this example's correction does
+not change those consumers.

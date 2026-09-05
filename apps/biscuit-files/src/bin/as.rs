@@ -31,5 +31,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store,
         nonces: Nonces::default(),
     };
-    config::serve(authorization::router(App::new(c.as_origin, engine, check))).await
+    let origin = c.as_origin;
+    config::serve(
+        authorization::router(App::new(origin.clone(), engine, check)),
+        origin,
+    )
+    .await
 }

@@ -6,6 +6,7 @@ use gnap_biscuit_files::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c = Config::load(config::Role::Rs)?;
+    let origin = c.rs_origin.clone();
     let resources = Resources::new(
         c.rs_origin.clone(),
         format!("{}/gnap", c.as_origin.value),
@@ -20,5 +21,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .join()
     .map_err(|_| "resource-check transport initialization failed")??;
-    config::serve(resource::router(App::new(resources, check))).await
+    config::serve(resource::router(App::new(resources, check)), origin).await
 }

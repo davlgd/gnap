@@ -8,7 +8,12 @@ use axum::{
     Router,
 };
 use gnap_client::{HttpRequest, HttpResponse, HttpTransport};
-use std::{io::Read, sync::Arc, time::Duration};
+use std::{
+    io::Read,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::Semaphore;
 
 #[derive(Clone)]
@@ -18,6 +23,19 @@ pub struct Origin {
     authority: (String, u16),
 }
 impl Origin {
+    /// Local cleartext never listens outside loopback. HTTPS origins rely on
+    /// an upstream TLS proxy, whose backend connection needs a network listener.
+    pub fn listener_ip(&self) -> IpAddr {
+        if self.scheme == "https" {
+            Ipv4Addr::UNSPECIFIED.into()
+        } else if self.authority.0 == "[::1]" {
+            Ipv6Addr::LOCALHOST.into()
+        } else {
+            // Origin::parse permits only localhost and 127.0.0.1 here.
+            // Binding localhost through DNS could choose the wrong interface.
+            Ipv4Addr::LOCALHOST.into()
+        }
+    }
     pub fn parse(value: &str) -> Result<Self, String> {
         let u = reqwest::Url::parse(value).map_err(|_| "invalid origin")?;
         if u.origin().ascii_serialization() != value

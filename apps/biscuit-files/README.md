@@ -135,6 +135,20 @@ aliases are refused with 421, not redirected. `Forwarded` and
 `X-Forwarded-Host` are not trusted. A TLS-terminating proxy must preserve the
 original authority; backend HTTP/HTTPS may differ from the public scheme.
 
+The listener follows the origin of its own role (`AS_ORIGIN`, `RS_ORIGIN` or
+`CLIENT_ORIGIN`), using `PORT` for its listening port. A cleartext HTTP origin
+with `localhost` or `127.0.0.1` binds only `127.0.0.1`; `[::1]` binds only `::1`.
+No DNS lookup chooses the listening interface. Prefer `127.0.0.1` as in the
+local examples; clients using `localhost` must support fallback to IPv4 when
+they try IPv6 first. A local proxy in front of HTTP mode must connect through
+that loopback interface. There is no environment override for the bind address.
+
+An HTTPS origin binds `0.0.0.0`, so Clever Cloud's TLS-terminating proxy can
+reach the backend. The application itself still serves HTTP: the proxy and
+deployment firewall must prevent untrusted direct access to that backend.
+The Host/authority guard is not a network-access boundary and does not turn
+cleartext backend traffic into TLS.
+
 Distribute only these files to each process, through a private, operator-managed
 directory identified by `KEY_DIRECTORY`:
 
@@ -254,6 +268,10 @@ and unavailable storage. An explicitly signed empty PUT is supported: its
 `Content-Digest` preserves an empty body through HTTP dispatch, and the RS
 clears the selected writable file. A zero Content-Length alone does not imply
 message content for an otherwise bodyless management request.
+Listener tests inspect real socket addresses and start every role with
+`localhost` and `[::1]` origins while the other roles use HTTPS. These tests
+require working IPv4 and IPv6 loopback interfaces; a runner without either
+must report that environmental limitation rather than claim this coverage.
 Local HTTP tests do not validate a hosted TLS setup
 or constitute independent conformance certification. The public RSA fixture
 used by lifecycle tests is the SDK's RFC 9421 fixture; see its

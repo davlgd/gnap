@@ -10,6 +10,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{Read, Write},
+    net::IpAddr,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::Path,
 };
@@ -233,17 +234,47 @@ pub fn initialize(path: &Path) -> Result<(), Error> {
     )?;
     Ok(())
 }
-pub async fn serve(router: axum::Router) -> Result<(), Error> {
+async fn bind(ip: IpAddr, port: u16) -> Result<tokio::net::TcpListener, Error> {
+    tokio::net::TcpListener::bind((ip, port))
+        .await
+        .map_err(|_| "HTTP listener unavailable".into())
+}
+pub async fn serve(router: axum::Router, origin: Origin) -> Result<(), Error> {
     let port = std::env::var("PORT")
         .map_err(|_| "invalid or missing PORT")?
         .parse::<u16>()
         .map_err(|_| "invalid or missing PORT")?;
-    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
-        .await
-        .map_err(|_| "HTTP listener unavailable")?;
+    let listener = bind(origin.listener_ip(), port).await?;
     println!("Biscuit files process listening; credential logging is disabled.");
     axum::serve(listener, router)
         .await
         .map_err(|_| "HTTP service failed")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn actual_listeners_use_the_derived_interface_and_requested_port() {
+        for (origin, expected) in [
+            ("http://127.0.0.1:18080", "127.0.0.1"),
+            ("http://localhost:18080", "127.0.0.1"),
+            ("http://[::1]:18080", "::1"),
+            ("https://as.example", "0.0.0.0"),
+        ] {
+            let expected: IpAddr = expected.parse().unwrap();
+            let listener = bind(Origin::parse(origin).unwrap().listener_ip(), 0)
+                .await
+                .unwrap();
+            let address = listener.local_addr().unwrap();
+            assert_eq!(address.ip(), expected);
+            assert_ne!(address.port(), 0);
+            // Check a nonzero PORT through the same binder used by serve.
+            drop(listener);
+            let listener = bind(expected, address.port()).await.unwrap();
+            assert_eq!(listener.local_addr().unwrap(), address);
+        }
+    }
 }

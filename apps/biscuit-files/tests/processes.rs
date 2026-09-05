@@ -494,3 +494,63 @@ fn three_process_flow_and_authority_outage_fail_closed() {
         200
     );
 }
+
+#[test]
+fn each_role_serves_localhost_and_ipv6_without_binding_other_interfaces() {
+    let keys = std::env::temp_dir().join(format!(
+        "gnap-biscuit-listeners-{}",
+        gnap_crypto::httpsig::fresh_nonce().unwrap()
+    ));
+    config::initialize(&keys).unwrap();
+    let mut processes = Processes {
+        children: vec![],
+        keys,
+    };
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    for (index, binary) in [
+        env!("CARGO_BIN_EXE_as"),
+        env!("CARGO_BIN_EXE_rs"),
+        env!("CARGO_BIN_EXE_client"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for host in ["localhost", "[::1]"] {
+            let probe = TcpListener::bind((if host == "[::1]" { "::1" } else { "127.0.0.1" }, 0))
+                .expect("listener regression requires IPv4 and IPv6 loopback");
+            let port = probe.local_addr().unwrap().port();
+            drop(probe);
+            // A wrong role's HTTPS origin would select a wildcard IPv4 bind.
+            let mut origins = [
+                "https://as.example".into(),
+                "https://rs.example".into(),
+                "https://client.example".into(),
+            ];
+            origins[index] = format!("http://{host}:{port}");
+            processes
+                .children
+                .push(start(binary, port, &origins, &processes.keys));
+            ready(&client, &origins[index]);
+            // A forged canonical Host cannot turn an IPv4 wildcard destination
+            // into a loopback-only listener. No LAN address or traffic is used.
+            // Linux routes 127/8 to loopback, so this catches a wildcard bind
+            // in CI. macOS may not configure 127.0.0.2: there, the local_addr
+            // assertions in config's socket test establish the bind boundary.
+            assert!(
+                client
+                    .get(format!("http://127.0.0.2:{port}/health"))
+                    .header("host", format!("{host}:{port}"))
+                    .send()
+                    .is_err(),
+                "local mode accepted a connection through another address"
+            );
+            let child = processes.children.last_mut().unwrap();
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+    }
+}
