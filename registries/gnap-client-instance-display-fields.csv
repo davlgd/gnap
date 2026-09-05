@@ -1,0 +1,4 @@
+Name,Type,Reference
+name,string,"[RFC9635, Section 2.3.2]"
+uri,string,"[RFC9635, Section 2.3.2]"
+logo_uri,string,"[RFC9635, Section 2.3.2]"

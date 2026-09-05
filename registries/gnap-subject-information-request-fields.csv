@@ -1,0 +1,4 @@
+Name,Type,Reference
+sub_id_formats,array of strings,"[RFC9635, Section 2.2]"
+assertion_formats,array of strings,"[RFC9635, Section 2.2]"
+sub_ids,array of objects,"[RFC9635, Section 2.2]"

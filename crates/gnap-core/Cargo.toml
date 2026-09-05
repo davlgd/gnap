@@ -1,0 +1,23 @@
+[package]
+name = "gnap-core"
+version = "0.1.0"
+description = "The GNAP grant state machine (RFC 9635 §1.5), pure and free of I/O"
+keywords = ["gnap", "rfc9635", "state-machine", "authorization"]
+categories = ["authentication", "data-structures"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+documentation = "https://docs.rs/gnap-core"
+
+[dependencies]
+gnap-types = { workspace = true }
+gnap-registry = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

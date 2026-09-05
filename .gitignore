@@ -1,0 +1,11 @@
+/target
+/rfc/
+/requirements/
+/PLAN.md
+/spikes/
+/legacy/
+/apps/*/target
+/.clevercloud
+/.clever.json
+**/*.rs.bk
+*.pdb

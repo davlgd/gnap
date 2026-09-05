@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  check:
+    name: Test, lint and document
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the stable toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Lint
+        # The workspace turns on clippy's pedantic and nursery groups; RUSTFLAGS
+        # makes any warning fail the build.
+        run: cargo clippy --workspace --all-targets
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Document
+        # Every public item is documented, and the lint that enforces it is set
+        # to deny; this catches a broken intra-doc link too.
+        run: cargo doc --workspace --no-deps
+
+      - name: Run the examples
+        # They are documentation as much as code, so they must keep working.
+        run: |
+          cargo run -p gnap-as --example flow
+          cargo run -p gnap-crypto --example sign
+          echo '{"client":"example-client"}' | cargo run -p gnap-types --example lint -- request
+
+  claims:
+    name: What the code claims about the RFCs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Quotations are literal
+        # The code quotes the RFCs to justify what it does. A drifted quotation
+        # lends the authority of the normative text to a sentence nobody wrote,
+        # so this downloads the RFCs and checks every quotation word for word.
+        run: python3 tools/check_quotes.py
+      - name: The README still describes the code
+        # The transcript is the example's real output, and the sections listed
+        # as unimplemented are the ones actually excluded.
+        run: python3 tools/check_readme.py
+
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.85.0
+        run: rustup toolchain install 1.85.0 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        # Verify the minimum version against the committed dependency graph.
+        run: cargo +1.85.0 build --workspace --locked
+
+  ecosystem:
+    name: Real application consumers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/delegation-demo -> target
+            apps/conformance-web -> target
+      - name: Check and build standalone consumers
+        run: |
+          for app in delegation-demo conformance-web; do
+            cargo fmt --manifest-path "apps/$app/Cargo.toml" --check
+            cargo clippy --manifest-path "apps/$app/Cargo.toml" --all-targets --locked -- -D warnings
+            cargo test --manifest-path "apps/$app/Cargo.toml" --locked
+            cargo build --manifest-path "apps/$app/Cargo.toml" --locked
+          done
+      - name: Exercise actual HTTP applications
+        shell: bash
+        run: |
+          PORT=18081 APP_ORIGIN=http://127.0.0.1:18081 apps/delegation-demo/target/debug/gnap-delegation-demo > "$RUNNER_TEMP/gnap-demo.log" 2>&1 &
+          demo_pid=$!
+          PORT=18082 apps/conformance-web/target/debug/gnap-conformance-web > "$RUNNER_TEMP/gnap-workbench.log" 2>&1 &
+          workbench_pid=$!
+          trap 'kill "$demo_pid" "$workbench_pid" 2>/dev/null || true' EXIT
+          python3 tools/smoke_ecosystem.py --demo http://127.0.0.1:18081 --workbench http://127.0.0.1:18082
+
+  registries:
+    name: IANA registries are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refresh and regenerate
+        run: |
+          python3 tools/fetch_registries.py
+          python3 tools/generate_registry.py
+      - name: Report any drift
+        # Not a failure: IANA moving is news, not a bug. The diff says what
+        # changed and the generated file is ready to commit.
+        run: |
+          if ! git diff --quiet; then
+            echo "::warning::The IANA registries have changed since they were vendored."
+            git --no-pager diff --stat
+          fi

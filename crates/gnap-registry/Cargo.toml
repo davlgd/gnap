@@ -1,0 +1,22 @@
+[package]
+name = "gnap-registry"
+version = "0.1.0"
+description = "IANA registries for the GNAP protocol (RFC 9635, RFC 9767), generated from the official CSV files"
+keywords = ["gnap", "rfc9635", "iana", "oauth", "authorization"]
+categories = ["authentication", "data-structures"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+documentation = "https://docs.rs/gnap-registry"
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

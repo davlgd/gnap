@@ -1,0 +1,6 @@
+Name,Status,Description,Reference
+jwt-signed,Active,"JSON Web Token, signed with JWS",[RFC7519]
+jwt-encrypted,Active,"JSON Web Token, encrypted with JWE",[RFC7519]
+macaroon,Active,Macaroon,[MACAROON]
+biscuit,Active,Biscuit,[BISCUIT]
+zcap,Active,ZCAP,[ZCAPLD]

@@ -1,0 +1,5 @@
+Name,Type,Reference
+access,array of strings/objects,"[RFC9767, Section 3.4]"
+resource_server,object/string,"[RFC9767, Section 3.4]"
+token_formats_supported,array of strings,"[RFC9767, Section 3.4]"
+token_introspection_required,boolean,"[RFC9767, Section 3.4]"

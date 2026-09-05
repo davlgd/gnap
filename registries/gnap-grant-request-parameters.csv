@@ -1,0 +1,11 @@
+Name,Type,Reference
+access_token,object,"[RFC9635, Section 2.1.1]"
+access_token,array of objects,"[RFC9635, Section 2.1.2]"
+subject,object,"[RFC9635, Section 2.2]"
+client,object,"[RFC9635, Section 2.3]"
+client,string,"[RFC9635, Section 2.3.1]"
+user,object,"[RFC9635, Section 2.4]"
+user,string,"[RFC9635, Section 2.4.1]"
+interact,object,"[RFC9635, Section 2.5]"
+interact_ref,string,"[RFC9635, Section 5.1]"
+existing_access_token,string,"[RFC9767, Section 4]"

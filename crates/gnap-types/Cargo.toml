@@ -1,0 +1,22 @@
+[package]
+name = "gnap-types"
+version = "0.1.0"
+description = "Data model for the GNAP protocol (RFC 9635, RFC 9767): serialization, polymorphism, validation"
+keywords = ["gnap", "rfc9635", "oauth", "authorization", "serde"]
+categories = ["authentication", "data-structures", "encoding"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+documentation = "https://docs.rs/gnap-types"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+gnap-registry = { workspace = true }
+
+[lints]
+workspace = true

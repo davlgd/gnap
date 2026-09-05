@@ -1,0 +1,44 @@
+{
+  "$comment": "Interaction hash vectors, RFC 9635 §4.2.3. Recomputed and verified. Consumed by crates/gnap-crypto/tests/interaction_hash.rs.",
+  "algorithm_registry": "IANA Named Information Hash Algorithm",
+  "base_construction": "client nonce, AS nonce, interact_ref and grant endpoint URI, joined by a single newline (0x0A), with no whitespace and no trailing newline",
+  "vectors": [
+    {
+      "id": "hash-001",
+      "requirements": [],
+      "description": "sha-256 vector from RFC 9635 §4.2.3",
+      "client_nonce": "VJLO6A4CATR0KRO",
+      "as_nonce": "MBDOFXG4Y5CVJCX821LH",
+      "interact_ref": "4IFWWIKYB2PQ6U56NL1",
+      "grant_endpoint": "https://server.example.com/tx",
+      "hash_method": "sha-256",
+      "expected": "x-gguKWTj8rQf7d7i3w3UhzvuJ5bpOlKyAlVpLxBffY",
+      "verified": true
+    },
+    {
+      "id": "hash-002",
+      "requirements": [],
+      "description": "sha3-512 vector from RFC 9635 §4.2.3, same base",
+      "client_nonce": "VJLO6A4CATR0KRO",
+      "as_nonce": "MBDOFXG4Y5CVJCX821LH",
+      "interact_ref": "4IFWWIKYB2PQ6U56NL1",
+      "grant_endpoint": "https://server.example.com/tx",
+      "hash_method": "sha3-512",
+      "expected": "pyUkVJSmpqSJMaDYsk5G8WCvgY91l-agUPe1wgn-cc5rUtN69gPI2-S_s-Eswed8iB4PJ_a5Hg6DNi7qGgKwSQ",
+      "verified": true
+    },
+    {
+      "id": "hash-003",
+      "requirements": [],
+      "description": "Same base with the interact_ref used elsewhere in the RFC. Recomputed value, not published by the RFC.",
+      "client_nonce": "VJLO6A4CATR0KRO",
+      "as_nonce": "MBDOFXG4Y5CVJCX821LH",
+      "interact_ref": "4IFWWIKYBC2PQ6U56NL1",
+      "grant_endpoint": "https://server.example.com/tx",
+      "hash_method": "sha-256",
+      "expected": "LO5XQXotemX0FkHLrbnSaYP3_hm0xKb2qLAGAOx_x7A",
+      "verified": true,
+      "note": "Do not use as a conformance vector: the RFC does not publish this value."
+    }
+  ]
+}

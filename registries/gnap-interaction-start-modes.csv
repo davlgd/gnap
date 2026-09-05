@@ -1,0 +1,5 @@
+Mode,Type,Reference
+redirect,string,"[RFC9635, Section 2.5.1.1]"
+app,string,"[RFC9635, Section 2.5.1.2]"
+user_code,string,"[RFC9635, Section 2.5.1.3]"
+user_code_uri,string,"[RFC9635, Section 2.5.1.4]"

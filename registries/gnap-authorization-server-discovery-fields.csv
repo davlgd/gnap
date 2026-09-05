@@ -1,0 +1,8 @@
+Name,Type,Reference
+grant_request_endpoint,string,"[RFC9635, Section 9]"
+interaction_start_modes_supported,array of strings,"[RFC9635, Section 9]"
+interaction_finish_methods_supported,array of strings,"[RFC9635, Section 9]"
+key_proofs_supported,array of strings,"[RFC9635, Section 9]"
+sub_id_formats_supported,array of strings,"[RFC9635, Section 9]"
+assertion_formats_supported,array of strings,"[RFC9635, Section 9]"
+key_rotation_supported,boolean,"[RFC9635, Section 9]"

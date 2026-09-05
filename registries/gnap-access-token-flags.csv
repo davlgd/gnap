@@ -1,0 +1,3 @@
+Name,Allowed Use,Reference
+bearer,"Request, Response","[RFC9635, Sections 2.1.1 and 3.2.1]"
+durable,Response,"[RFC9635, Section 3.2.1]"

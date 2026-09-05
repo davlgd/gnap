@@ -1,0 +1,25 @@
+[package]
+name = "gnap-client"
+version = "0.1.0"
+description = "The GNAP client instance role (RFC 9635), over a pluggable HTTP transport"
+keywords = ["gnap", "rfc9635", "oauth", "authorization", "client"]
+categories = ["authentication", "web-programming::http-client"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+documentation = "https://docs.rs/gnap-client"
+
+[dependencies]
+gnap-types = { workspace = true }
+gnap-registry = { workspace = true }
+gnap-crypto = { workspace = true }
+gnap-core = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]

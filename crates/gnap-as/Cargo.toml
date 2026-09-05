@@ -1,0 +1,29 @@
+[package]
+name = "gnap-as"
+version = "0.1.0"
+description = "The GNAP authorization server role (RFC 9635), free of any HTTP framework"
+keywords = ["gnap", "rfc9635", "oauth", "authorization", "server"]
+categories = ["authentication", "web-programming::http-server"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+documentation = "https://docs.rs/gnap-as"
+
+[dependencies]
+gnap-types = { workspace = true }
+gnap-registry = { workspace = true }
+gnap-crypto = { workspace = true }
+gnap-core = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+getrandom = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+gnap-client = { workspace = true }
+
+[lints]
+workspace = true

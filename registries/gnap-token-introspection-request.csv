@@ -1,0 +1,5 @@
+Name,Type,Reference
+access_token,string,"[RFC9767, Section 3.3]"
+proof,string,"[RFC9767, Section 3.3]"
+resource_server,object/string,"[RFC9767, Section 3.3]"
+access,array of strings/objects,"[RFC9767, Section 3.3]"

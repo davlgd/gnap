@@ -1,0 +1,8 @@
+Name,Type,Reference
+continue,object,"[RFC9635, Section 3.1]"
+access_token,object,"[RFC9635, Section 3.2.1]"
+access_token,array of objects,"[RFC9635, Section 3.2.2]"
+interact,object,"[RFC9635, Section 3.3]"
+subject,object,"[RFC9635, Section 3.4]"
+instance_id,string,"[RFC9635, Section 3.5]"
+error,object,"[RFC9635, Section 3.6]"

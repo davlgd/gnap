@@ -1,0 +1,6 @@
+Method,Type,Reference
+httpsig,string,"[RFC9635, Section 7.3.1]"
+httpsig,object,"[RFC9635, Section 7.3.1]"
+mtls,string,"[RFC9635, Section 7.3.2]"
+jwsd,string,"[RFC9635, Section 7.3.3]"
+jws,string,"[RFC9635, Section 7.3.4]"

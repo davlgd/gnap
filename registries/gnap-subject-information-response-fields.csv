@@ -1,0 +1,4 @@
+Name,Type,Reference
+sub_ids,array of objects,"[RFC9635, Section 3.4]"
+assertions,array of objects,"[RFC9635, Section 3.4]"
+updated_at,string,"[RFC9635, Section 3.4]"

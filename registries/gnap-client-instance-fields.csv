@@ -1,0 +1,5 @@
+Name,Type,Reference
+key,object,"[RFC9635, Section 7.1]"
+key,string,"[RFC9635, Section 7.1.1]"
+class_id,string,"[RFC9635, Section 2.3]"
+display,object,"[RFC9635, Section 2.3.2]"

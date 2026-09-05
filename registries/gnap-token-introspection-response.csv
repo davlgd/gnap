@@ -1,0 +1,12 @@
+Name,Type,Reference
+active,boolean,"[RFC9767, Section 3.3]"
+access,array of strings/objects,"[RFC9767, Section 3.3]"
+key,object/string,"[RFC9767, Section 3.3]"
+flags,array of strings,"[RFC9767, Section 3.3]"
+exp,integer,"[RFC9767, Section 3.3]"
+iat,integer,"[RFC9767, Section 3.3]"
+nbf,integer,"[RFC9767, Section 3.3]"
+aud,string or array of strings,"[RFC9767, Section 3.3]"
+sub,string,"[RFC9767, Section 3.3]"
+iss,string,"[RFC9767, Section 3.3]"
+instance_id,string,"[RFC9767, Section 3.3]"

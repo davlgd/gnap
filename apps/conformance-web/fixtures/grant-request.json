@@ -1,0 +1,1 @@
+{"kind":"grant_request","body":"{\"client\":\"demo-client\",\"access_token\":{\"access\":[\"example-read\"]}}","headers":[["Content-Type","application/json"]]}

@@ -1,0 +1,6 @@
+Name,Type,Reference
+introspection_endpoint,string,"[RFC9767, Section 3.1]"
+token_formats_supported,array of strings,"[RFC9767, Section 3.1]"
+resource_registration_endpoint,string,"[RFC9767, Section 3.1]"
+grant_request_endpoint,string,"[RFC9767, Section 3.1]"
+key_proofs_supported,array of strings,"[RFC9767, Section 3.1]"

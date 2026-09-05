@@ -1,0 +1,4 @@
+Error,Reference
+invalid_request,"[RFC9767, Section 3.5]"
+invalid_resource_server,"[RFC9767, Section 3.5]"
+invalid_access,"[RFC9767, Section 3.5]"

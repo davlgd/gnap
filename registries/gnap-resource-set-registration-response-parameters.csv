@@ -1,0 +1,4 @@
+Name,Type,Reference
+resource_reference,string,"[RFC9767, Section 3.4]"
+instance_id,string,"[RFC9767, Section 3.4]"
+introspection_endpoint,string,"[RFC9767, Section 3.4]"
