@@ -102,6 +102,20 @@ fn unusable_responses() -> Vec<Result<HttpResponse, String>> {
 }
 
 #[test]
+fn no_content_grant_response_is_a_protocol_error() {
+    let key = signer();
+    let transport = Script::new(vec![Ok(response(204, ""))]);
+    let mut session = Session::new(&transport, &key, ENDPOINT).supporting(&["redirect"]);
+    let before = session.protocol.clone();
+
+    assert!(matches!(
+        session.start(&request(), 100),
+        Err(ClientError::Protocol(_))
+    ));
+    assert_eq!(session.protocol, before);
+}
+
+#[test]
 fn unusable_responses_restore_every_protocol_field() {
     let key = signer();
     for bad in unusable_responses() {

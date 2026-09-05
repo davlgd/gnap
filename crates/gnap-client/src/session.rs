@@ -860,7 +860,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         if http.status == 204 {
             // §5.4 uses 204 for DELETE, not for these POST/PATCH exchanges.
             // It supplies no grant response from which to infer local state.
-            return Err(ClientError::Usage(
+            return Err(ClientError::Protocol(
                 "the AS answered 204 No Content without a usable grant response".into(),
             ));
         }
