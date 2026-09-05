@@ -880,6 +880,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     ///
     /// Returns the cases in which §4.2 says the AS MUST NOT follow the finish
     /// method: an unknown interaction, or a grant that is no longer pending.
+    /// [`InteractionError::Storage`] also reports unavailable storage or a
+    /// compare-and-exchange conflict. The caller must not carry out the finish
+    /// method unless the state change committed and this call returned `Ok`.
     pub fn complete_interaction(&self, handle: &str, now: u64) -> Result<Finish, InteractionError> {
         let snapshot = self
             .storage

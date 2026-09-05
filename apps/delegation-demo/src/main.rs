@@ -219,6 +219,7 @@ impl RetainedGrants {
                     candidate.record.continuation_token = None;
                     candidate.record.interact_handle = None;
                     candidate.record.interact_ref = None;
+                    candidate.record.interact_expires_at = None;
                 }
                 if clear_continuation || previous_count != candidate.tokens.len() {
                     self.base
@@ -1738,6 +1739,7 @@ mod tests {
         let mut aggregate = test_aggregate("handle", test_record("access"));
         aggregate.record.continuation_token = Some("continue-secret".into());
         aggregate.record.interact_handle = Some("interaction".into());
+        aggregate.record.interact_expires_at = Some(now() + 60);
         let snapshot = storage.create(aggregate).unwrap();
         // Simulate the original continuation deadline having elapsed while a
         // recently issued/rotated token still has its own SDK lifetime.
@@ -1752,6 +1754,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(current.aggregate.record.continuation_token.is_none());
+        assert!(current.aggregate.record.interact_expires_at.is_none());
         assert!(storage
             .lookup(GrantSelector::Continuation("continue-secret"))
             .unwrap()
