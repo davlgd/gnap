@@ -22,7 +22,8 @@ both occurrences, and a passing observation cannot erase a recommendation.
 
 | State | Source blocks |
 | --- | ---: |
-| applicability: `unresolved` | 339 |
+| applicability: `applicable` | 2 |
+| applicability: `unresolved` | 337 |
 | evidence: `not_run` | 339 |
 
 `condition_false` requires a reviewed condition, role, profile and rationale;

@@ -56,8 +56,10 @@ separate change. `report` prints the current generated report to stdout.
 The first inventory contains 339 normative source blocks, not 339 reviewed
 atomic obligations. RFC 9635 supplies 553 marked keywords (542 normative plus 11
 terminology occurrences); RFC 9767 supplies 80 (69 plus 11). These numbers count
-the pinned sources, not a percentage of implemented behavior. All 339 blocks
-initially have `unresolved` applicability and `not_run` evidence. No private
+the pinned sources, not a percentage of implemented behavior. The original
+inventory had all 339 blocks with `unresolved` applicability and `not_run`
+evidence. Two section 9 blocks now have reviewed AS applicability; all other
+blocks remain unresolved. This implementation lot installs no AS evidence claims. No private
 historical coverage decisions or documents were imported.
 
 Each occurrence retains its original keyword. BCP14 synonyms are normalized only
@@ -81,7 +83,7 @@ source blocks intact avoids pretending this first lot has completed that review.
 
 ## Applicability is not evidence
 
-Initial decisions are empty. A future reviewed decision has this shape (the
+Two decisions now contextualize the AS discovery response. A reviewed decision has this shape (the
 example is explanatory and is not installed as a real decision):
 
 ```json
@@ -131,13 +133,15 @@ python3 -B tools/conformance_ledger.py run-tests \
   --output conformance/runs/wire-scenarios.json
 ```
 
-That directory does not exist in this first lot: the command is a documented
-extension point, not a claimed GNAP suite. The runner refuses to relabel tests
+The discovery suite now uses the dedicated `discovery-tests` command below to
+bind mandatory capture provenance as well as actual execution. The generic
+runner remains an extension point for other scenarios and refuses to relabel tests
 outside this scenario directory as GNAP evidence. It executes trusted repository
 Python code; **never expose it as an arbitrary public command or upload runner**.
 
 Each future `evidence.json` claim has `clause_id`, `run` (a JSON receipt under
-`conformance/runs/`), `case_id` and a description of the `assertion`. The validator
+`conformance/runs/`, or a reviewed public receipt under `conformance/receipts/`),
+`case_id` and a description of the `assertion`. The validator
 requires a reviewed applicable decision, the actual named case result, and
 unchanged recorded source hashes. It also checks that the named class/method is
 still declared in the recorded Python module using AST parsing, without importing
@@ -160,9 +164,131 @@ An operator can edit a JSON file or write a meaningless test. Review remains
 necessary. This first runner hashes test modules and itself, not every dependency
 or deployed server; target revision, toolchains, configuration, redacted wire
 artifacts and dependency provenance must be added before live results support a
-release claim. Stale, unrelated, source-only and skipped evidence must not become
+release claim. The discovery adapter below now binds capture/configuration and
+helper hashes, but does not attest remote code. Stale, unrelated, source-only and skipped evidence must not become
 conformance claims. Rust/nextest/JUnit and live workbench receipt adapters are not
 implemented in this lot.
+
+## First executable group: discovery response, RFC 9635 section 9
+
+The default command is entirely offline and uses a **synthetic** document:
+
+```sh
+python3 -B tools/conformance_ledger.py discovery-tests
+```
+
+It executes six directly declared tests in
+`conformance/scenarios/test_as_discovery.py`, using independent Python JSON/URI
+assertions, not SDK validators or the web workbench's verdict:
+
+| Source block | Named assertions (class `DiscoveryResponse`) |
+| --- | --- |
+| `rfc9635:section-9-2` | `test_options_response_media_type`, `test_response_is_json_object` |
+| `rfc9635:section-9-3.2.1` | `test_endpoint_required_string`, `test_endpoint_absolute_host_without_fragment`, `test_endpoint_https`, `test_endpoint_matches_exact_request` |
+
+The endpoint block contains four BCP14 occurrences and its string type comes
+from field context. They are not collapsed into a completed atomic obligation.
+The first block retains the client's MAY separately from the AS response MUST.
+Both decisions contextualize AS applicability only; the extraction's block
+review state and all other section 9 blocks remain unresolved. Required field
+checks do not assert that every optional discovery capability works.
+
+HTTP 200 is **not** one of these six normative assertions. Duplicate JSON names
+make dependent interpretation inconclusive (`skipped`), not an invented GNAP
+MUST failure. The JSON object and `Content-Type: application/json` requirements
+are explicit in [RFC 9635 section 9, paragraph 2](https://www.rfc-editor.org/rfc/rfc9635.html#section-9-2)
+(vendored XML lines 7216–7220), not inferred from a diagnostic profile. Missing
+Content-Type fails; repeated Content-Type metadata is ambiguous and therefore
+skipped, without asserting a separate GNAP header-cardinality MUST.
+URI grammar does not impose the web diagnostic's separate userinfo
+safety policy. Registry/capability lists, optional rotation metadata, capability
+execution, sections 9.1/9.2, transport conformance and C1/C2 completion are outside
+this slice; none is silently excluded from the full source inventory.
+
+### Operator-only capture, explicitly opt-in
+
+Only use a public discovery endpoint you operate or are authorized to test:
+
+```sh
+GNAP_DISCOVERY_LIVE=1 \
+GNAP_DISCOVERY_ENDPOINT=https://your-owned-as.example/gnap \
+python3 -B tools/conformance_ledger.py capture-discovery
+
+python3 -B tools/conformance_ledger.py discovery-tests \
+  --capture conformance/runs/discovery-capture.json
+```
+
+The collector rejects CI environments. The CI job never invokes it. It sends
+one credential-free OPTIONS, with no proxy or redirect following, validates TLS
+for the configured DNS name and connects to a pinned public IPv4 address. One
+subprocess owns the entire DNS/TLS/HTTP exchange and is killed and reaped at the
+five-second wall-clock deadline, including slow headers and chunk metadata.
+Socket timeouts are additional safeguards, not the total deadline. The body
+limit is 32 KiB. A mixed private/public DNS answer is refused. The first collector
+does not support IPv6-only targets, explicit ports, query components or IP
+literals: these are conservative collector limits, not GNAP exclusions. Capture
+data can never cause a request: only the operator's explicit environment value
+is eligible for network collection. No received code or command is executed.
+
+The capture preserves the response body as exact base64-encoded bytes and its
+SHA-256, exact queried endpoint, effective UTC Unix capture time, status, and
+only Content-Type headers. Cookies, authentication headers and other headers
+are discarded. The **body is not redacted**, since altered bytes would no longer
+be the response tested. Discovery is public metadata; the operator must review
+the body before publishing and must not publish a response containing secrets.
+Errors do not reflect captured values. `remote_revision` is always `unknown`:
+TLS and a deployment URL are not an attestation of remote source code.
+
+### Replay provenance and publication
+
+Two independent fields prevent conflating evidence types:
+
+- `capture_origin=synthetic`: oracle fixture only, refused as AS evidence.
+- `capture_origin=live`: a response acquired from a server at the recorded time.
+- `execution_mode=capture_replay`: the six assertions ran offline against those
+  bound bytes. A replay of a live capture is **historical**, not a current live
+  network test. This is the only publishable execution mode in this adapter.
+- `execution_mode=live` is reserved by the receipt validator for acquisition
+  during the execution interval; the two-command workflow above does not emit
+  it and cannot acquire network data during CI replay.
+
+Receipts bind the capture file hash, original body hash, exact endpoint, capture
+time, collector configuration/hash, scenario/helper sources and ledger runner.
+Source or capture changes invalidate the receipt. The JSON is untrusted data.
+`check` imports the versioned, trusted repository capture helper to validate it;
+it never imports or executes code supplied by a capture or receipt. Receipts remain trusted
+local records, not forgery-proof cryptographic attestations. Editing every
+hash/provenance field dishonestly is not something this format can prevent.
+
+Publication deliberately takes two commits, coordinated by the maintainer:
+
+1. Review the capture, place it under `conformance/captures/`, and commit it with
+   the finalized scenario/helper/runner sources. No AS evidence claim yet.
+2. From that clean commit, replay and emit the public receipt:
+
+   ```sh
+   python3 -B tools/conformance_ledger.py discovery-tests \
+     --capture conformance/captures/as-discovery.json \
+     --publish --output conformance/receipts/as-discovery.json
+   ```
+
+3. Map only actually executed case IDs to the two reviewed blocks in
+   `evidence.json`, regenerate the report, check it, then commit these artifacts.
+
+Public receipts require a known clean source revision and matching source and
+capture blobs (the capture path/hash is also mandatory in `source_files`)
+from that actual Git commit, not merely a supplied `dirty: false`. The subsequent
+artifact commit can differ. The claims CI checkout fetches history so offline
+`git show` can verify the earlier commit. `runs/` stays ignored; `receipts/` and
+reviewed `captures/` are publishable and checked on a fresh clone. Do not map an
+ignored local run in the public evidence file. Existing receipts are historical:
+CI checks them offline and generates its own separate synthetic oracle receipt,
+without converting either into a new current network observation.
+
+No public receipt or AS claim is fabricated by this source implementation lot.
+Even a successful real capture replay remains
+`passing_observation_not_completion`, contextualized by its capture time and
+endpoint; the ledger still has no global percentage or certification.
 
 ## Next bounded increments
 

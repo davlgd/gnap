@@ -1,4 +1,23 @@
 {
   "schema_version": 1,
-  "decisions": []
+  "decisions": [
+    {
+      "clause_id": "rfc9635:section-9-2",
+      "applicability": "applicable",
+      "review": "reviewed",
+      "rationale": "For an AS receiving OPTIONS at its grant endpoint, review the response JSON media type and object assertions. The client's MAY and the full field-list context are preserved; this block is not atomically completed.",
+      "condition": "AS receives an OPTIONS discovery request at its configured grant request endpoint",
+      "role": "as",
+      "profile": "core"
+    },
+    {
+      "clause_id": "rfc9635:section-9-3.2.1",
+      "applicability": "applicable",
+      "review": "reviewed",
+      "rationale": "Review required string, absolute URL with host and no fragment, HTTPS scheme, and exact queried-URL identity as separate named assertions. Four BCP14 occurrences and field context remain intact; observations are not block completion.",
+      "condition": "AS returns its discovery document in response to OPTIONS at the configured grant endpoint",
+      "role": "as",
+      "profile": "core"
+    }
+  ]
 }
