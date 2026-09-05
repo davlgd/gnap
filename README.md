@@ -205,6 +205,10 @@ IANA registration.
 code. Generation stays reproducible and offline, and a `git diff` shows exactly
 what IANA changed.
 
+The generator uses `rustfmt` from the installed Rust toolchain. CI checks that
+the vendored CSV files reproduce the committed artifact before checking for
+upstream registry changes.
+
 ```console
 python3 tools/fetch_registries.py    # refresh registries/*.csv from iana.org
 python3 tools/generate_registry.py   # regenerate crates/gnap-registry/src/generated.rs

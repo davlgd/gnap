@@ -11,10 +11,11 @@ Two shapes, depending on what the registry holds:
   - a *field-name* registry becomes a slice of &str, used to check that an
     extension field is registered.
 
-Usage: python3 tools/generate_registry.py
+Usage: python3 tools/generate_registry.py (requires rustfmt on PATH)
 """
 import csv
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -98,6 +99,7 @@ def render_enum(type_name, doc, values):
     L.append("    ];")
     L.append("")
     L.append("    /// The on-the-wire representation.")
+    L.append("    #[must_use]")
     L.append("    pub fn as_str(&self) -> &str {")
     L.append("        match self {")
     for v in values:
@@ -107,7 +109,8 @@ def render_enum(type_name, doc, values):
     L.append("    }")
     L.append("")
     L.append("    /// Returns `false` when the value is absent from the IANA registry.")
-    L.append("    pub fn is_registered(&self) -> bool {")
+    L.append("    #[must_use]")
+    L.append("    pub const fn is_registered(&self) -> bool {")
     L.append("        !matches!(self, Self::Unregistered(_))")
     L.append("    }")
     L.append("}")
@@ -148,8 +151,14 @@ def main():
         L.append("];")
         L.append("")
 
+    # Format before replacing the artifact: a missing or failing formatter must
+    # not leave a partially regenerated file behind.
+    formatted = subprocess.run(
+        ["rustfmt", "--edition", "2021", "--emit", "stdout"],
+        input="\n".join(L) + "\n", text=True, capture_output=True, check=True,
+    ).stdout
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text("\n".join(L) + "\n", encoding="utf-8")
+    OUT.write_text(formatted, encoding="utf-8")
 
     n_enum = sum(len(entries(s)) for s in VALUE_REGISTRIES)
     n_field = sum(len(entries(s)) for s in FIELD_REGISTRIES)

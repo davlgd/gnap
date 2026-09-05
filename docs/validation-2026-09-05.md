@@ -73,6 +73,20 @@ allow only operator-approved targets; they do not provide arbitrary-target,
 self-service certification. Successful application scenarios do not establish
 independent implementation interoperability or production readiness.
 
-The CI job was added and its commands exercised locally; this report does not
-claim a completed GitHub Actions run. Peer review and browser checks are also
-not an independent security audit or a performance comparison with OAuth.
+Before publication, the CI commands had only been exercised locally. Peer review
+and browser checks are not an independent security audit or a performance
+comparison with OAuth.
+
+## Public snapshot verification
+
+On the same day, the first public snapshot, `13d511f`, passed all five jobs in
+[GitHub Actions run 33971954769](https://github.com/davlgd/gnap/actions/runs/33971954769),
+including the application HTTP acceptance checks on a fresh GitHub runner.
+
+The run also exposed two warnings: an obsolete checkout action and apparent
+IANA registry drift. Refreshing the CSV files produced no changes. The generator
+instead removed Rust attributes and formatting from the committed artifact.
+Its template and formatting step were corrected, and two consecutive generations
+then reproduced the artifact exactly. CI now checks that reproducibility before
+fetching upstream data, so a generator regression cannot be mislabeled as an
+IANA update. The checkout action was updated to the inspected v7.0.1 commit.
