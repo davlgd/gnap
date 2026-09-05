@@ -1,7 +1,10 @@
 # GNAP scope and support matrix
 
-Decision recorded on **5 September 2026**. Implementation observations refer to
-the Rust code in public revision `e84e47c`. Documentation changes do not turn a
+Decision recorded on **5 September 2026**. The implementation baseline is
+[e84e47c](https://github.com/davlgd/gnap/commit/e84e47caedf66f5a472e076f9b3489d5517ef346),
+the code snapshot audited before this matrix was added. It is intentionally not
+the documentation commit or a moving reference to the branch head: the initial
+matrix adds no implementation changes. Documentation changes do not turn a
 planned feature into an implemented one. Update the relevant rows with each
 implementation change and link its tests and application evidence.
 
