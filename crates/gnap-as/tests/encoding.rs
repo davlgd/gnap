@@ -238,6 +238,77 @@ fn initial_encoder_refusal_and_invalid_output_store_no_access_token() {
 }
 
 #[test]
+fn issuance_rejects_a_candidate_repeating_the_management_credential_before_encoding() {
+    struct Repeating(RefCell<VecDeque<&'static str>>);
+    impl Nonces for Repeating {
+        fn next(&self) -> String {
+            self.0
+                .borrow_mut()
+                .pop_front()
+                .expect("nonce script exhausted")
+                .into()
+        }
+    }
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let server = AuthorizationServer::new(
+        ReadOnly,
+        Key,
+        Arc::new(MemoryStorage::new()),
+        Repeating(RefCell::new(
+            ["management-secret", "handle", "management-secret"].into(),
+        )),
+        Endpoints {
+            grant: ENDPOINT.into(),
+            continuation: "https://as.example/continue".into(),
+            interaction: "https://as.example/interact".into(),
+            token_management: "https://as.example/token".into(),
+        },
+    )
+    .with_token_encoder(Probe {
+        seen: seen.clone(),
+        outcomes: RefCell::new([Outcome::Value("encoded", Some(vec![1]))].into()),
+    });
+    let request = gnap_client::sign_request(
+        HttpRequest::new("POST", ENDPOINT).json_body(serde_json::to_vec(&request()).unwrap()),
+        &signer(),
+        None,
+        1_000,
+    )
+    .unwrap();
+    let response = server.handle(&request, 1_000);
+    assert!(
+        seen.borrow().is_empty(),
+        "the encoder must never receive the management credential"
+    );
+    assert!(!(200..300).contains(&response.status));
+    assert!(response.has_no_store());
+    assert!(!String::from_utf8_lossy(&response.body).contains("management-secret"));
+    assert!(server.storage().get_token("handle").is_none());
+    assert!(server.storage().is_empty());
+}
+
+#[test]
+fn issuance_rejects_an_encoded_value_equal_to_the_management_credential_before_storage() {
+    let f = fixture(vec![Outcome::Value("nonce0003", Some(vec![1]))]);
+    let request = gnap_client::sign_request(
+        HttpRequest::new("POST", ENDPOINT).json_body(serde_json::to_vec(&request()).unwrap()),
+        &signer(),
+        None,
+        1_000,
+    )
+    .unwrap();
+    let response = f.server.handle(&request, 1_000);
+    assert!(!(200..300).contains(&response.status));
+    assert!(response.has_no_store());
+    assert!(f.server.storage().get_token("nonce0002").is_none());
+    assert!(f.server.storage().is_empty());
+    let seen = f.seen.borrow();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].candidate, "nonce0001");
+    assert_eq!(f.counter.get(), 3);
+}
+
+#[test]
 fn encoder_failures_and_identifier_or_value_collisions_restore_the_entire_record() {
     for outcome in [
         Outcome::Refuse,

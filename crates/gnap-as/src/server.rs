@@ -1094,15 +1094,27 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         request: &GrantRequest,
         access: &[AccessItem],
         now: u64,
-    ) -> Result<(EncodedToken, Option<u64>), HttpResponse> {
+    ) -> Result<(EncodedToken, Option<u64>, String, TokenValue), HttpResponse> {
         let expires_in = self.access_token_lifetime(request, now)?;
         let candidate = TokenValue::new(self.nonces.next()).map_err(|_| {
             misconfigured("Nonces returned an access value outside token68 (RFC 9635 §3.2.1)")
         })?;
+        // Preserve the nominal candidate → handle → credential order, but
+        // reserve all three before encoding. A repeating source must not pass
+        // the management credential to the encoder as its candidate.
+        let management = self.nonces.next();
+        let management_token = TokenValue::new(self.nonces.next()).map_err(|_| {
+            misconfigured("Nonces returned a management value outside token68 (RFC 9635 §3.2.1)")
+        })?;
+        if candidate == management_token {
+            return Err(misconfigured(
+                "access candidate repeats the management credential",
+            ));
+        }
         let encoded = self
             .encode_access_token(&request.client, access, now, expires_in, &candidate)
             .map_err(|_| misconfigured("unable to encode an access token"))?;
-        Ok((encoded, expires_in))
+        Ok((encoded, expires_in, management, management_token))
     }
 
     fn encode_access_token(
@@ -1189,21 +1201,15 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                         return misconfigured(&e.to_string());
                     }
                 }
-                let (encoded, expires_in) = match self.encode_issued_token(&request, &access, now) {
-                    Ok(encoded) => encoded,
-                    Err(response) => return response,
-                };
+                let (encoded, expires_in, management, management_token) =
+                    match self.encode_issued_token(&request, &access, now) {
+                        Ok(encoded) => encoded,
+                        Err(response) => return response,
+                    };
 
                 // §3.2.1 — the management API the client may call to rotate or
-                // revoke this token (§6). Both halves are minted here: the
-                // handle that names the token in the URI, and the token that
-                // protects the calls to it.
-                let management = self.nonces.next();
-                let Ok(management_token) = TokenValue::new(self.nonces.next()) else {
-                    return misconfigured(
-                        "Nonces returned a management value outside token68 (RFC 9635 §3.2.1)",
-                    );
-                };
+                // revoke this token (§6). Both halves were reserved before
+                // encoding: the URI handle and the credential protecting it.
                 let manage = TokenManage {
                     uri: format!(
                         "{}/{}",
@@ -1227,6 +1233,8 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                     flags: Vec::new(),
                     extra: serde_json::Map::default(),
                 };
+                // TokenManage validation also rejects an encoded access value
+                // equal to its management credential before anything is stored.
                 if let Err(e) = token.validate() {
                     return misconfigured(&e.to_string());
                 }
