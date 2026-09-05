@@ -104,7 +104,11 @@ jobs:
           PORT=18082 apps/conformance-web/target/debug/gnap-conformance-web > "$RUNNER_TEMP/gnap-workbench.log" 2>&1 &
           workbench_pid=$!
           trap 'kill "$demo_pid" "$workbench_pid" 2>/dev/null || true' EXIT
-          python3 tools/smoke_ecosystem.py --demo http://127.0.0.1:18081 --workbench http://127.0.0.1:18082
+          python3 tools/smoke_ecosystem.py --demo http://127.0.0.1:18081 --demo-alias http://localhost:18081 --workbench http://127.0.0.1:18082
+          # Exercise the actual HTTP/2 listener, not just synthetic router requests.
+          test "$(curl --http2-prior-knowledge --silent --show-error --noproxy '*' --max-time 10 --output /dev/null --write-out '%{http_version} %{http_code}' http://127.0.0.1:18081/api/status)" = '2 200'
+          test "$(curl --http2-prior-knowledge --silent --show-error --noproxy '*' --max-time 10 --output /dev/null --write-out '%{http_version} %{http_code}' http://localhost:18081/api/status)" = '2 421'
+          test "$(curl --http2-prior-knowledge --silent --show-error --noproxy '*' --max-time 10 --output /dev/null --write-out '%{http_version} %{http_code}' http://localhost:18081/)" = '2 307'
 
   registries:
     name: Registry generation and upstream drift
