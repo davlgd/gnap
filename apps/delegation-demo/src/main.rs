@@ -605,6 +605,11 @@ fn client_worker(
         };
         let result = (|| -> Result<Value, String> {
             if command.action == "start" {
+                // The HTTP front door creates a fresh identity for every start.
+                // Reject an internal duplicate before changing consent or AS state.
+                if sessions.contains_key(&command.session) {
+                    return Err("Session already started; use a new browser identity".into());
+                }
                 if sessions.len() >= MAX_SESSIONS {
                     return Err("Demo busy: 64 active sessions; retry later".into());
                 }

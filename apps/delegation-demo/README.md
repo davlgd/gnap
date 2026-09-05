@@ -144,6 +144,11 @@ endpoint is implemented or simulated.**
   another prompt only when its requested rights are a subset of rights in the
   snapshot's still-live tokens. Otherwise it requests fresh interaction.
 - Browser state uses random 128-bit HttpOnly/SameSite cookies, Secure on HTTPS.
+  Every HTTP `/api/start` creates a fresh browser identity even when a cookie is
+  supplied; older sessions remain subject to their normal retention limits.
+  The worker rejects an internal start reusing a live session ID before calling
+  the AS or changing registries. This does not revoke any existing token or
+  discard consent, and grant identifiers are never reused.
   State-changing POSTs require an exact matching Origin. Callback hashes are
   verified and a callback is consumed once per browser session.
 - At most 64 active sessions, a 32-command worker queue, 40 actions per session,

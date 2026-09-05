@@ -78,6 +78,228 @@ fn read(app: &App, token: &TokenValue, path: &str) -> Result<Value, ResourceErro
     read_resource(app, &request)
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existing_authority() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let mut app = tests::test_app();
+    app.origin = origin.clone();
+    app.server = Arc::new(AuthorizationServer::new(
+        ConsentPolicy(app.decisions.clone()),
+        KnownKeys {
+            signer: app.signer.clone(),
+            decisions: app.decisions.clone(),
+        },
+        app.storage.clone(),
+        OsNonces,
+        Endpoints {
+            grant: format!("{origin}/gnap"),
+            continuation: format!("{origin}/continue"),
+            interaction: format!("{origin}/interact"),
+            token_management: format!("{origin}/token"),
+        },
+    ));
+    let (sender, receiver) = mpsc::sync_channel(8);
+    app.commands = sender;
+    let (worker_origin, signer, server, storage, decisions) = (
+        origin.clone(),
+        app.signer.clone(),
+        app.server.clone(),
+        app.storage.clone(),
+        app.decisions.clone(),
+    );
+    let worker = std::thread::spawn(move || {
+        client_worker(worker_origin, signer, server, storage, decisions, receiver)
+    });
+    let starts = Arc::new(AtomicUsize::new(0));
+    let counted = starts.clone();
+    let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap()).layer(
+        axum::middleware::from_fn(move |request: Request, next: Next| {
+            if request.method() == Method::POST && request.uri().path() == "/gnap" {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+            async move { next.run(request).await }
+        }),
+    );
+    let served = router.clone();
+    let serving = tokio::spawn(async move {
+        axum::serve(listener, served).await.unwrap();
+    });
+
+    // Exercise the actual front door with the same incoming cookie twice.
+    // It intentionally creates fresh identities, never replaces this cookie's ID.
+    let supplied = "abcdefghijklmnopqrstuv";
+    let mut identities = Vec::new();
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/start")
+                    .header("host", origin.strip_prefix("http://").unwrap())
+                    .header("origin", &origin)
+                    .header("cookie", format!("gnap_demo={supplied}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let identity = cookie.strip_prefix("gnap_demo=").unwrap().to_owned();
+        assert!(identity != supplied, "HTTP start must issue a new identity");
+        identities.push(identity);
+    }
+    assert!(
+        identities[0] != identities[1],
+        "Repeated HTTP starts must not reuse the browser identity"
+    );
+    assert_eq!(starts.load(Ordering::SeqCst), 2);
+
+    for id in &identities {
+        let finish = dispatch(&app, id.clone(), "approve".into()).await.unwrap();
+        dispatch(
+            &app,
+            id.clone(),
+            format!("callback:{}", finish["redirect"].as_str().unwrap()),
+        )
+        .await
+        .unwrap();
+    }
+    let pending = dispatch(&app, identities[0].clone(), "status".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(
+        pending["continuation_wait_seconds"].as_u64().unwrap(),
+    ))
+    .await;
+    let approved = dispatch(&app, identities[0].clone(), "continue".into())
+        .await
+        .unwrap();
+    assert_eq!(approved["token_present"], true);
+    let grant_ids: HashSet<_> = app
+        .storage
+        .lock()
+        .unwrap()
+        .continuation_deadlines
+        .keys()
+        .copied()
+        .collect();
+    let consent_before: HashMap<_, _> = app
+        .decisions
+        .lock()
+        .unwrap()
+        .grants
+        .iter()
+        .map(|(id, consent)| {
+            (
+                *id,
+                (
+                    consent.request.clone(),
+                    consent.interaction_reference.clone(),
+                    consent.allowed,
+                ),
+            )
+        })
+        .collect();
+    assert_eq!(consent_before.len(), 2);
+    let old = grant_ids
+        .iter()
+        .find_map(|id| {
+            let snapshot = app.storage.lookup(GrantSelector::Id(*id)).unwrap().unwrap();
+            (!snapshot.aggregate.tokens.is_empty()).then_some(snapshot)
+        })
+        .unwrap();
+    let token = old
+        .aggregate
+        .tokens
+        .values()
+        .next()
+        .unwrap()
+        .token
+        .value
+        .clone();
+    assert!(read(&app, &token, "/resource/folder").is_ok());
+    let other_before = dispatch(&app, identities[1].clone(), "status".into())
+        .await
+        .unwrap();
+
+    // Directly exercise the worker's invalid internal duplicate-ID command.
+    let duplicate = dispatch(&app, identities[0].clone(), "start".into()).await;
+    assert!(
+        duplicate.is_err(),
+        "Duplicate worker start must be rejected, not replace the existing session"
+    );
+    assert_eq!(
+        starts.load(Ordering::SeqCst),
+        2,
+        "Duplicate rejection must happen before another AS call"
+    );
+    assert!(
+        app.storage
+            .lock()
+            .unwrap()
+            .continuation_deadlines
+            .keys()
+            .copied()
+            .collect::<HashSet<_>>()
+            == grant_ids
+    );
+    {
+        let choices = app.decisions.lock().unwrap();
+        assert!(identities.iter().all(|id| choices.clients.contains(id)));
+        assert_eq!(choices.grants.len(), consent_before.len());
+        assert!(consent_before
+            .iter()
+            .all(|(id, before)| choices
+                .grants
+                .get(id)
+                .is_some_and(|after| after.request == before.0
+                    && after.interaction_reference == before.1
+                    && after.allowed == before.2)));
+    }
+    let current = app
+        .storage
+        .lookup(GrantSelector::Id(old.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.revision, old.revision);
+    assert!(!current.aggregate.revoked);
+    assert!(read(&app, &token, "/resource/folder").is_ok());
+    let retained = dispatch(&app, identities[0].clone(), "status".into())
+        .await
+        .unwrap();
+    assert_eq!(retained["token_present"], true);
+    assert!(retained["events"] == approved["events"]);
+    let other_after = dispatch(&app, identities[1].clone(), "status".into())
+        .await
+        .unwrap();
+    assert!(
+        other_after["state"] == other_before["state"]
+            && other_after["events"] == other_before["events"]
+    );
+    // The original Session is still usable for ordinary token revocation.
+    dispatch(&app, identities[0].clone(), "revoke".into())
+        .await
+        .unwrap();
+    assert!(read(&app, &token, "/resource/folder").is_err());
+
+    serving.abort();
+    let _ = serving.await;
+    drop(router);
+    drop(app);
+    worker.join().unwrap();
+}
+
 #[test]
 fn ongoing_grant_polls_downscopes_reconsents_and_revokes_all_tokens() {
     let app = tests::test_app();
