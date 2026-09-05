@@ -14,8 +14,9 @@ write notes.
 
 ## Run locally
 
-This standalone application uses Rust 1.98; it does not change the SDK's Rust
-1.85 contract. Run these commands from the repository root:
+This standalone application requires Unix and Rust 1.98; its key-file setup
+relies on Unix permission modes. It does not change the SDK's Rust 1.85 contract.
+Run these commands from the repository root:
 
 ```console
 cargo build --manifest-path apps/biscuit-files/Cargo.toml --locked

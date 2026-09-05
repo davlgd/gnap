@@ -104,8 +104,18 @@ async fn guard(State(origin): State<Origin>, request: Request, next: Next) -> Re
             Err(s) => s.into_response(),
         }
     };
-    for (k,v) in [("cache-control","no-store"),("referrer-policy","no-referrer"),("x-content-type-options","nosniff"),("content-security-policy","default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")] {
-        response.headers_mut().insert(k, v.parse().unwrap());
+    let security_headers = [
+        ("cache-control", "no-store"),
+        ("referrer-policy", "no-referrer"),
+        ("x-content-type-options", "nosniff"),
+        (
+            "content-security-policy",
+            "default-src 'none'; script-src 'self'; style-src 'self'; \
+             connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        ),
+    ];
+    for (name, value) in security_headers {
+        response.headers_mut().insert(name, value.parse().unwrap());
     }
     response
 }

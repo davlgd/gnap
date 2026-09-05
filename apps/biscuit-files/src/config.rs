@@ -1,4 +1,7 @@
 //! Explicit, role-scoped files or environment keys. Errors never echo material.
+#[cfg(not(unix))]
+compile_error!("biscuit-files requires Unix file permission modes for its key material");
+
 use crate::http::Origin;
 use biscuit_auth::{Algorithm, KeyPair, PrivateKey, PublicKey};
 use gnap_crypto::Ps256Signer;

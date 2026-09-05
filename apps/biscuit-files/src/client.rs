@@ -45,7 +45,18 @@ struct Browser<'a> {
     operations: u32,
 }
 pub fn grant(signer: &Ps256Signer, rs: &str) -> Result<GrantRequest, String> {
-    serde_json::from_value(json!({"client":{"key":{"proof":"httpsig","jwk":signer.public_jwk().map_err(|_|"client public key unavailable")?}},"access_token":{"access":rights(rs).iter().map(gnap_types::access::AccessItem::from).collect::<Vec<_>>()}})).map_err(|_|"grant encoding failed".into())
+    let key = signer
+        .public_jwk()
+        .map_err(|_| "client public key unavailable")?;
+    let access: Vec<_> = rights(rs)
+        .iter()
+        .map(gnap_types::access::AccessItem::from)
+        .collect();
+    serde_json::from_value(json!({
+        "client": {"key": {"proof": "httpsig", "jwk": key}},
+        "access_token": {"access": access}
+    }))
+    .map_err(|_| "grant encoding failed".into())
 }
 fn worker(
     config: Config,
