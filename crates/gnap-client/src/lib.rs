@@ -46,6 +46,30 @@
 //! # }
 //! ```
 
+//! # Callback clocks and API migration
+//!
+//! `accept_callback`, `accept_redirect` and `accept_push` now require a `now`
+//! argument, in Unix seconds. Pass the current time when processing the
+//! callback, on the same clock used by `start`, `modify_grant` and
+//! `continue_grant`. The synchronous API does not read a system clock itself.
+//! An interaction window starts at the timestamp supplied to the operation
+//! that returned it; transport latency therefore shortens the usable window
+//! rather than extending the advertised duration.
+//!
+//! An advertised `interact.expires_in` bounds callback acceptance: the exact
+//! deadline is already too late. A clock reading before that window's start
+//! is refused. Deadlines use wider arithmetic, so a legal duration extending
+//! beyond the input clock's range does not discard a continuation. Invalid or
+//! late callbacks do not replace a reference already validated; receiving a new interaction set
+//! replaces the previous finish context. A response without `interact` does
+//! not renew the window.
+//!
+//! RFC 9635 §4 recommends suitable finish timeouts (SHOULD). This client uses
+//! an AS-advertised lifetime but does not impose its own maximum when
+//! `expires_in` is absent: §3.3 makes that field optional. Applications that
+//! require a maximum finish wait must bound their session lifetime as well.
+//! This is not a claim to implement a configurable client timeout policy.
+
 pub mod error;
 pub mod session;
 pub mod transport;

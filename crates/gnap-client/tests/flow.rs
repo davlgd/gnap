@@ -145,7 +145,7 @@ fn a_full_redirect_flow() {
         .unwrap(),
         interact_ref: "4IFWWIKYBC2PQ6U56NL1".into(),
     };
-    s.accept_callback(&callback).unwrap();
+    s.accept_callback(&callback, 1_005).unwrap();
 
     // 3. Continuing yields the token.
     let step = s.continue_grant(1_100).unwrap();
@@ -196,7 +196,7 @@ fn a_forged_callback_is_refused_and_nothing_leaves() {
         hash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
         interact_ref: "stolen".into(),
     };
-    let e = s.accept_callback(&forged).unwrap_err();
+    let e = s.accept_callback(&forged, 1_005).unwrap_err();
     assert!(
         matches!(e, ClientError::Interaction(_)),
         "a bad callback comes over the front channel; it is not the AS misbehaving: {e}"
@@ -468,7 +468,7 @@ fn a_refused_continuation_is_retried_with_the_same_reference() {
         .unwrap(),
         interact_ref: "4IFWWIKYBC2PQ6U56NL1".into(),
     };
-    s.accept_callback(&callback).unwrap();
+    s.accept_callback(&callback, 1_005).unwrap();
 
     // The client's own guard is satisfied, but the AS disagrees about the time.
     let step = s.continue_grant(1_100).unwrap();
@@ -526,7 +526,7 @@ fn the_continuation_token_travels_only_in_the_authorization_header() {
     let as_ = FakeAs::with(vec![PENDING, APPROVED]);
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request(), 1_000).unwrap();
-    s.accept_callback(&valid_callback()).unwrap();
+    s.accept_callback(&valid_callback(), 1_005).unwrap();
     s.continue_grant(1_100).unwrap();
 
     let seen = as_.seen.borrow();
@@ -651,7 +651,7 @@ fn continuation_content_is_a_json_object() {
         .unwrap(),
         interact_ref: "4IFWWIKYBC2PQ6U56NL1".into(),
     };
-    s.accept_callback(&callback).unwrap();
+    s.accept_callback(&callback, 1_005).unwrap();
     s.continue_grant(1_100).unwrap();
 
     let seen = as_.seen.borrow();
@@ -706,7 +706,7 @@ fn subject_information_arrives_attributed_to_its_authorization_server() {
         .unwrap(),
         interact_ref: "4IFWWIKYBC2PQ6U56NL1".into(),
     };
-    s.accept_callback(&callback).unwrap();
+    s.accept_callback(&callback, 1_005).unwrap();
     s.continue_grant(1_100).unwrap();
 
     let attributed = s.subject().expect("the AS released subject information");
@@ -798,9 +798,12 @@ fn a_callback_is_read_and_validated_by_the_client_itself() {
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request(), 1_000).unwrap();
     let hash = expected("4IFWWIKYBC2PQ6U56NL1").replace('-', "%2D");
-    s.accept_redirect(&format!(
-        "https://client.example.net/cb?state=abc&hash={hash}&interact_ref=4IFWWIKYBC2PQ6U56NL1"
-    ))
+    s.accept_redirect(
+        &format!(
+            "https://client.example.net/cb?state=abc&hash={hash}&interact_ref=4IFWWIKYBC2PQ6U56NL1"
+        ),
+        1_005,
+    )
     .expect("the client reads its own callback");
     assert!(s.continue_grant(1_100).is_ok());
 
@@ -813,7 +816,8 @@ fn a_callback_is_read_and_validated_by_the_client_itself() {
         interact_ref: "4IFWWIKYBC2PQ6U56NL1".into(),
     })
     .unwrap();
-    s.accept_push(&pushed).expect("the pushed callback is read");
+    s.accept_push(&pushed, 1_005)
+        .expect("the pushed callback is read");
 
     // §4.2.2-M05 — a hash that does not validate carries the code the client
     // must answer the AS with.
@@ -821,14 +825,17 @@ fn a_callback_is_read_and_validated_by_the_client_itself() {
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request(), 1_000).unwrap();
     let e = s
-        .accept_push(br#"{"hash":"not-the-right-hash","interact_ref":"x"}"#)
+        .accept_push(
+            br#"{"hash":"not-the-right-hash","interact_ref":"x"}"#,
+            1_005,
+        )
         .unwrap_err();
     let answer = e.as_callback_error().expect("an error to return to the AS");
     assert_eq!(answer.code, ErrorCode::UnknownInteraction);
 
     // A callback missing half of itself is not one, and fails the same way.
     let e = s
-        .accept_redirect("https://client.example.net/cb?hash=abc")
+        .accept_redirect("https://client.example.net/cb?hash=abc", 1_005)
         .unwrap_err();
     assert!(e.to_string().contains("interact_ref"), "{e}");
     assert_eq!(
@@ -855,7 +862,7 @@ fn a_promised_callback_is_waited_for_not_polled_around() {
     assert_eq!(as_.seen.borrow().len(), 1, "nothing left the client");
 
     // Once the callback has arrived, the reference goes with the call.
-    s.accept_callback(&valid_callback()).unwrap();
+    s.accept_callback(&valid_callback(), 1_005).unwrap();
     assert!(s.continue_grant(1_100).is_ok());
 }
 
@@ -909,7 +916,7 @@ fn the_interaction_reference_goes_once_and_only_once() {
     let as_ = FakeAs::with(vec![PENDING, STILL_PENDING, APPROVED]);
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request(), 1_000).unwrap();
-    s.accept_callback(&valid_callback()).unwrap();
+    s.accept_callback(&valid_callback(), 1_005).unwrap();
 
     // §5.1-M01 — the first continuation carries it, in a POST.
     s.continue_grant(1_100).unwrap();
@@ -1077,4 +1084,130 @@ fn a_wait_beyond_the_clock_holds_the_client_back_without_panicking() {
     let e = s.continue_grant(u64::MAX).unwrap_err();
     assert!(e.to_string().contains("wait period"), "{e}");
     assert_eq!(as_.seen.borrow().len(), 1, "nothing left the client");
+}
+fn pending_with_lifetime(seconds: u64) -> String {
+    let mut response: serde_json::Value = serde_json::from_str(PENDING).unwrap();
+    response["interact"]["expires_in"] = seconds.into();
+    response.to_string()
+}
+
+#[test]
+fn interaction_deadline_checks_all_callback_entrypoints_at_the_boundary() {
+    let pending = pending_with_lifetime(20);
+    let callback = valid_callback();
+    let redirect = format!(
+        "https://client.example.net/cb?hash={}&interact_ref={}",
+        callback.hash, callback.interact_ref
+    );
+    let pushed = serde_json::to_vec(&callback).unwrap();
+    for mode in ["parsed", "redirect", "push"] {
+        for now in [999, 1_000, 1_019, 1_020, 1_021] {
+            let sk = signer();
+            let as_ = FakeAs::with(vec![&pending, APPROVED]);
+            let mut session = Session::new(&as_, &sk, ENDPOINT);
+            session.start(&request(), 1_000).unwrap();
+            let result = match mode {
+                "redirect" => session.accept_redirect(&redirect, now),
+                "push" => session.accept_push(&pushed, now),
+                _ => session.accept_callback(&callback, now),
+            };
+            assert_eq!(
+                result.is_ok(),
+                (1_000..1_020).contains(&now),
+                "{mode}, {now}"
+            );
+            if let Err(error) = result {
+                assert_eq!(
+                    error.as_callback_error().unwrap().code,
+                    ErrorCode::UnknownInteraction
+                );
+                assert_eq!(session.state(), State::Pending);
+                assert!(session.continue_grant(1_021).is_err());
+                assert_eq!(as_.seen.borrow().len(), 1);
+            } else {
+                // The deadline bounds arrival of the finish signal, not a
+                // valid reference already held while waiting to continue.
+                assert!(session.continue_grant(1_021).is_ok());
+            }
+        }
+    }
+}
+
+#[test]
+fn refused_callbacks_do_not_consume_or_replace_an_accepted_reference() {
+    let pending = pending_with_lifetime(20);
+    let sk = signer();
+    let as_ = FakeAs::with(vec![&pending, APPROVED]);
+    let mut session = Session::new(&as_, &sk, ENDPOINT);
+    session.start(&request(), 1_000).unwrap();
+    let forged = InteractCallback {
+        hash: "invalid".into(),
+        interact_ref: "attacker".into(),
+    };
+    assert!(session.accept_callback(&forged, 1_001).is_err());
+    session.accept_callback(&valid_callback(), 1_005).unwrap();
+    assert!(session.accept_callback(&forged, 1_006).is_err());
+    assert!(
+        session.accept_callback(&valid_callback(), 1_007).is_err(),
+        "one-time callback"
+    );
+    assert!(session.accept_callback(&valid_callback(), 1_020).is_err());
+    session.continue_grant(1_021).unwrap();
+    let seen = as_.seen.borrow();
+    let body: serde_json::Value = serde_json::from_slice(seen[1].body.as_ref().unwrap()).unwrap();
+    assert_eq!(body["interact_ref"], valid_callback().interact_ref);
+}
+
+#[test]
+fn interaction_expiration_omission_zero_and_overflow_are_explicit() {
+    let sk = signer();
+    let as_ = FakeAs::with(vec![PENDING]);
+    let mut session = Session::new(&as_, &sk, ENDPOINT);
+    session.start(&request(), 1_000).unwrap();
+    assert!(session.accept_callback(&valid_callback(), 999).is_err());
+    session
+        .accept_callback(&valid_callback(), u64::MAX)
+        .unwrap();
+
+    let zero = pending_with_lifetime(0);
+    let as_ = FakeAs::with(vec![&zero]);
+    let mut session = Session::new(&as_, &sk, ENDPOINT);
+    session.start(&request(), 1_000).unwrap();
+    assert!(session.accept_callback(&valid_callback(), 1_000).is_err());
+
+    let overflow = pending_with_lifetime(u64::MAX);
+    let as_ = FakeAs::with(vec![&overflow]);
+    let mut session = Session::new(&as_, &sk, ENDPOINT);
+    session.start(&request(), 1_000).unwrap();
+    assert!(session.continuation().is_some());
+    assert!(session.accept_callback(&valid_callback(), 999).is_err());
+    session
+        .accept_callback(&valid_callback(), u64::MAX)
+        .unwrap();
+
+    let as_ = FakeAs::with(vec![&overflow]);
+    let mut session = Session::new(&as_, &sk, ENDPOINT);
+    session.start(&request(), 0).unwrap();
+    assert!(session
+        .accept_callback(&valid_callback(), u64::MAX)
+        .is_err());
+}
+
+#[test]
+fn only_a_new_interaction_response_replaces_the_finish_deadline() {
+    use gnap_types::message::ContinueRequest;
+    let sk = signer();
+    let pending = pending_with_lifetime(20);
+    let no_interaction = r#"{"continue":{"uri":"https://as.example/continue","access_token":{"value":"replacement"},"wait":0}}"#;
+    for (response, may_finish) in [(no_interaction, false), (pending.as_str(), true)] {
+        let as_ = FakeAs::with(vec![&pending, response]);
+        let mut session = Session::new(&as_, &sk, ENDPOINT);
+        session.start(&request(), 1_000).unwrap();
+        let changes: ContinueRequest = serde_json::from_str("{}").unwrap();
+        session.modify_grant(&changes, 1_010).unwrap();
+        assert_eq!(
+            session.accept_callback(&valid_callback(), 1_020).is_ok(),
+            may_finish
+        );
+    }
 }

@@ -286,7 +286,7 @@ fn a_client_and_a_server_complete_a_grant() {
     assert!(uri.starts_with("https://client.example.net/cb?"), "{uri}");
     let callback = InteractCallback::from_redirect(&uri).unwrap();
     assert_ne!(callback.interact_ref, as_nonce);
-    client.accept_callback(&callback).unwrap();
+    client.accept_callback(&callback, 1_005).unwrap();
 
     // 3. Continuing yields the token. The wait period is honoured.
     transport.now.set(1_010);
@@ -1783,7 +1783,7 @@ fn a_transport_failure_does_not_strand_the_session() {
         panic!("the client asked for the redirect finish method");
     };
     client
-        .accept_callback(&InteractCallback::from_redirect(&uri).unwrap())
+        .accept_callback(&InteractCallback::from_redirect(&uri).unwrap(), 1_005)
         .unwrap();
 
     transport.now.set(1_010);
@@ -2010,7 +2010,7 @@ fn a_client_refused_too_fast_retries_with_what_the_as_handed_back() {
         panic!("the client asked for the redirect finish method");
     };
     client
-        .accept_callback(&InteractCallback::from_redirect(&uri).unwrap())
+        .accept_callback(&InteractCallback::from_redirect(&uri).unwrap(), 1_005)
         .unwrap();
 
     // The client's own guard is satisfied at 1_010; the AS sees 1_001.
@@ -2555,7 +2555,7 @@ fn a_modification_leaves_an_issued_token_as_it_was() {
         panic!("the client asked for the redirect finish method");
     };
     client
-        .accept_callback(&InteractCallback::from_redirect(&uri).unwrap())
+        .accept_callback(&InteractCallback::from_redirect(&uri).unwrap(), 1_005)
         .unwrap();
     transport.now.set(1_010);
     let step = client.continue_grant(1_010).unwrap();
@@ -2867,7 +2867,7 @@ fn approved_token_from(
         panic!("the client asked for the redirect finish method");
     };
     client
-        .accept_callback(&InteractCallback::from_redirect(&uri).unwrap())
+        .accept_callback(&InteractCallback::from_redirect(&uri).unwrap(), 1_005)
         .unwrap();
     transport.now.set(1_010);
     let step = client.continue_grant(1_010).unwrap();

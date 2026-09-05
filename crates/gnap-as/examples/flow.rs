@@ -186,7 +186,7 @@ fn main() {
     );
 
     let callback = the_resource_owner_answers(&server, &interact);
-    match client.accept_callback(&callback) {
+    match client.accept_callback(&callback, 1_005) {
         Ok(()) => println!("   Hash validated; the client will pass the reference on."),
         Err(e) => panic!("the callback should validate: {e}"),
     }
@@ -196,7 +196,7 @@ fn main() {
         hash: "not-the-right-hash".into(),
         interact_ref: "stolen".into(),
     };
-    match client.accept_callback(&forged) {
+    match client.accept_callback(&forged, 1_005) {
         Ok(()) => panic!("a forged callback must not be accepted"),
         Err(e) => println!("   A forged one is refused: {e}"),
     }

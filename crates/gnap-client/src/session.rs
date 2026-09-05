@@ -49,6 +49,22 @@ impl Step {
     }
 }
 
+struct InteractionWindow {
+    received_at: u64,
+    expires_at: Option<u128>,
+}
+impl InteractionWindow {
+    fn new(received_at: u64, expires_in: Option<u64>) -> Self {
+        // Two u64 inputs fit in u128. A legal, very long lifetime must not
+        // discard an otherwise usable response or its continuation token.
+        let expires_at = expires_in.map(|seconds| u128::from(received_at) + u128::from(seconds));
+        Self {
+            received_at,
+            expires_at,
+        }
+    }
+}
+
 /// A single grant request, driven from the client side.
 pub struct Session<'a, T, S> {
     transport: &'a T,
@@ -80,6 +96,9 @@ pub struct Session<'a, T, S> {
     issued: Option<Vec<(u64, AccessToken)>>,
     /// Whether a callback has arrived on the interaction the AS promised.
     interaction_finished: bool,
+    /// Receipt time and optional exclusive deadline for the current set of
+    /// interaction responses. Responses without `interact` do not renew it.
+    interaction_window: Option<InteractionWindow>,
     /// The interaction start modes this client can actually drive (§2.5).
     ///
     /// `None` means the caller has not said, and the check of §2.5-MN01 does
@@ -122,6 +141,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             subject: None,
             issued: None,
             interaction_finished: false,
+            interaction_window: None,
             supported_modes: None,
         }
     }
@@ -296,19 +316,21 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     ///
     /// §4.2.1-M05 has the client "parse the query parameters to extract the
     /// hash and interaction reference values"; this does that and then the
-    /// validation of [`Session::accept_callback`], which is the whole of what
-    /// §4.2.1 asks of a client receiving the request.
+    /// validation of [`Session::accept_callback`]. The application must still
+    /// bind this callback endpoint to the correct browser session.
     ///
     /// `uri` is what the browser arrived at, or just its query.
+    /// `now` is the current Unix time in seconds, using the same clock as
+    /// [`Session::start`] and [`Session::continue_grant`].
     ///
     /// # Errors
     ///
     /// Fails when the query does not carry both values, or for the same reasons
     /// as [`Session::accept_callback`].
-    pub fn accept_redirect(&mut self, uri: &str) -> Result<(), ClientError> {
+    pub fn accept_redirect(&mut self, uri: &str, now: u64) -> Result<(), ClientError> {
         let callback = InteractCallback::from_redirect(uri)
             .map_err(|e| ClientError::Interaction(e.to_string()))?;
-        self.accept_callback(&callback)
+        self.accept_callback(&callback, now)
     }
 
     /// Reads and validates a callback pushed to the client (§4.2.2).
@@ -316,15 +338,16 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// §4.2.2-M04 has the client "parse the JSON object and validate the hash
     /// value as described in Section 4.2.3", and §4.2.2-M05 has it answer
     /// `unknown_interaction` if either fails — which is the error this returns.
+    /// `now` is the current Unix time in seconds, on the session's clock.
     ///
     /// # Errors
     ///
     /// Fails when the content is not the JSON object §4.2.2 describes, or for
     /// the same reasons as [`Session::accept_callback`].
-    pub fn accept_push(&mut self, body: &[u8]) -> Result<(), ClientError> {
+    pub fn accept_push(&mut self, body: &[u8], now: u64) -> Result<(), ClientError> {
         let callback = InteractCallback::from_push(body)
             .map_err(|e| ClientError::Interaction(e.to_string()))?;
-        self.accept_callback(&callback)
+        self.accept_callback(&callback, now)
     }
 
     /// Validates an interaction callback and holds on to its reference (§4.2).
@@ -334,12 +357,23 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// sent to the AS. That is why the reference is stored here rather than
     /// handed straight to [`Session::continue_grant`].
     ///
+    /// `now` is the current Unix time in seconds. An advertised interaction
+    /// lifetime (§3.3) starts at the `now` supplied when its response was
+    /// received. Callbacks at or after that deadline, or before receipt, are
+    /// refused without changing the stored reference. RFC 9635 §4 recommends
+    /// suitable finish timeouts (SHOULD); this enforces the AS's advertised
+    /// duration, not an additional client timeout when the duration is absent.
+    ///
     /// # Errors
     ///
-    /// Fails when no interaction finish was negotiated, or when the hash does
-    /// not validate — in which case the reference is discarded rather than
-    /// held.
-    pub fn accept_callback(&mut self, callback: &InteractCallback) -> Result<(), ClientError> {
+    /// Fails when no finish was negotiated, its advertised lifetime has ended,
+    /// the clock precedes receipt, the hash is invalid, or a valid callback was
+    /// already accepted. A refused callback does not replace a validated one.
+    pub fn accept_callback(
+        &mut self,
+        callback: &InteractCallback,
+        now: u64,
+    ) -> Result<(), ClientError> {
         let (Some(client_nonce), Some(as_nonce)) = (&self.client_nonce, &self.as_nonce) else {
             return Err(ClientError::Usage(
                 "no interaction finish was negotiated, so no callback can be validated \
@@ -347,6 +381,16 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                     .into(),
             ));
         };
+        if self.interaction_window.as_ref().is_some_and(|window| {
+            now < window.received_at
+                || window
+                    .expires_at
+                    .is_some_and(|deadline| u128::from(now) >= deadline)
+        }) {
+            return Err(ClientError::Interaction(
+                "the interaction response has expired or the clock precedes its receipt (RFC 9635 §3.3; finish timeout recommendation in §4)".into(),
+            ));
+        }
 
         let input = InteractionHashInput {
             client_nonce,
@@ -371,6 +415,11 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             ));
         }
 
+        if self.interaction_finished || self.grant.state() != State::Pending {
+            return Err(ClientError::Interaction(
+                "this interaction is no longer awaiting a callback (RFC 9635 §4)".into(),
+            ));
+        }
         self.validated_ref = Some(callback.interact_ref.clone());
         self.interaction_finished = true;
         Ok(())
@@ -805,6 +854,11 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         self.check_tokens(&response)?;
         self.check_interaction(&response)?;
 
+        let interaction_window = response
+            .interact
+            .as_ref()
+            .map(|interaction| InteractionWindow::new(now, interaction.expires_in));
+
         // The AS decides the state; the client infers it from what came back.
         let event = if response.access_token.is_some() || response.subject.is_some() {
             Event::AsNeedsNoInteraction
@@ -838,10 +892,6 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             return Err(ClientError::Protocol(v.to_string()));
         }
 
-        if let Some(i) = &response.interact {
-            self.as_nonce.clone_from(&i.finish);
-        }
-
         if let Some(subject) = &response.subject {
             // §3.4-M14 — everything the AS states has to name one party.
             subject
@@ -866,6 +916,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         } else {
             self.grant.withhold_continuation();
             self.continuation = None;
+        }
+
+        if let Some(i) = &response.interact {
+            self.as_nonce.clone_from(&i.finish);
+            self.interaction_window = interaction_window;
+            self.interaction_finished = false;
+            self.validated_ref = None;
         }
 
         Ok(match (&response.error, self.grant.state()) {
