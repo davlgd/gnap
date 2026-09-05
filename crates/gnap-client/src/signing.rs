@@ -43,7 +43,7 @@ pub fn sign_request(
             .any(|reserved| name.eq_ignore_ascii_case(reserved))
     }) {
         return Err(ClientError::Usage(
-            "sign_request requires a request without authorization, signature or digest headers"
+            "sign_request requires a request without Authorization, Signature, Signature-Input or Content-Digest headers"
                 .into(),
         ));
     }
