@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
     io::Read,
+    num::NonZeroU64,
     sync::{mpsc, Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -180,7 +181,7 @@ async fn canonical_authority(
 /// resource server also needs a token-value index. Both mutate under one lock.
 #[derive(Default)]
 struct TokenIndex {
-    handles: HashMap<String, (TokenRecord, u64)>,
+    handles: HashMap<String, TokenRecord>,
     values: HashMap<String, String>,
 }
 #[derive(Default)]
@@ -198,7 +199,7 @@ impl IndexedStorage {
             .unwrap()
             .retain(|_, (_, until)| *until > now);
         let mut tokens = self.tokens.lock().unwrap();
-        tokens.handles.retain(|_, (_, until)| *until > now);
+        tokens.handles.retain(|_, record| record.is_valid_at(now));
         let valid: std::collections::HashSet<String> = tokens.handles.keys().cloned().collect();
         tokens.values.retain(|_, handle| valid.contains(handle));
     }
@@ -254,35 +255,32 @@ impl NonceStore for IndexedStorage {
 impl TokenStore for IndexedStorage {
     fn put_token(&self, handle: &str, record: TokenRecord) {
         let mut tokens = self.tokens.lock().unwrap();
-        if let Some((old, _)) = tokens.handles.remove(handle) {
+        if let Some(old) = tokens.handles.remove(handle) {
             tokens.values.remove(old.token.value.as_str());
         }
         tokens
             .values
             .insert(record.token.value.as_str().into(), handle.into());
-        // Application policy: storing a replacement token starts a fresh
-        // 20-minute resource-access window; it does not renew the browser session.
-        tokens.handles.insert(handle.into(), (record, now() + 1200));
+        // Store the AS timestamp unchanged: restoring a refused rotation must
+        // not restart its lifetime. Browser sessions have a separate deadline.
+        tokens.handles.insert(handle.into(), record);
     }
     fn get_token(&self, handle: &str) -> Option<TokenRecord> {
-        self.tokens
-            .lock()
-            .unwrap()
-            .handles
-            .get(handle)
-            .filter(|(_, until)| *until > now())
-            .map(|(r, _)| r.clone())
+        self.tokens.lock().unwrap().handles.get(handle).cloned()
     }
     fn take_token(&self, handle: &str) -> Option<TokenRecord> {
         let mut tokens = self.tokens.lock().unwrap();
-        let (record, until) = tokens.handles.remove(handle)?;
+        let record = tokens.handles.remove(handle)?;
         tokens.values.remove(record.token.value.as_str());
-        (until > now()).then_some(record)
+        Some(record)
     }
 }
 
 struct ConsentPolicy(Decisions);
 impl Policy for ConsentPolicy {
+    fn token_lifetime(&self, _: &GrantRequest) -> Option<NonZeroU64> {
+        NonZeroU64::new(1200)
+    }
     fn evaluate(&self, _: &GrantRequest) -> Decision {
         Decision::RequireInteraction
     }
@@ -709,6 +707,14 @@ fn resource_request(
 /// Resource metadata is authoritative only in this same-deployment index; this
 /// is NOT an implementation of the RFC 9767 introspection protocol.
 fn read_resource(app: &App, request: &HttpRequest) -> Result<Value, ()> {
+    read_resource_with_clock(app, request, now)
+}
+
+fn read_resource_with_clock(
+    app: &App,
+    request: &HttpRequest,
+    clock: impl Fn() -> u64,
+) -> Result<Value, ()> {
     let auth: Vec<&str> = request
         .headers
         .iter()
@@ -728,15 +734,19 @@ fn read_resource(app: &App, request: &HttpRequest) -> Result<Value, ()> {
     }
     // Keep the index locked through verification and authorization: a revoke
     // cannot commit between checking a live token and authorizing this read.
-    let tokens = app.storage.tokens.lock().unwrap();
-    let handle = tokens.values.get(token).ok_or(())?;
-    let (record, until) = tokens.handles.get(handle).ok_or(())?;
-    if *until <= now()
-        || !app
-            .decisions
-            .lock()
-            .unwrap()
-            .contains_key(&client_id(&record.client))
+    let mut tokens = app.storage.tokens.lock().unwrap();
+    let handle = tokens.values.get(token).ok_or(())?.clone();
+    let record = tokens.handles.get(&handle).ok_or(())?;
+    if !record.is_valid_at(clock()) {
+        tokens.handles.remove(&handle);
+        tokens.values.remove(token);
+        return Err(());
+    }
+    if !app
+        .decisions
+        .lock()
+        .unwrap()
+        .contains_key(&client_id(&record.client))
     {
         return Err(());
     }
@@ -764,7 +774,7 @@ fn read_resource(app: &App, request: &HttpRequest) -> Result<Value, ()> {
         &signed,
         verifier.as_ref(),
         &Expectations {
-            now: now(),
+            now: clock(),
             max_clock_skew: 300,
             // The token's resolved verifier carries its own expected key ID.
             key_id: None,
@@ -772,6 +782,13 @@ fn read_resource(app: &App, request: &HttpRequest) -> Result<Value, ()> {
         &nonce,
     )
     .map_err(|_| ())?;
+    // Verification can take time. Decide on a fresh clock reading while still
+    // holding the same index lock; an expired value cannot authorize this read.
+    if !record.is_valid_at(clock()) {
+        tokens.handles.remove(&handle);
+        tokens.values.remove(token);
+        return Err(());
+    }
     Ok(
         json!({"folder":"synthetic-project-orion","documents":[{"name":"meeting-notes.txt","content":"Synthetic notes: review a GNAP delegation with explicit consent."},{"name":"readme.txt","content":"No personal data. This read was authorized by a live key-bound GNAP token."}],"granted_right":"synthetic-folder:read"}),
     )
@@ -1363,8 +1380,9 @@ mod tests {
     }
     fn test_record(value: &str) -> TokenRecord {
         TokenRecord {
+            issued_at: now(),
             token: serde_json::from_value(
-                json!({"value":value,"access":["synthetic-folder:read"]}),
+                json!({"value":value,"access":["synthetic-folder:read"],"expires_in":1200}),
             )
             .unwrap(),
             client: serde_json::from_value(json!("test-client")).unwrap(),
@@ -1427,14 +1445,21 @@ mod tests {
             .handles
             .get_mut("expired")
             .unwrap()
-            .1 = now();
-        assert!(store.get_token("expired").is_none());
+            .issued_at = now().saturating_sub(1200);
+        assert!(store.get_token("expired").is_some(), "no sweep has run");
         assert!(read_resource(
             &app,
             &resource_request(&app.origin, "access-expired", &app.signer).unwrap()
         )
         .is_err());
         assert!(store.take_token("expired").is_none());
+        assert!(!app
+            .storage
+            .tokens
+            .lock()
+            .unwrap()
+            .values
+            .contains_key("access-expired"));
         let mut record = test_record("wrong-right");
         record.token.access = Some(vec![AccessItem::Reference("other:read".into())]);
         store.put_token("wrong", record);
@@ -1473,5 +1498,54 @@ mod tests {
             .iter_mut()
             .for_each(|i| *i -= Duration::from_secs(61));
         assert!(allow_start(&starts));
+    }
+
+    #[test]
+    fn restoring_a_record_does_not_renew_its_sdk_deadline() {
+        let storage = IndexedStorage::default();
+        let mut original = test_record("access-one");
+        original.issued_at = now().saturating_sub(600);
+        let deadline = original.expires_at();
+        storage.put_token("handle", original.clone());
+        let taken = storage.take_token("handle").unwrap();
+        storage.put_token("handle", taken);
+        let restored = storage.get_token("handle").unwrap();
+        assert_eq!(restored.issued_at, original.issued_at);
+        assert_eq!(restored.expires_at(), deadline);
+        assert_eq!(restored.token, original.token);
+        storage.cleanup();
+        assert!(storage.get_token("handle").is_some());
+        original.issued_at = now().saturating_sub(1200);
+        storage.put_token("handle", original);
+        storage.cleanup();
+        assert!(storage.get_token("handle").is_none());
+        assert!(storage.tokens.lock().unwrap().values.is_empty());
+    }
+
+    #[test]
+    fn resource_rechecks_expiration_after_signature_verification() {
+        let app = test_app();
+        let record = test_record("access-one");
+        let issued_at = record.issued_at;
+        app.storage.put_token("handle", record);
+        let request = resource_request(&app.origin, "access-one", &app.signer).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let clock = || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call < 2 {
+                issued_at
+            } else {
+                issued_at + 1200
+            }
+        };
+        assert!(read_resource_with_clock(&app, &request, clock).is_err());
+        assert_eq!(
+            calls.get(),
+            3,
+            "checked again after successful proof verification"
+        );
+        assert!(app.storage.get_token("handle").is_none());
+        assert!(app.storage.tokens.lock().unwrap().values.is_empty());
     }
 }

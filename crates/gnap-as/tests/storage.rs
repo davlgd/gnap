@@ -127,6 +127,7 @@ fn a_shared_store_is_the_store_itself() {
 
     // Tokens: the same handle names the same record on every side.
     let issued = TokenRecord {
+        issued_at: 1_000,
         token: serde_json::from_str(r#"{"value":"AAA","access":["read"]}"#).unwrap(),
         client: serde_json::from_str(r#""client-541-ab""#).unwrap(),
         management_token: "MMM".into(),
@@ -139,4 +140,34 @@ fn a_shared_store_is_the_store_itself() {
     // Nonces: spent once, whoever spends it.
     assert!(shared.remember_nonce("n", 1_000));
     assert!(!borrowed.remember_nonce("n", 1_000));
+}
+#[test]
+fn token_record_lifetime_boundaries_and_invalid_external_records() {
+    let mut record = gnap_as::TokenRecord {
+        issued_at: 100,
+        token: serde_json::from_str(r#"{"value":"AAA","expires_in":20}"#).unwrap(),
+        client: serde_json::from_str(r#""client""#).unwrap(),
+        management_token: "MMM".into(),
+    };
+    assert_eq!(record.expires_at(), Some(120));
+    assert!(!record.is_valid_at(99));
+    assert!(record.is_valid_at(100));
+    assert!(record.is_valid_at(119));
+    assert!(!record.is_valid_at(120));
+    assert!(!record.is_valid_at(u64::MAX));
+    record.token.expires_in = None;
+    assert_eq!(record.expires_at(), None);
+    assert!(!record.is_valid_at(99));
+    assert!(record.is_valid_at(u64::MAX));
+    for lifetime in [0, u64::MAX] {
+        record.token.expires_in = Some(lifetime);
+        assert_eq!(record.expires_at(), Some(100));
+        assert!(!record.is_valid_at(100));
+        assert!(!record.is_valid_at(u64::MAX));
+    }
+    record.issued_at = u64::MAX - 1;
+    record.token.expires_in = Some(1);
+    assert_eq!(record.expires_at(), Some(u64::MAX));
+    assert!(record.is_valid_at(u64::MAX - 1));
+    assert!(!record.is_valid_at(u64::MAX));
 }

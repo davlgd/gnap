@@ -2893,6 +2893,7 @@ fn management_server<N: Nonces>(
     storage.put_token(
         "oldhandle",
         TokenRecord {
+            issued_at: 1_000,
             token,
             client: serde_json::from_str(r#""known-client""#).unwrap(),
             management_token: "oldmanagement".into(),
@@ -2919,9 +2920,11 @@ fn management_server<N: Nonces>(
 /// which this AS rejects. Invalid content must not silently rotate a token.
 #[test]
 fn malformed_rotation_content_does_not_rotate_the_token() {
+    use gnap_as::TokenStore;
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
     for body in ["{", "[]", "null", "{}", r#"{"access":["write"]}"#] {
         let as_ = management_server(Counted(Cell::new(0)));
+        let original = as_.storage().get_token("oldhandle").unwrap();
         let request = signed_continuation(
             &signer,
             "POST",
@@ -2932,6 +2935,9 @@ fn malformed_rotation_content_does_not_rotate_the_token() {
         );
         let response = as_.handle(&request, 1_000);
         assert_eq!(response.status, 400, "{body}: {}", body_of(&response));
+        let preserved = as_.storage().get_token("oldhandle").unwrap();
+        assert_eq!(preserved.issued_at, original.issued_at);
+        assert_eq!(preserved.token, original.token);
         let valid = signed_continuation(
             &signer,
             "POST",
@@ -2953,6 +2959,7 @@ fn malformed_rotation_content_does_not_rotate_the_token() {
 /// existing token (§6.1, `invalid_rotation`).
 #[test]
 fn an_unusable_rotation_preserves_the_original_token() {
+    use gnap_as::TokenStore;
     struct Scripted(RefCell<std::collections::VecDeque<String>>);
     impl Nonces for Scripted {
         fn next(&self) -> String {
@@ -2972,6 +2979,7 @@ fn an_unusable_rotation_preserves_the_original_token() {
             .map(str::to_owned)
             .collect();
         let as_ = management_server(Scripted(RefCell::new(values)));
+        let original = as_.storage().get_token("oldhandle").unwrap();
         let request = signed_continuation(
             &signer,
             "POST",
@@ -2984,6 +2992,9 @@ fn an_unusable_rotation_preserves_the_original_token() {
         assert_eq!(response.status, 400, "{}", body_of(&response));
         let parsed: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(parsed["error"]["code"], "invalid_rotation");
+        let preserved = as_.storage().get_token("oldhandle").unwrap();
+        assert_eq!(preserved.issued_at, original.issued_at);
+        assert_eq!(preserved.token, original.token);
         let retry = signed_continuation(
             &signer,
             "POST",
@@ -3313,4 +3324,203 @@ fn the_as_preserves_token_cardinality_when_granting_a_subset() {
         assert!(issued.get("flags").is_none());
         assert!(issued.get("expires_in").is_none());
     }
+}
+struct LifetimePolicy {
+    seconds: Option<std::num::NonZeroU64>,
+    rotate: bool,
+}
+impl Policy for LifetimePolicy {
+    fn evaluate(&self, _: &GrantRequest) -> Decision {
+        Decision::Approve {
+            access: vec![AccessItem::Reference("read".into())],
+            subject: None,
+        }
+    }
+    fn token_lifetime(&self, request: &GrantRequest) -> Option<std::num::NonZeroU64> {
+        // Select from the request, not an implicit global server lifetime.
+        request.access_token.as_ref().and(self.seconds)
+    }
+    fn may_rotate(&self, _: &gnap_types::token::AccessToken) -> bool {
+        self.rotate
+    }
+}
+type LifetimeServer = AuthorizationServer<LifetimePolicy, OneKey, MemoryStorage, Counted>;
+fn lifetime_server(seconds: Option<u64>, rotate: bool) -> LifetimeServer {
+    AuthorizationServer::new(
+        LifetimePolicy {
+            seconds: seconds.and_then(std::num::NonZeroU64::new),
+            rotate,
+        },
+        OneKey(RSA_SPKI),
+        MemoryStorage::new(),
+        Counted(Cell::new(0)),
+        Endpoints {
+            grant: GRANT.into(),
+            continuation: CONTINUE.into(),
+            interaction: "https://as.example/i".into(),
+            token_management: "https://as.example/token".into(),
+        },
+    )
+}
+struct LifetimeDirect<'a>(&'a LifetimeServer, Cell<u64>);
+impl HttpTransport for LifetimeDirect<'_> {
+    type Error = String;
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, String> {
+        Ok(self.0.handle(&request, self.1.get()))
+    }
+}
+
+#[test]
+fn issued_lifetime_reaches_the_client_and_rotation_renews_it() {
+    use gnap_as::TokenStore;
+    let as_ = lifetime_server(Some(20), true);
+    let transport = LifetimeDirect(&as_, Cell::new(1_000));
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    let mut client = Session::new(&transport, &signer, GRANT);
+    client.start(&request(), 1_000).unwrap();
+    let issued = (*client.usable_tokens(1_019).unwrap()[0]).clone();
+    assert_eq!(issued.expires_in, Some(20));
+    assert!(client.usable_tokens(1_020).is_none());
+    let old_handle = issued
+        .manage
+        .as_ref()
+        .unwrap()
+        .uri
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let record = as_.storage().get_token(old_handle).unwrap();
+    assert_eq!(record.issued_at, 1_000);
+    assert_eq!(record.expires_at(), Some(1_020));
+    transport.1.set(1_019);
+    let rotated = client.rotate_token(None, 1_019).unwrap();
+    assert_eq!(rotated.expires_in, issued.expires_in);
+    assert_eq!(rotated.access, issued.access);
+    assert_ne!(rotated.value, issued.value);
+    let handle = rotated
+        .manage
+        .as_ref()
+        .unwrap()
+        .uri
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let record = as_.storage().get_token(handle).unwrap();
+    assert_eq!(record.issued_at, 1_019);
+    assert_eq!(record.expires_at(), Some(1_039));
+    assert!(as_.storage().get_token(old_handle).is_none());
+    assert!(client.usable_tokens(1_038).is_some());
+    assert!(client.usable_tokens(1_039).is_none());
+}
+
+#[test]
+fn rotation_refusal_preserves_value_rights_lifetime_and_timestamp() {
+    use gnap_as::{TokenRecord, TokenStore};
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    // Expired exactly, expired later, future timestamp, policy refusal,
+    // overflowing renewal, and an externally supplied overflowing deadline.
+    for (issued_at, lifetime, now, permitted) in [
+        (1_000, 20, 1_020, true),
+        (1_000, 20, 1_021, true),
+        (1_001, 20, 1_000, true),
+        (1_000, 20, 1_001, false),
+        (0, u64::MAX, 1_000, true),
+        (1_000, u64::MAX, 1_001, true),
+    ] {
+        let as_ = lifetime_server(Some(20), permitted);
+        let token = serde_json::from_value(serde_json::json!({
+            "value":"oldaccess", "access":["read"], "expires_in":lifetime,
+            "manage":{"uri":"https://as.example/token/oldhandle", "access_token":{"value":"oldmanagement"}}
+        })).unwrap();
+        let original = TokenRecord {
+            issued_at,
+            token,
+            client: request().client,
+            management_token: "oldmanagement".into(),
+        };
+        as_.storage().put_token("oldhandle", original.clone());
+        let response = as_.handle(
+            &signed_continuation(
+                &signer,
+                "POST",
+                "https://as.example/token/oldhandle",
+                "oldmanagement",
+                None,
+                now,
+            ),
+            now,
+        );
+        assert_eq!(response.status, 400, "{}", body_of(&response));
+        assert!(body_of(&response).contains("invalid_rotation"));
+        let preserved = as_.storage().get_token("oldhandle").unwrap();
+        assert_eq!(preserved.issued_at, original.issued_at);
+        assert_eq!(preserved.token, original.token);
+        assert_eq!(preserved.client, original.client);
+        assert_eq!(preserved.management_token, original.management_token);
+    }
+}
+
+#[test]
+fn lifetime_omission_is_preserved_and_overflowing_issuance_fails() {
+    use gnap_as::TokenStore;
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    let as_ = lifetime_server(None, true);
+    let transport = LifetimeDirect(&as_, Cell::new(1_000));
+    let mut client = Session::new(&transport, &signer, GRANT);
+    client.start(&request(), 1_000).unwrap();
+    assert_eq!(client.usable_tokens(u64::MAX).unwrap()[0].expires_in, None);
+    transport.1.set(2_000);
+    let rotated = client.rotate_token(None, 2_000).unwrap();
+    assert_eq!(rotated.expires_in, None);
+    let handle = rotated
+        .manage
+        .as_ref()
+        .unwrap()
+        .uri
+        .rsplit('/')
+        .next()
+        .unwrap();
+    assert_eq!(as_.storage().get_token(handle).unwrap().issued_at, 2_000);
+
+    let overflow = lifetime_server(Some(u64::MAX), true);
+    let response = overflow.handle(
+        &signed_grant(&signer, &serde_json::to_vec(&request()).unwrap(), 1_000),
+        1_000,
+    );
+    assert_eq!(response.status, 500);
+    assert!(body_of(&response).contains("expiration time"));
+    assert!(overflow.storage().get_token("nonce0002").is_none());
+}
+#[test]
+fn invalid_generated_values_preserve_the_existing_deadline() {
+    use gnap_as::TokenStore;
+    struct InvalidNonces;
+    impl Nonces for InvalidNonces {
+        fn next(&self) -> String {
+            "invalid token value".into()
+        }
+    }
+    let as_ = management_server(InvalidNonces);
+    let mut original = as_.storage().get_token("oldhandle").unwrap();
+    original.token.expires_in = Some(20);
+    as_.storage().put_token("oldhandle", original.clone());
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    let response = as_.handle(
+        &signed_continuation(
+            &signer,
+            "POST",
+            "https://as.example/token/oldhandle",
+            "oldmanagement",
+            None,
+            1_010,
+        ),
+        1_010,
+    );
+    assert_eq!(response.status, 400);
+    assert!(body_of(&response).contains("invalid_rotation"));
+    let preserved = as_.storage().get_token("oldhandle").unwrap();
+    assert_eq!(preserved.issued_at, original.issued_at);
+    assert_eq!(preserved.expires_at(), Some(1_020));
+    assert_eq!(preserved.token, original.token);
+    assert_eq!(preserved.management_token, original.management_token);
 }

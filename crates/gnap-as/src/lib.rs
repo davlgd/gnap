@@ -62,6 +62,29 @@
 //! assert!(response.has_no_store());
 //! ```
 
+//! # Access-token lifetimes
+//!
+//! [`Policy::token_lifetime`] optionally selects a positive duration for each
+//! approved request. The server advertises it as `expires_in` and records the
+//! issuance time in [`TokenRecord::issued_at`]. The default remains no advertised
+//! expiration. On successful rotation, the duration and rights stay unchanged
+//! while the issuance time becomes the supplied `now`.
+//! As with the other server operations, that time is provided by the caller;
+//! the synchronous server does not resample a system clock during processing.
+//!
+//! This server refuses to rotate an expired value, a value issued in the future,
+//! or one whose renewed deadline would overflow. These are SDK policies, not
+//! additional GNAP requirements. A failed rotation preserves the original
+//! value, metadata and timestamp. Revocation can still remove an expired record
+//! if the deployment's store retains it long enough to authenticate the request.
+//!
+//! Stores do not have to run an expiration scheduler: a resource server can call
+//! [`TokenRecord::is_valid_at`] on each access, in addition to verifying the
+//! proof and rights. [`MemoryStorage`] does not sweep expired tokens. Production
+//! clock handling, authoritative RS metadata, persistence and garbage collection
+//! remain deployment responsibilities; these helpers do not implement RFC 9767
+//! introspection or grant-to-token revocation cascades.
+
 pub mod nonce;
 pub mod policy;
 pub mod server;

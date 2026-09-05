@@ -340,7 +340,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
         }
 
         if rotating {
-            self.rotate_token(handle, request)
+            self.rotate_token(handle, request, now)
         } else {
             // §6.2-M02 — "the AS MUST invalidate the access token, if possible,
             // and return an HTTP response code 204."
@@ -350,7 +350,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
     }
 
     /// Rotates the value of a managed access token (§6.1).
-    fn rotate_token(&self, handle: &str, request: &HttpRequest) -> HttpResponse {
+    fn rotate_token(&self, handle: &str, request: &HttpRequest, now: u64) -> HttpResponse {
         // §6.1.1 — a rotation carrying a `key` asks to bind a new presentation
         // key, which needs the two simultaneous proofs of §7.3.1.1. This server
         // does not implement that, and §6.1.1-M08 names the answer for exactly
@@ -393,11 +393,20 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
         // access token, the AS responds with an invalid_rotation error." The
         // client then "MUST consider the access token to not have changed its
         // state", so the record goes back exactly as it was.
-        if !self.policy.may_rotate(&record.token) {
+        // SDK policy, not an RFC requirement: an expired or not-yet-issued
+        // value cannot be renewed. A clock rollback or an unrepresentable new
+        // deadline must not extend it either. Restore all original metadata.
+        if !record.is_valid_at(now)
+            || record
+                .token
+                .expires_in
+                .is_some_and(|seconds| now.checked_add(seconds).is_none())
+            || !self.policy.may_rotate(&record.token)
+        {
             self.storage.put_token(handle, record);
             return error(
                 ErrorCode::InvalidRotation,
-                "this access token is not one this server will rotate (RFC 9635 §6.1)",
+                "token lifetime or server policy prevents rotation (RFC 9635 §6.1)",
             );
         }
 
@@ -422,6 +431,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
         // Keep the original until the replacement is fully validated. A failed
         // rotation leaves the existing token unchanged (§6.1).
         let mut rotated = record.clone();
+        rotated.issued_at = now;
         rotated.token.value = value;
         // §6.1-M03 — the response includes a management URI, and it may differ
         // from the one just called; §6.1-M04 has the client use the new one.
@@ -939,6 +949,24 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
         })
     }
 
+    fn access_token_lifetime(
+        &self,
+        request: &GrantRequest,
+        now: u64,
+    ) -> Result<Option<u64>, HttpResponse> {
+        let seconds = self
+            .policy
+            .token_lifetime(request)
+            .map(std::num::NonZeroU64::get);
+        if seconds.is_some_and(|seconds| now.checked_add(seconds).is_none()) {
+            Err(misconfigured(
+                "token lifetime exceeds the representable expiration time",
+            ))
+        } else {
+            Ok(seconds)
+        }
+    }
+
     /// Applies a decision, builds the response, and stores what follows.
     fn settle(
         &self,
@@ -983,6 +1011,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
                         return misconfigured(&e.to_string());
                     }
                 }
+                let expires_in = match self.access_token_lifetime(&request, now) {
+                    Ok(seconds) => seconds,
+                    Err(response) => return response,
+                };
                 let Ok(value) = TokenValue::new(self.nonces.next()) else {
                     return misconfigured(
                         "Nonces returned an access value outside token68 (RFC 9635 §3.2.1)",
@@ -1017,7 +1049,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
                         .and_then(|t| t.label.clone()),
                     manage: Some(manage),
                     access: Some(access),
-                    expires_in: None,
+                    expires_in,
                     key: None,
                     flags: Vec::new(),
                     extra: serde_json::Map::default(),
@@ -1030,6 +1062,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
                 self.storage.put_token(
                     &management,
                     TokenRecord {
+                        issued_at: now,
                         token: token.clone(),
                         client: request.client.clone(),
                         management_token: management_token.as_str().to_owned(),
