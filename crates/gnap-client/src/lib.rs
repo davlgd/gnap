@@ -46,6 +46,22 @@
 //! # }
 //! ```
 
+//! # Ongoing grants and local state
+//!
+//! An approved response can retain a continuation. `continue_grant` accepts a
+//! continuation-only response without discarding held tokens; `modify_grant`
+//! validates responses against the replacement cardinality and interaction
+//! capabilities it sent. New callback nonces and hash methods are adopted only
+//! as part of a usable exchange. An inconclusive response restores the complete
+//! previous local state, not the server's state: the request may already have
+//! committed remotely. No operation retries automatically.
+//!
+//! `revoke_grant` uses the offered continuation to send DELETE and requires a
+//! 204 response with empty content. Only confirmed revocation clears the local
+//! tokens and subject information. Valid GNAP errors still replace or remove
+//! continuation; losing the continuation does not itself revoke held tokens.
+//! Applications needing remote live-state guarantees must enforce them at the RS.
+//!
 //! # Callback clocks and API migration
 //!
 //! `accept_callback`, `accept_redirect` and `accept_push` now require a `now`

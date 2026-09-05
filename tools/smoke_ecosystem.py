@@ -181,6 +181,76 @@ def wait_for_continuation(browser, base):
         time.sleep(wait + 0.1)
 
 
+def ongoing_demo(base, outcomes):
+    """Observe rights changes through the browser adapter and actual RS reads."""
+    browser = client()
+    folder = "synthetic-folder:read"
+    archive = "synthetic-archive:read"
+
+    def action(name):
+        status, _, body, elapsed = request(browser, base, "/api/" + name, "POST", {}, base)
+        expect(status == 200 and isinstance(body, dict), "Ongoing grant action failed: " + name)
+        outcomes.append({"check": "ongoing-" + name, "status": "pass", "elapsed_ms": elapsed})
+        return body
+
+    def approve():
+        body = action("approve")
+        callback = urllib.parse.urlsplit(body.get("redirect", ""))
+        expected = urllib.parse.urlsplit(base)
+        expect(
+            (callback.scheme, callback.netloc, callback.path)
+            == (expected.scheme, expected.netloc, "/callback") and not callback.fragment,
+            "Ongoing callback left the configured origin/path",
+        )
+        status, _, _, _ = request(browser, base, callback.path + "?" + callback.query)
+        expect(status == 303, "Ongoing callback was rejected")
+        wait_for_continuation(browser, base)
+        body = action("continue")
+        expect(body.get("state") == "approved" and body.get("continuation_open") is True,
+               "Approval did not leave an open grant")
+        return body
+
+    def read(name, expected_status):
+        body = action(name)
+        expect(body.get("last_resource_status") == expected_status,
+               "Resource rights were not enforced: " + name)
+
+    action("start")
+    body = approve()
+    expect(set(body.get("rights", [])) == {folder, archive}, "Initial rights differ from the approved request")
+    read("read", 200)
+    read("read-archive", 200)
+    wait_for_continuation(browser, base)
+    body = action("continue")
+    expect(body.get("state") == "approved" and body.get("token_present") is True
+           and body.get("continuation_open") is True, "Approved polling lost access or continuation")
+
+    wait_for_continuation(browser, base)
+    body = action("downscope")
+    expect(body.get("state") == "approved" and body.get("rights") == [folder],
+           "Downscope was not approved with only the remaining right")
+    action("check-retired")
+    read("read", 200)
+    read("read-archive", 401)
+
+    wait_for_continuation(browser, base)
+    body = action("expand")
+    expect(body.get("state") == "pending" and body.get("rights") == [folder]
+           and set(body.get("requested_rights", [])) == {folder, archive},
+           "Expansion skipped consent or changed rights before approval")
+    read("read", 200)
+    read("read-archive", 401)
+    body = approve()
+    expect(set(body.get("rights", [])) == {folder, archive}, "Fresh approval did not grant the requested expansion")
+    action("check-retired")
+    read("read-archive", 200)
+    wait_for_continuation(browser, base)
+    body = action("revoke-grant")
+    expect(body.get("state") == "grant_revoked" and body.get("token_present") is False
+           and body.get("continuation_open") is False, "Grant revocation retained local authority")
+    action("check-retired")
+
+
 def demo_alias(base, alias, outcomes):
     """Check an explicitly supplied alias without following its redirects."""
     browser = client()
@@ -251,6 +321,7 @@ def main():
         if args.demo:
             ready(args.demo)
             demo(args.demo, outcomes)
+            ongoing_demo(args.demo, outcomes)
             if args.demo_alias:
                 demo_alias(args.demo, args.demo_alias, outcomes)
         if args.workbench:

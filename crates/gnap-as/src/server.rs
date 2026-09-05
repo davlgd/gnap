@@ -9,7 +9,9 @@ use crate::encoding::{
     EncodedToken, OpaqueTokenEncoder, TokenEncoder, TokenEncodingContext, TokenEncodingError,
 };
 use crate::nonce::Nonces;
-use crate::policy::{Decision, KeyResolver, Policy, SubjectGround};
+use crate::policy::{
+    Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround,
+};
 use crate::storage::{
     GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot, Storage, StoreError, TokenRecord,
 };
@@ -158,6 +160,15 @@ pub struct AuthorizationServer<P, K, S, N, E = OpaqueTokenEncoder> {
     endpoints: Endpoints,
     development_http_discovery: bool,
     encoder: E,
+}
+
+/// All newly generated credentials are chosen before invoking the encoder.
+struct PreparedToken {
+    encoded: EncodedToken,
+    expires_in: Option<u64>,
+    management: String,
+    management_token: TokenValue,
+    continuation: Option<TokenValue>,
 }
 
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K, S, N> {
@@ -383,7 +394,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             return r;
         }
 
-        let decision = self.policy.evaluate(&body);
+        let decision = self
+            .policy
+            .evaluate_context(&body, EvaluationContext::Initial);
         let mut aggregate = GrantAggregate::new(GrantRecord {
             grant: Grant::new(),
             request: body,
@@ -394,7 +407,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             interact_ref: None,
             interaction_completed: false,
         });
-        let response = self.settle(&mut aggregate, decision, now);
+        let response = self.settle(&mut aggregate, decision, now, None);
         if aggregate.record.continuation_token.is_some() || !aggregate.tokens.is_empty() {
             if let Err(failure) = self.storage.create(aggregate) {
                 return storage_failure(failure);
@@ -566,8 +579,13 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // MUST be the same as the token before rotation", which is why only the
         // value and the management API are replaced here.
         let rotated_handle = self.nonces.next();
-        let encoded = self.encode_rotated_token(&record, now, &candidate, &management_token);
-        let Ok(encoded) = encoded else {
+        let Ok(encoded) = self.encode_rotated_token(
+            &record,
+            &snapshot.aggregate,
+            now,
+            &candidate,
+            &management_token,
+        ) else {
             return error(
                 ErrorCode::InvalidRotation,
                 "unable to encode a replacement access token",
@@ -597,9 +615,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // token alone only compares with the replacement management token.
         let invalid = if record.identifier.is_some() && rotated.identifier == record.identifier {
             Some("the rotated token repeats its previous format identifier".into())
-        } else if rotated.token.value == record.token.value
-            || rotated.token.value.as_str() == record.management_token
-        {
+        } else if credential_used(&snapshot.aggregate, rotated.token.value.as_str()) {
             Some("the rotated value repeats an existing access or management token".into())
         } else {
             rotated.token.validate().err().map(|e| e.to_string())
@@ -670,8 +686,27 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         };
 
         let mut aggregate = snapshot.aggregate.clone();
-        let response =
-            self.continue_authenticated(request, now, modifying, revoking, &mut aggregate);
+        let response = self.continue_authenticated(
+            request,
+            now,
+            modifying,
+            revoking,
+            &mut aggregate,
+            &snapshot,
+        );
+        // Preparation failed before publication. An internal 5xx is not a
+        // GNAP decision to close or modify the grant. Keep the original; this
+        // says nothing about a response lost after a successful CAS.
+        if response.status >= 500 {
+            return response;
+        }
+        if aggregate.record.continuation_token.is_some()
+            && aggregate.record.continuation_token == snapshot.aggregate.record.continuation_token
+        {
+            return misconfigured(
+                "the replacement continuation credential repeats its predecessor",
+            );
+        }
         if aggregate.record.continuation_token.is_none() {
             aggregate.record.interact_handle = None;
             aggregate.record.interact_ref = None;
@@ -695,6 +730,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         modifying: bool,
         revoking: bool,
         aggregate: &mut GrantAggregate,
+        authenticated: &GrantSnapshot,
     ) -> HttpResponse {
         let record = &mut aggregate.record;
         record.continuation_token = None;
@@ -795,7 +831,14 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             return no_content();
         }
 
-        self.resume_grant(aggregate, continuation, modifying, returning, now)
+        self.resume_grant(
+            aggregate,
+            continuation,
+            modifying,
+            returning,
+            now,
+            authenticated,
+        )
     }
 
     /// Re-evaluates an authenticated continuation after its state guards pass.
@@ -806,8 +849,14 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         modifying: bool,
         returning: bool,
         now: u64,
+        authenticated: &GrantSnapshot,
     ) -> HttpResponse {
         let record = &mut aggregate.record;
+        // Approved POST keeps the grant open but does not issue another token
+        // or reuse old interaction consent to evaluate a new request (§3.1).
+        if record.grant.state() == State::Approved && !modifying && !returning {
+            return self.hand_back(record, None, now);
+        }
         // §4 — coming back from interaction, the AS re-evaluates the whole
         // context, whether the RO approved or denied.
         //
@@ -841,11 +890,19 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             record.interaction_completed = false;
             record.interact_ref = None;
             record.as_nonce = None;
+            record.interact_handle = None;
+            record.interact_expires_at = None;
         }
         let after_interaction = record.interaction_completed && (returning || !expects_reference);
         let request_now = apply_modification(record.request.clone(), continuation);
-        let decision = if after_interaction {
-            self.policy.evaluate_after_interaction(&request_now)
+        let decision = if modifying {
+            self.policy
+                .evaluate_context(&request_now, EvaluationContext::Modification(authenticated))
+        } else if after_interaction {
+            self.policy.evaluate_context(
+                &request_now,
+                EvaluationContext::AfterInteraction(authenticated),
+            )
         } else {
             self.policy.evaluate(&request_now)
         };
@@ -856,7 +913,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         }
 
         record.request = request_now;
-        self.settle(aggregate, decision, now)
+        self.settle(aggregate, decision, now, Some(authenticated))
     }
 
     /// Signals that the RO is done interacting (§4.2).
@@ -1150,13 +1207,17 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     fn encode_rotated_token(
         &self,
         record: &TokenRecord,
+        aggregate: &GrantAggregate,
         now: u64,
         candidate: &TokenValue,
         management: &TokenValue,
     ) -> Result<EncodedToken, TokenEncodingError> {
         // A broken nonce source must not expose a management credential as
         // an encoder input, even by accidentally repeating its value.
-        if candidate.as_str() == record.management_token || candidate == management {
+        if candidate == management
+            || credential_used(aggregate, candidate.as_str())
+            || credential_used(aggregate, management.as_str())
+        {
             return Err(TokenEncodingError);
         }
         self.encode_access_token(
@@ -1173,7 +1234,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         request: &GrantRequest,
         access: &[AccessItem],
         now: u64,
-    ) -> Result<(EncodedToken, Option<u64>, String, TokenValue), HttpResponse> {
+        keep_open: bool,
+        authenticated: Option<&GrantSnapshot>,
+    ) -> Result<PreparedToken, HttpResponse> {
         let expires_in = self.access_token_lifetime(request, now)?;
         let candidate = TokenValue::new(self.nonces.next()).map_err(|_| {
             misconfigured("Nonces returned an access value outside token68 (RFC 9635 §3.2.1)")
@@ -1185,15 +1248,59 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         let management_token = TokenValue::new(self.nonces.next()).map_err(|_| {
             misconfigured("Nonces returned a management value outside token68 (RFC 9635 §3.2.1)")
         })?;
-        if candidate == management_token {
+        let continuation = if keep_open {
+            Some(
+                TokenValue::new(self.nonces.next())
+                    .map_err(|_| misconfigured("Nonces returned an invalid continuation value"))?,
+            )
+        } else {
+            None
+        };
+        let repeated = |value: &str| {
+            authenticated.is_some_and(|snapshot| credential_used(&snapshot.aggregate, value))
+        };
+        if candidate == management_token
+            || continuation.as_ref().is_some_and(|value| {
+                value == &candidate || value == &management_token || repeated(value.as_str())
+            })
+            || repeated(candidate.as_str())
+            || repeated(management_token.as_str())
+        {
             return Err(misconfigured(
-                "access candidate repeats the management credential",
+                "generated values repeat access, management or continuation credentials",
             ));
         }
         let encoded = self
             .encode_access_token(&request.client, access, now, expires_in, &candidate)
             .map_err(|_| misconfigured("unable to encode an access token"))?;
-        Ok((encoded, expires_in, management, management_token))
+        if encoded.value == management_token
+            || continuation.as_ref() == Some(&encoded.value)
+            || repeated(encoded.value.as_str())
+        {
+            return Err(misconfigured(
+                "encoded access value repeats another credential",
+            ));
+        }
+        if encoded.identifier.as_ref().is_some_and(|identifier| {
+            authenticated.is_some_and(|snapshot| {
+                snapshot
+                    .aggregate
+                    .tokens
+                    .values()
+                    .any(|token| token.identifier.as_ref() == Some(identifier))
+            })
+        }) {
+            return Err(misconfigured(
+                "encoded token repeats a previous format identifier",
+            ));
+        }
+        Ok(PreparedToken {
+            encoded,
+            expires_in,
+            management,
+            management_token,
+            continuation,
+        })
     }
 
     fn encode_access_token(
@@ -1237,10 +1344,14 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     }
 
     /// Prepares a decision and its response; the caller commits the aggregate.
-    fn settle(&self, aggregate: &mut GrantAggregate, decision: Decision, now: u64) -> HttpResponse {
+    fn settle(
+        &self,
+        aggregate: &mut GrantAggregate,
+        decision: Decision,
+        now: u64,
+        authenticated: Option<&GrantSnapshot>,
+    ) -> HttpResponse {
         let record = &mut aggregate.record;
-        let request = &record.request;
-        let interacted = record.interaction_completed;
         let grant = &mut record.grant;
         let event = match &decision {
             Decision::Approve { .. } => Event::AsNeedsNoInteraction,
@@ -1256,105 +1367,144 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             return error(e.code, &e.reason);
         }
 
-        let mut response = GrantResponse::default();
-
         match decision {
-            Decision::Deny(code) => {
-                // §3.6 — a denial with no continuation ends the grant.
-                return error(code, "the request was denied");
-            }
-
             Decision::Approve { access, subject } => {
-                if let Some(released) = &subject {
-                    if released.ground == SubjectGround::RoInteractedHere && !interacted {
-                        return misconfigured(
-                            "subject information released on the ground that the RO \
-                             interacted, on a grant that has been through no interaction",
-                        );
-                    }
-                    if let Err(e) = released.subject.validate() {
-                        return misconfigured(&e.to_string());
-                    }
-                }
-                let (encoded, expires_in, management, management_token) =
-                    match self.encode_issued_token(request, &access, now) {
-                        Ok(encoded) => encoded,
-                        Err(response) => return response,
-                    };
-
-                // §3.2.1 — the management API the client may call to rotate or
-                // revoke this token (§6). Both halves were reserved before
-                // encoding: the URI handle and the credential protecting it.
-                let manage = TokenManage {
-                    uri: format!(
-                        "{}/{}",
-                        self.endpoints.token_management.trim_end_matches('/'),
-                        management
-                    ),
-                    access_token: BoundToken::new(management_token.clone()),
-                };
-
-                let token = AccessToken {
-                    value: encoded.value,
-                    label: request
-                        .access_token
-                        .as_ref()
-                        .and_then(|a| a.tokens.first())
-                        .and_then(|t| t.label.clone()),
-                    manage: Some(manage),
-                    access: Some(access),
-                    expires_in,
-                    key: None,
-                    flags: Vec::new(),
-                    extra: serde_json::Map::default(),
-                };
-                // TokenManage validation also rejects an encoded access value
-                // equal to its management credential before anything is stored.
-                if let Err(e) = token.validate() {
-                    return misconfigured(&e.to_string());
-                }
-                // §6 — the AS has to find this token again from the management
-                // URI and the management token, so it remembers both.
-                if aggregate.tokens.contains_key(&management) {
-                    return misconfigured("token management handle collision");
-                }
-                aggregate.tokens.insert(
-                    management,
-                    TokenRecord {
-                        identifier: encoded.identifier,
-                        issued_at: now,
-                        token: token.clone(),
-                        client: request.client.clone(),
-                        management_token: management_token.as_str().to_owned(),
-                    },
-                );
-
-                // §3.2.1, §3.2.2 — the response mirrors the request's shape.
-                let cardinality = request
-                    .access_token
-                    .as_ref()
-                    .map_or(gnap_types::Cardinality::Single, |a| a.cardinality);
-                response.access_token = Some(AccessTokenResponse {
-                    cardinality,
-                    tokens: vec![token],
-                });
-                // §3.4-M01 — the AS returns `subject` "only in cases where the
-                // AS is sure that the RO and the end user are the same party",
-                // and names interaction as how that is established. The one
-                // ground this server can check is that one: a grant that has
-                // been through no interaction cannot claim it. The check is on
-                // the deployment's claim, not on the client's request, so it
-                // reports a server fault rather than blaming the caller.
-                if let Some(released) = subject {
-                    response.subject = Some(*released.subject);
-                }
-                grant.withhold_continuation();
+                self.approve(aggregate, access, subject, now, authenticated)
             }
+            Decision::Deny(code) => error(code, "the request was denied"),
+            Decision::RequireInteraction => {
+                // A new interaction gets a new finish nonce. An ordinary poll
+                // of an unfinished interaction does not reach this branch.
+                record.as_nonce = None;
+                match self.offer_interaction(record, now) {
+                    Ok(pending) => ok(&pending),
+                    Err(response) => response,
+                }
+            }
+        }
+    }
 
-            Decision::RequireInteraction => match self.offer_interaction(record, now) {
-                Ok(pending) => response = pending,
-                Err(r) => return r,
+    /// Prepares replacement access; the caller publishes it with the grant CAS.
+    fn approve(
+        &self,
+        aggregate: &mut GrantAggregate,
+        access: Vec<AccessItem>,
+        subject: Option<ReleasedSubject>,
+        now: u64,
+        authenticated: Option<&GrantSnapshot>,
+    ) -> HttpResponse {
+        let record = &mut aggregate.record;
+        let request = &record.request;
+        let interacted = record.interaction_completed;
+        let grant = &mut record.grant;
+        let mut response = GrantResponse::default();
+        if let Some(released) = &subject {
+            if released.ground == SubjectGround::RoInteractedHere && !interacted {
+                return misconfigured(
+                    "subject information released on the ground that the RO \
+                     interacted, on a grant that has been through no interaction",
+                );
+            }
+            if let Err(e) = released.subject.validate() {
+                return misconfigured(&e.to_string());
+            }
+        }
+        let keep_open = self.policy.keep_grant_open(request);
+        let PreparedToken {
+            encoded,
+            expires_in,
+            management,
+            management_token,
+            continuation,
+        } = match self.encode_issued_token(request, &access, now, keep_open, authenticated) {
+            Ok(encoded) => encoded,
+            Err(response) => return response,
+        };
+
+        // §3.2.1 — the management API the client may call to rotate or
+        // revoke this token (§6). Both halves were reserved before
+        // encoding: the URI handle and the credential protecting it.
+        let manage = TokenManage {
+            uri: format!(
+                "{}/{}",
+                self.endpoints.token_management.trim_end_matches('/'),
+                management
+            ),
+            access_token: BoundToken::new(management_token.clone()),
+        };
+
+        let token = AccessToken {
+            value: encoded.value,
+            label: request
+                .access_token
+                .as_ref()
+                .and_then(|a| a.tokens.first())
+                .and_then(|t| t.label.clone()),
+            manage: Some(manage),
+            access: Some(access),
+            expires_in,
+            key: None,
+            flags: Vec::new(),
+            extra: serde_json::Map::default(),
+        };
+        // TokenManage validation also rejects an encoded access value
+        // equal to its management credential before anything is stored.
+        if let Err(e) = token.validate() {
+            return misconfigured(&e.to_string());
+        }
+        // §6 — the AS has to find this token again from the management
+        // URI and the management token, so it remembers both.
+        if aggregate.tokens.contains_key(&management) {
+            return misconfigured("token management handle collision");
+        }
+        // §5.3 permits revoking previous tokens after modification.
+        // This SDK replaces the complete set only on successful
+        // approval, in the same CAS that publishes the new token.
+        aggregate.tokens.clear();
+        aggregate.tokens.insert(
+            management,
+            TokenRecord {
+                identifier: encoded.identifier,
+                issued_at: now,
+                token: token.clone(),
+                client: request.client.clone(),
+                management_token: management_token.as_str().to_owned(),
             },
+        );
+
+        // §3.2.1, §3.2.2 — the response mirrors the request's shape.
+        let cardinality = request
+            .access_token
+            .as_ref()
+            .map_or(gnap_types::Cardinality::Single, |a| a.cardinality);
+        response.access_token = Some(AccessTokenResponse {
+            cardinality,
+            tokens: vec![token],
+        });
+        // §3.4-M01 — the AS returns `subject` "only in cases where the
+        // AS is sure that the RO and the end user are the same party",
+        // and names interaction as how that is established. The one
+        // ground this server can check is that one: a grant that has
+        // been through no interaction cannot claim it. The check is on
+        // the deployment's claim, not on the client's request, so it
+        // reports a server fault rather than blaming the caller.
+        if let Some(released) = subject {
+            response.subject = Some(*released.subject);
+        }
+        record.interact_handle = None;
+        record.interact_ref = None;
+        record.interact_expires_at = None;
+        if let Some(continuation) = continuation {
+            record.continuation_token = Some(continuation.as_str().to_owned());
+            grant.offer_continuation(now, Some(gnap_core::DEFAULT_WAIT));
+            response.r#continue = Some(Continue {
+                uri: self.endpoints.continuation.clone(),
+                access_token: BoundToken::new(continuation),
+                wait: Some(gnap_core::DEFAULT_WAIT),
+                extra: serde_json::Map::new(),
+            });
+        } else {
+            grant.withhold_continuation();
         }
 
         ok(&response)
@@ -1472,6 +1622,15 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         let body = request.body.as_deref().unwrap_or_default();
         serde_json::from_slice(body).map_err(|e| error(ErrorCode::InvalidRequest, &e.to_string()))
     }
+}
+
+/// Includes retired-on-commit credentials from the authenticated snapshot.
+fn credential_used(aggregate: &GrantAggregate, value: &str) -> bool {
+    aggregate.record.continuation_token.as_deref() == Some(value)
+        || aggregate
+            .tokens
+            .values()
+            .any(|token| token.token.value.as_str() == value || token.management_token == value)
 }
 
 /// The key a client presented by value, if it did (§2.3, §7.1).
@@ -1753,15 +1912,18 @@ fn error(code: ErrorCode, description: &str) -> HttpResponse {
 /// The deployment handed the server something it cannot use.
 ///
 /// Invalid generated values, endpoint configuration or policy output land here.
-/// The description is serialized as JSON, including any quotes in the rejected
-/// value. The client is told that the server could not fulfill the request.
+/// This is a technical failure, not an authoritative GNAP error response: no
+/// grant change has been committed. In particular, a client must not mistake
+/// this response for a denial that terminates its continuation.
 fn misconfigured(what: &str) -> HttpResponse {
-    let mut response = error(
-        ErrorCode::RequestDenied,
-        &format!("server configuration: {what}"),
-    );
-    response.status = 500;
-    response
+    HttpResponse {
+        status: 500,
+        headers: vec![
+            ("Content-Type".into(), "text/plain; charset=utf-8".into()),
+            ("Cache-Control".into(), "no-store".into()),
+        ],
+        body: format!("server configuration: {what}").into_bytes(),
+    }
 }
 
 /// Checks the content type §2 requires of a request that carries JSON.

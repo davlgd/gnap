@@ -79,6 +79,7 @@ fn unusable_responses() -> Vec<Result<HttpResponse, String>> {
     vec![
         Err("connection lost".into()),
         Ok(response(503, "")),
+        Ok(response(500, "")),
         Ok(response(204, "")),
         Ok(response(502, "<html>upstream unavailable</html>")),
         Ok(wrong_type),
@@ -99,6 +100,20 @@ fn unusable_responses() -> Vec<Result<HttpResponse, String>> {
             r#"{"error":"invalid_request","access_token":{"value":"forbidden"}}"#,
         )),
     ]
+}
+
+#[test]
+fn no_content_grant_response_is_a_protocol_error() {
+    let key = signer();
+    let transport = Script::new(vec![Ok(response(204, ""))]);
+    let mut session = Session::new(&transport, &key, ENDPOINT).supporting(&["redirect"]);
+    let before = session.protocol.clone();
+
+    assert!(matches!(
+        session.start(&request(), 100),
+        Err(ClientError::Protocol(_))
+    ));
+    assert_eq!(session.protocol, before);
 }
 
 #[test]
@@ -316,4 +331,137 @@ fn json_media_type_parameters_and_casing_remain_accepted() {
         session.start(&request(), 1_000),
         Ok(Step::Approved(_))
     ));
+}
+
+#[test]
+fn an_inconclusive_patch_restores_the_entire_proposed_interaction_context() {
+    let key = signer();
+    let changes: ContinueRequest = serde_json::from_str(r#"{"access_token":[{"label":"next","access":["files"]}],"interact":{"start":["user_code"],"finish":{"method":"redirect","uri":"https://client.example/new","nonce":"changed-nonce","hash_method":"sha3-512"}}}"#).unwrap();
+    for bad in unusable_responses() {
+        let transport = Script::new(vec![Ok(response(200, PENDING)), bad]);
+        let mut session = Session::new(&transport, &key, ENDPOINT);
+        session.start(&request(), 1_000).unwrap();
+        session.accept_callback(&callback(), 1_001).unwrap();
+        let before = session.protocol.clone();
+        assert!(session.modify_grant(&changes, 1_002).is_err());
+        assert_eq!(session.protocol, before);
+    }
+}
+
+#[test]
+fn a_refused_patch_keeps_the_previous_interaction_offer_and_cardinality() {
+    let key = signer();
+    let transport = Script::new(vec![
+        Ok(response(200, PENDING)),
+        Ok(response(
+            400,
+            r#"{"error":"too_fast","continue":{"uri":"https://as.example/new","access_token":{"value":"new-cont"},"wait":5}}"#,
+        )),
+    ]);
+    let mut session = Session::new(&transport, &key, ENDPOINT);
+    session.start(&request(), 1_000).unwrap();
+    session.accept_callback(&callback(), 1_001).unwrap();
+    let mut expected = session.protocol.clone();
+    let changes: ContinueRequest = serde_json::from_str(r#"{"access_token":[{"label":"next","access":["files"]}],"interact":{"start":["user_code"]}}"#).unwrap();
+    assert!(matches!(
+        session.modify_grant(&changes, 1_002),
+        Ok(Step::Recoverable(_))
+    ));
+    expected.grant.offer_continuation(1_002, Some(5));
+    expected.continuation = session.protocol.continuation.clone();
+    assert_eq!(session.protocol, expected);
+}
+
+#[test]
+fn a_terminal_patch_refusal_does_not_adopt_the_rejected_request_context() {
+    let key = signer();
+    let transport = Script::new(vec![
+        Ok(response(200, APPROVED)),
+        Ok(response(400, r#"{"error":"invalid_request"}"#)),
+    ]);
+    let mut session = Session::new(&transport, &key, ENDPOINT);
+    session.start(&request(), 1_000).unwrap();
+    let before = session.protocol.clone();
+    let changes: ContinueRequest = serde_json::from_str(r#"{"access_token":[{"label":"next","access":["files"]}],"interact":{"start":["user_code"],"finish":{"method":"redirect","uri":"https://client.example/new","nonce":"rejected-nonce","hash_method":"sha3-512"}}}"#).unwrap();
+    assert!(matches!(
+        session.modify_grant(&changes, 1_001),
+        Err(ClientError::Server(_))
+    ));
+    assert_eq!(session.protocol.client_nonce, before.client_nonce);
+    assert_eq!(session.protocol.hash_method, before.hash_method);
+    assert_eq!(session.protocol.requested, before.requested);
+    assert_eq!(session.protocol.offered_modes, before.offered_modes);
+    assert_eq!(session.protocol.issued, before.issued);
+    assert_eq!(session.state(), State::Finalized);
+    assert!(session.continuation().is_none());
+}
+
+#[test]
+fn a_patch_cannot_offer_an_unsupported_mode_and_sends_nothing() {
+    let key = signer();
+    let transport = Script::new(vec![Ok(response(200, PENDING))]);
+    let mut session = Session::new(&transport, &key, ENDPOINT).supporting(&["redirect"]);
+    session.start(&request(), 1_000).unwrap();
+    let before = session.protocol.clone();
+    let changes: ContinueRequest =
+        serde_json::from_str(r#"{"interact":{"start":["user_code"]}}"#).unwrap();
+    assert!(matches!(
+        session.modify_grant(&changes, 1_001),
+        Err(ClientError::Usage(_))
+    ));
+    assert_eq!(session.protocol, before);
+    assert_eq!(transport.seen.borrow().len(), 1);
+}
+
+#[test]
+fn revocation_requires_an_empty_204_and_preserves_state_on_inconclusive_responses() {
+    let key = signer();
+    for reply in [
+        Err("connection lost".into()),
+        Ok(response(503, "")),
+        Ok(response(204, "not empty")),
+        Ok(response(200, APPROVED)),
+        Ok(response(
+            400,
+            r#"{"error":"invalid_request","access_token":{"value":"bad"}}"#,
+        )),
+    ] {
+        let transport = Script::new(vec![Ok(response(200, APPROVED)), reply]);
+        let mut session = Session::new(&transport, &key, ENDPOINT);
+        session.start(&request(), 1_000).unwrap();
+        let before = session.protocol.clone();
+        assert!(session.revoke_grant(1_001).is_err());
+        assert_eq!(session.protocol, before);
+        let sent = transport.seen.borrow();
+        assert_eq!(sent[1].method, "DELETE");
+        assert!(sent[1].body.is_none());
+        assert_eq!(sent.len(), 2);
+    }
+}
+
+#[test]
+fn a_valid_revocation_error_updates_continuation_without_discarding_tokens() {
+    let key = signer();
+    for body in [
+        r#"{"error":"invalid_continuation"}"#,
+        r#"{"error":"too_fast","continue":{"uri":"https://as.example/c","access_token":{"value":"next"},"wait":5}}"#,
+    ] {
+        let transport = Script::new(vec![
+            Ok(response(200, APPROVED)),
+            Ok(response(200, PENDING)),
+            Ok(response(400, body)),
+        ]);
+        let mut session = Session::new(&transport, &key, ENDPOINT);
+        session.start(&request(), 1_000).unwrap();
+        session
+            .modify_grant(&ContinueRequest::default(), 1_001)
+            .unwrap();
+        let tokens = session.protocol.issued.clone();
+        assert!(matches!(
+            session.revoke_grant(1_002),
+            Err(ClientError::Server(_))
+        ));
+        assert_eq!(session.protocol.issued, tokens);
+        assert_eq!(session.continuation().is_some(), body.contains("too_fast"));
+    }
 }

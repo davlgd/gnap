@@ -40,6 +40,97 @@ fn populated(suffix: &str) -> GrantAggregate {
     aggregate
 }
 
+#[test]
+fn credential_roles_are_disjoint_within_and_across_grants() {
+    for role in 0..3 {
+        let storage = MemoryStorage::new();
+        let original = storage.create(populated("old")).unwrap();
+        for existing in ["continue-old", "value-old", "management-value-old"] {
+            let mut candidate = populated("new");
+            match role {
+                0 => candidate.record.continuation_token = Some(existing.into()),
+                1 => {
+                    candidate.tokens.get_mut("handle-new").unwrap().token.value =
+                        gnap_types::token::TokenValue::new(existing).unwrap();
+                }
+                _ => {
+                    candidate
+                        .tokens
+                        .get_mut("handle-new")
+                        .unwrap()
+                        .management_token = existing.into();
+                }
+            }
+            assert!(matches!(
+                storage.create(candidate),
+                Err(StoreError::Collision)
+            ));
+            assert_eq!(
+                storage
+                    .lookup(GrantSelector::Id(original.id))
+                    .unwrap()
+                    .unwrap()
+                    .revision,
+                original.revision
+            );
+        }
+        let mut candidate = populated("self");
+        let token = candidate.tokens.get_mut("handle-self").unwrap();
+        match role {
+            0 => candidate.record.continuation_token = Some(token.token.value.as_str().into()),
+            1 => token.management_token = token.token.value.as_str().into(),
+            _ => candidate.record.continuation_token = Some(token.management_token.clone()),
+        }
+        assert!(matches!(
+            storage.create(candidate),
+            Err(StoreError::Collision)
+        ));
+    }
+}
+
+#[test]
+fn credentials_cannot_change_roles_even_when_replacing_the_entire_grant() {
+    let storage = MemoryStorage::new();
+    let original = storage.create(populated("old")).unwrap();
+    for role in 0..3 {
+        let mut replacement = populated("new");
+        match role {
+            0 => replacement.record.continuation_token = Some("value-old".into()),
+            1 => {
+                replacement
+                    .tokens
+                    .get_mut("handle-new")
+                    .unwrap()
+                    .token
+                    .value = gnap_types::token::TokenValue::new("management-value-old").unwrap();
+            }
+            _ => {
+                replacement
+                    .tokens
+                    .get_mut("handle-new")
+                    .unwrap()
+                    .management_token = "continue-old".into();
+            }
+        }
+        assert!(matches!(
+            storage.compare_exchange(original.id, original.revision, replacement),
+            Err(StoreError::Collision)
+        ));
+    }
+    assert!(storage
+        .lookup(GrantSelector::Continuation("value-old"))
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        storage
+            .lookup(GrantSelector::AccessToken("value-old"))
+            .unwrap()
+            .unwrap()
+            .id,
+        original.id
+    );
+}
+
 /// Both callers prepare from the same revision; only one may spend the handle.
 #[test]
 fn two_callers_cannot_complete_the_same_interaction() {

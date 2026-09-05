@@ -5,6 +5,7 @@
 //! an RO's approval, which access is granted, which client is trusted — none of
 //! that is protocol. It goes behind these traits.
 
+use crate::storage::GrantSnapshot;
 use gnap_crypto::proof::Verifier;
 use gnap_registry::ErrorCode;
 use gnap_types::access::AccessItem;
@@ -13,6 +14,22 @@ use gnap_types::message::GrantRequest;
 use gnap_types::token::AccessToken;
 use gnap_types::user::SubjectResponse;
 use std::num::NonZeroU64;
+
+/// The authenticated context in which a policy evaluates a request.
+///
+/// Existing-grant snapshots precede mutation: they retain the previous request
+/// and the interaction reference being consumed. A deployment can bind consent
+/// to a stable grant identity and a particular interaction, not just a client.
+/// The final storage compare-and-exchange still has to accept that revision.
+#[derive(Debug, Clone, Copy)]
+pub enum EvaluationContext<'a> {
+    /// An initial request, before a grant identity has been allocated.
+    Initial,
+    /// A PATCH request replacing fields of this authenticated grant.
+    Modification(&'a GrantSnapshot),
+    /// Continuation of a completed interaction on this authenticated grant.
+    AfterInteraction(&'a GrantSnapshot),
+}
 
 /// What the AS decided to do with a grant request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +95,32 @@ pub enum SubjectGround {
 pub trait Policy {
     /// Evaluates a fresh or modified grant request.
     fn evaluate(&self, request: &GrantRequest) -> Decision;
+
+    /// Evaluates a request with its authenticated grant context.
+    ///
+    /// The default preserves the original policy hooks. Implementations that
+    /// need grant-scoped consent should override this method; no callback is
+    /// automatically retried after a storage conflict. Polling an incomplete
+    /// interaction still calls `evaluate`, for out-of-band policy decisions.
+    fn evaluate_context(&self, request: &GrantRequest, context: EvaluationContext<'_>) -> Decision {
+        match context {
+            EvaluationContext::Initial | EvaluationContext::Modification(_) => {
+                self.evaluate(request)
+            }
+            EvaluationContext::AfterInteraction(_) => self.evaluate_after_interaction(request),
+        }
+    }
+
+    /// Whether to offer continuation after this request is approved (§3.1).
+    ///
+    /// The default closes continuation, preserving the one-shot flow. This
+    /// choice is reevaluated on each approval. An open approved grant can be
+    /// polled without issuing another token, modified, or revoked. Successful
+    /// reapproval replaces all earlier tokens atomically; pending interaction
+    /// and a denied modification do not revoke those earlier tokens.
+    fn keep_grant_open(&self, _request: &GrantRequest) -> bool {
+        false
+    }
 
     /// Lifetime of a newly approved access token, in seconds (§3.2.1).
     ///

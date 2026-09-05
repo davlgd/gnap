@@ -220,3 +220,169 @@ fn refused_rotation_cannot_restore_a_concurrently_revoked_token() {
 fn successful_rotation_cannot_publish_after_concurrent_revocation() {
     revocation_wins(true);
 }
+
+/// Stops exactly one prepared CAS, after policy and proof but before publication.
+struct PausedCas {
+    inner: MemoryStorage,
+    pause: AtomicBool,
+    reached: Arc<Gate>,
+    release: Arc<Gate>,
+}
+impl GrantStore for PausedCas {
+    fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
+        self.inner.create(aggregate)
+    }
+    fn lookup(&self, selector: GrantSelector<'_>) -> Result<Option<GrantSnapshot>, StoreError> {
+        self.inner.lookup(selector)
+    }
+    fn compare_exchange(
+        &self,
+        id: GrantId,
+        revision: Revision,
+        replacement: GrantAggregate,
+    ) -> Result<GrantSnapshot, StoreError> {
+        if self.pause.swap(false, Ordering::SeqCst) {
+            self.reached.signal();
+            self.release.wait();
+        }
+        self.inner.compare_exchange(id, revision, replacement)
+    }
+    fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError> {
+        self.inner.remove(id, revision)
+    }
+}
+impl NonceStore for PausedCas {
+    fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
+        self.inner.remember_nonce(nonce, now)
+    }
+}
+struct OpenApprove;
+impl Policy for OpenApprove {
+    fn evaluate(&self, request: &GrantRequest) -> Decision {
+        Decision::Approve {
+            access: request.access_token.as_ref().unwrap().tokens[0]
+                .access
+                .clone(),
+            subject: None,
+        }
+    }
+    fn keep_grant_open(&self, _: &GrantRequest) -> bool {
+        true
+    }
+}
+
+fn ongoing_race(winning_method: &str) {
+    let reached = Arc::new(Gate::new());
+    let release = Arc::new(Gate::new());
+    let storage = Arc::new(PausedCas {
+        inner: MemoryStorage::new(),
+        pause: AtomicBool::new(true),
+        reached: reached.clone(),
+        release: release.clone(),
+    });
+    let server = Arc::new(AuthorizationServer::new(
+        OpenApprove,
+        Keys,
+        storage.clone(),
+        OsNonces,
+        Endpoints {
+            grant: "https://as.example/gnap".into(),
+            continuation: "https://as.example/continue".into(),
+            interaction: "https://as.example/interact".into(),
+            token_management: "https://as.example/token".into(),
+        },
+    ));
+    let initial = sign_request(
+        HttpRequest::new("POST", "https://as.example/gnap").json_body(
+            br#"{"client":"client","access_token":{"access":["read","write"]}}"#.to_vec(),
+        ),
+        &signer(),
+        None,
+        NOW,
+    )
+    .unwrap();
+    let initial = server.handle(&initial, NOW);
+    assert_eq!(initial.status, 200);
+    let initial: gnap_types::message::GrantResponse =
+        serde_json::from_slice(&initial.body).unwrap();
+    let token = &initial.access_token.unwrap().tokens[0];
+    let management = token.manage.as_ref().unwrap();
+    let continuation = initial.r#continue.unwrap();
+    let before = storage
+        .lookup(GrantSelector::AccessToken(token.value.as_str()))
+        .unwrap()
+        .unwrap();
+    let build = |method: &str| {
+        let (uri, credential) = if method == "POST" {
+            (&management.uri, &management.access_token.value)
+        } else {
+            (&continuation.uri, &continuation.access_token.value)
+        };
+        let mut request = HttpRequest::new(method, uri);
+        if method == "PATCH" {
+            request = request.json_body(br#"{"access_token":{"access":["read"]}}"#.to_vec());
+        }
+        sign_request(request, &signer(), Some(credential), NOW + 5).unwrap()
+    };
+    let losing_method = if winning_method == "PATCH" {
+        "POST"
+    } else {
+        "PATCH"
+    };
+    let delayed_request = build(losing_method);
+    let delayed_server = server.clone();
+    let delayed = std::thread::spawn(move || delayed_server.handle(&delayed_request, NOW + 5));
+    reached.wait(); // The losing operation holds an authenticated, prepared snapshot.
+    let winner = server.handle(&build(winning_method), NOW + 5);
+    release.signal();
+    let loser = delayed.join().unwrap();
+    assert_eq!(
+        winner.status,
+        if winning_method == "DELETE" { 204 } else { 200 }
+    );
+    assert_ne!(loser.status, 200);
+    let current = storage
+        .lookup(GrantSelector::Id(before.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.revision, Revision(1));
+    assert!(storage
+        .lookup(GrantSelector::AccessToken(token.value.as_str()))
+        .unwrap()
+        .is_none());
+    if winning_method == "DELETE" {
+        assert!(current.aggregate.revoked);
+        assert!(current.aggregate.tokens.is_empty());
+        assert!(current.aggregate.record.continuation_token.is_none());
+    } else {
+        assert_eq!(current.aggregate.tokens.len(), 1);
+        let live = current.aggregate.tokens.values().next().unwrap();
+        let expected: Vec<_> = if winning_method == "PATCH" {
+            vec!["read"]
+        } else {
+            vec!["read", "write"]
+        }
+        .into_iter()
+        .map(|right| gnap_types::access::AccessItem::Reference(right.into()))
+        .collect();
+        assert_eq!(live.token.access.as_ref().unwrap(), &expected);
+        assert_eq!(
+            current.aggregate.record.continuation_token.as_deref()
+                == Some(continuation.access_token.value.as_str()),
+            winning_method == "POST"
+        );
+    }
+}
+
+#[test]
+fn a_successful_patch_prevents_a_stale_rotation_from_publishing() {
+    ongoing_race("PATCH");
+}
+#[test]
+fn a_successful_rotation_prevents_a_stale_patch_from_publishing() {
+    ongoing_race("POST");
+}
+#[test]
+fn a_grant_delete_prevents_a_stale_patch_from_restoring_access() {
+    ongoing_race("DELETE");
+}
