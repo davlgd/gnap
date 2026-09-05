@@ -334,7 +334,9 @@ def validate_run(root: Path, run: dict, *, published: bool = False) -> dict[str,
     require(set(results) == set(discovered), "Discovered tests were not all accounted for")
     if "observation" in run:
         validate_discovery_observation(root, run)
-    elif any(case.startswith("test_as_discovery.") for case in discovered):
+    elif ("conformance/scenarios/test_as_discovery.py" in run["source_files"]
+          or any(module == "test_as_discovery" or module.endswith(".test_as_discovery")
+                 for module in (case.rsplit(".", 2)[0] for case in discovered))):
         raise LedgerError("Discovery scenarios require capture provenance")
     if published:
         require("observation" in run and run["observation"]["execution_mode"] == "capture_replay",

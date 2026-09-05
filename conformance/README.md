@@ -135,7 +135,10 @@ python3 -B tools/conformance_ledger.py run-tests \
 ```
 
 The discovery suite now uses the dedicated `discovery-tests` command below to
-bind mandatory capture provenance as well as actual execution. The generic
+bind mandatory capture provenance as well as actual execution. Qualified module
+names and receipts recording the discovery scenario source also require that
+binding; changing an import prefix cannot turn discovery into a generic scenario.
+The generic
 runner remains an extension point for other scenarios and refuses to relabel tests
 outside this scenario directory as GNAP evidence. It executes trusted repository
 Python code; **never expose it as an arbitrary public command or upload runner**.
@@ -286,11 +289,12 @@ ignored local run in the public evidence file. Existing receipts are historical:
 CI checks them offline and generates its own separate synthetic oracle receipt,
 without converting either into a new current network observation.
 
-The first published [receipt](receipts/gnap-delegation-discovery-2026-09-05.json)
+The published [receipt](receipts/gnap-delegation-discovery-2026-09-05.json)
 replays the [reviewed capture](captures/gnap-delegation-discovery-2026-09-05.json)
 from `https://gnap-delegation.cleverapps.io/gnap`, captured at UTC Unix
-`1788645193` on 5 September 2026. Its six assertions ran at UTC Unix `1788645383`
-from clean source commit `28275dca68cb5933f27a34af0af3c0076cf470f4`.
+`1788645193` on 5 September 2026. The receipt records the exact replay time and
+clean source commit. A runner change requires a fresh replay receipt, not a new
+network capture or a change to the historical capture time.
 The body contains only the public grant endpoint, announced `httpsig` proof and
 `key_rotation_supported: false`. Only the six listed response assertions are
 mapped: capability execution and remote source revision remain unknown.

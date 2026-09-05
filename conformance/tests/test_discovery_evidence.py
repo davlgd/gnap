@@ -224,6 +224,46 @@ class ReceiptTests(unittest.TestCase):
         self.assertIn("Discovery scenario module was not discovered", result.stderr)
         self.assertNotIn("KeyError", result.stderr)
 
+    def test_qualified_discovery_cases_cannot_omit_capture_provenance(self):
+        for prefix in ("", "scenarios.", "conformance.scenarios."):
+            with self.subTest(prefix=prefix):
+                mutated = copy.deepcopy(self.receipt)
+                del mutated["observation"]
+                mutated["discovered_cases"] = [prefix + case for case in mutated["discovered_cases"]]
+                for result in mutated["results"]:
+                    result["case_id"] = prefix + result["case_id"]
+                with self.assertRaisesRegex(ledger.LedgerError, "Discovery scenarios require capture provenance"):
+                    ledger.validate_run(self.root, mutated)
+
+    def test_recorded_discovery_source_requires_provenance_even_with_aliased_cases(self):
+        # Synthetic mutation of an actual fixture run, never published as evidence.
+        alias = "conformance/scenarios/test_aliased.py"
+        path = self.root / alias
+        shutil.copyfile(self.root / "conformance/scenarios/test_as_discovery.py", path)
+        mutated = copy.deepcopy(self.receipt)
+        mutated["source_files"][alias] = ledger.digest(path.read_bytes())
+        del mutated["observation"]
+        mutated["discovered_cases"] = [case.replace("test_as_discovery.", "test_aliased.", 1)
+                                     for case in mutated["discovered_cases"]]
+        for result in mutated["results"]:
+            result["case_id"] = result["case_id"].replace("test_as_discovery.", "test_aliased.", 1)
+        with self.assertRaisesRegex(ledger.LedgerError, "Discovery scenarios require capture provenance"):
+            ledger.validate_run(self.root, mutated)
+
+    def test_nested_discovery_module_requires_provenance_without_canonical_source_path(self):
+        nested = "conformance/scenarios/nested/test_as_discovery.py"
+        path = self.root / nested
+        path.parent.mkdir()
+        shutil.copyfile(self.root / "conformance/scenarios/test_as_discovery.py", path)
+        mutated = copy.deepcopy(self.receipt)
+        mutated["source_files"][nested] = mutated["source_files"].pop("conformance/scenarios/test_as_discovery.py")
+        del mutated["observation"]
+        mutated["discovered_cases"] = ["nested." + case for case in mutated["discovered_cases"]]
+        for result in mutated["results"]:
+            result["case_id"] = "nested." + result["case_id"]
+        with self.assertRaisesRegex(ledger.LedgerError, "Discovery scenarios require capture provenance"):
+            ledger.validate_run(self.root, mutated)
+
     def test_changed_source_and_changed_capture_invalidate_receipt(self):
         for relative in ("conformance/discovery.py", "conformance/fixtures/discovery.json"):
             path = self.root / relative
