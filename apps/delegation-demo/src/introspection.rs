@@ -312,8 +312,13 @@ pub(super) fn handle(app: &App, request: &HttpRequest, time: u64) -> HttpRespons
         Ok(api) => api.handle(request, time),
         Err(_) => HttpResponse {
             status: 503,
-            headers: vec![("content-type".into(), "application/json".into())],
-            body: br#"{"error":"introspection_unavailable"}"#.to_vec(),
+            // Construction failed before any RS protocol request was handled.
+            // Do not disguise this deployment failure as a GNAP error object.
+            headers: vec![
+                ("content-type".into(), "text/plain; charset=utf-8".into()),
+                ("cache-control".into(), "no-store".into()),
+            ],
+            body: b"Resource-server API configuration unavailable".to_vec(),
         },
     }
 }

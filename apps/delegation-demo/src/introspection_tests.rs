@@ -3,6 +3,68 @@ use gnap_types::rs::{IntrospectionResponse, ResourceServer};
 use tests::{test_aggregate, test_app, test_app_at, test_record};
 use tower::ServiceExt;
 
+#[test]
+fn invalid_rs_api_configuration_is_non_gnap_noncacheable_and_redacted() {
+    let fixture = test_app();
+    for invalid_grant in [false, true] {
+        let mut app = fixture.clone();
+        if invalid_grant {
+            app.server = Arc::new(AuthorizationServer::new(
+                ConsentPolicy(app.decisions.clone()),
+                KnownKeys {
+                    signer: app.signer.clone(),
+                    decisions: app.decisions.clone(),
+                },
+                app.storage.clone(),
+                OsNonces,
+                Endpoints {
+                    grant: "https://demo.example/gnap#synthetic-config-secret".into(),
+                    continuation: "https://demo.example/continue".into(),
+                    interaction: "https://demo.example/interact".into(),
+                    token_management: "https://demo.example/token".into(),
+                },
+            ));
+        } else {
+            // Bypass validated startup configuration to exercise this normally
+            // unreachable builder-error branch directly, without network I/O.
+            app.origin = "https://demo.example#synthetic-config-secret".into();
+        }
+        let request = HttpRequest::new(
+            "GET",
+            "https://demo.example/.well-known/gnap-as-rs?synthetic-request-secret",
+        );
+        let response = introspection::handle(&app, &request, now());
+        assert_eq!(response.status, 503);
+        assert_eq!(
+            response
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            ["text/plain; charset=utf-8"]
+        );
+        assert_eq!(
+            response
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("cache-control"))
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            ["no-store"]
+        );
+        assert_eq!(
+            response.body,
+            b"Resource-server API configuration unavailable"
+        );
+        assert!(serde_json::from_slice::<Value>(&response.body).is_err());
+        let rendered = String::from_utf8(response.body).unwrap();
+        assert!(!rendered.contains("synthetic-config-secret"));
+        assert!(!rendered.contains("synthetic-request-secret"));
+        assert!(!rendered.contains("demo.example"));
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_introspection_transport_bounds_time_size_and_redirects() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
