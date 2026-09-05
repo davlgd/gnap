@@ -1,8 +1,9 @@
 //! Real HTTP GNAP client/AS application. All records and credentials are synthetic.
 use axum::{
     body::Bytes,
-    extract::{DefaultBodyLimit, OriginalUri, State},
-    http::{HeaderMap, StatusCode},
+    extract::{DefaultBodyLimit, OriginalUri, Request, State},
+    http::{uri::Authority, HeaderMap, Method, StatusCode, Uri, Version},
+    middleware::Next,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -33,6 +34,147 @@ const MAX_SESSIONS: usize = 64;
 const SESSION_LIFETIME: Duration = Duration::from_secs(1200);
 type Decisions = Arc<Mutex<HashMap<String, bool>>>;
 type As = AuthorizationServer<ConsentPolicy, KnownKeys, Arc<IndexedStorage>, OsNonces>;
+
+#[derive(Clone)]
+struct CanonicalOrigin {
+    value: String,
+    scheme: String,
+    authority: (String, u16),
+}
+impl CanonicalOrigin {
+    fn parse(value: &str) -> Result<Self, &'static str> {
+        let parsed = reqwest::Url::parse(value).map_err(|_| "APP_ORIGIN must be a URL")?;
+        if parsed.origin().ascii_serialization() != value
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.path() != "/"
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err(
+                "APP_ORIGIN must use canonical spelling (lowercase host, no default port), \
+                 without credentials, path, query, fragment or trailing slash",
+            );
+        }
+        if parsed.scheme() != "https"
+            && !(parsed.scheme() == "http"
+                && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")))
+        {
+            return Err("Public deployments require HTTPS; HTTP is only allowed on loopback");
+        }
+        Ok(Self {
+            value: value.into(),
+            scheme: parsed.scheme().into(),
+            authority: (
+                parsed
+                    .host_str()
+                    .ok_or("APP_ORIGIN requires a host")?
+                    .into(),
+                parsed
+                    .port_or_known_default()
+                    .ok_or("APP_ORIGIN requires a port")?,
+            ),
+        })
+    }
+
+    fn authority(&self, value: &str) -> Result<(String, u16), StatusCode> {
+        let invalid = StatusCode::BAD_REQUEST;
+        if !value.is_ascii()
+            || value
+                .bytes()
+                .any(|c| c.is_ascii_whitespace() || b"@\\%/?#".contains(&c))
+            || value.ends_with(':')
+        {
+            return Err(invalid);
+        }
+        let authority: Authority = value.parse().map_err(|_| invalid)?;
+        // Authority::port() returns None for an invalid port as well as an
+        // absent one. Inspect the suffix so malformed ports cannot default.
+        let suffix = &value[authority.host().len()..];
+        let port = match suffix.strip_prefix(':') {
+            Some(port) if !port.is_empty() && port.bytes().all(|c| c.is_ascii_digit()) => {
+                port.parse::<u16>().map_err(|_| invalid)?
+            }
+            None if suffix.is_empty() => {
+                if self.scheme == "https" {
+                    443
+                } else {
+                    80
+                }
+            }
+            _ => return Err(invalid),
+        };
+        Ok((authority.host().to_ascii_lowercase(), port))
+    }
+
+    fn matches_request(&self, request: &Request) -> Result<bool, StatusCode> {
+        let mut hosts = request.headers().get_all("host").iter();
+        let host = hosts.next();
+        if hosts.next().is_some() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let host = host
+            .map(|h| self.authority(h.to_str().map_err(|_| StatusCode::BAD_REQUEST)?))
+            .transpose()?;
+        let uri_authority = request
+            .uri()
+            .authority()
+            .map(|a| self.authority(a.as_str()))
+            .transpose()?;
+        if host.is_some() && uri_authority.is_some() && host != uri_authority {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        // HTTP/1 requires Host even for an absolute-form request target. HTTP/2
+        // may carry its authority solely in the URI's :authority component.
+        if host.is_none() && request.version() != Version::HTTP_2 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        // TLS may terminate at a proxy: the backend scheme is not the public
+        // scheme used to reconstruct signed URIs from APP_ORIGIN.
+        if request
+            .uri()
+            .scheme_str()
+            .is_some_and(|scheme| !matches!(scheme, "http" | "https"))
+        {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        Ok(host.or(uri_authority).ok_or(StatusCode::BAD_REQUEST)? == self.authority)
+    }
+}
+
+fn request_target(uri: &Uri) -> &str {
+    uri.path_and_query().map_or("/", |target| target.as_str())
+}
+
+async fn canonical_authority(
+    State(origin): State<CanonicalOrigin>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    if path == "/health" {
+        return next.run(request).await;
+    }
+    match origin.matches_request(&request) {
+        Ok(true) => next.run(request).await,
+        Err(status) => status.into_response(),
+        Ok(false) => {
+            let navigation = path == "/"
+                || path == "/callback"
+                || path
+                    .strip_prefix("/interact/")
+                    .is_some_and(|handle| !handle.is_empty() && !handle.contains('/'));
+            if navigation && matches!(*request.method(), Method::GET | Method::HEAD) {
+                // Concatenate onto a configured origin, never resolve an
+                // untrusted URL or decode/re-encode callback parameters.
+                let destination = format!("{}{}", origin.value, request_target(request.uri()));
+                (StatusCode::TEMPORARY_REDIRECT, [("location", destination)]).into_response()
+            } else {
+                StatusCode::MISDIRECTED_REQUEST.into_response()
+            }
+        }
+    }
+}
 
 /// Application adapter: GNAP TokenStore is indexed by management handle; this
 /// resource server also needs a token-value index. Both mutate under one lock.
@@ -646,7 +788,7 @@ async fn resource(
     };
     let request = HttpRequest {
         method: method.to_string(),
-        url: format!("{}{uri}", app.origin),
+        url: format!("{}{}", app.origin, request_target(&uri)),
         headers: headers
             .iter()
             .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or_default().into()))
@@ -759,7 +901,13 @@ async fn callback(
     let Some(session) = session_cookie(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match dispatch(&app, session, format!("callback:{}{uri}", app.origin)).await {
+    match dispatch(
+        &app,
+        session,
+        format!("callback:{}{}", app.origin, request_target(&uri)),
+    )
+    .await
+    {
         Ok(_) => (StatusCode::SEE_OTHER, [("location", "/")]).into_response(),
         Err(_) => (
             StatusCode::BAD_REQUEST,
@@ -795,7 +943,7 @@ async fn protocol(
     };
     let request = HttpRequest {
         method: method.to_string(),
-        url: format!("{}{uri}", app.origin),
+        url: format!("{}{}", app.origin, request_target(&uri)),
         headers: headers
             .iter()
             .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or_default().to_owned()))
@@ -829,22 +977,11 @@ async fn protocol(
 async fn main() {
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
     let origin = std::env::var("APP_ORIGIN").unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
-    let parsed = reqwest::Url::parse(&origin).expect("APP_ORIGIN must be a URL");
-    assert!(
-        parsed.path() == "/"
-            && parsed.query().is_none()
-            && parsed.fragment().is_none()
-            && parsed.username().is_empty()
-            && parsed.password().is_none()
-            && !origin.ends_with('/'),
-        "APP_ORIGIN must contain only scheme, host and optional port, with no trailing slash"
-    );
-    assert!(
-        parsed.scheme() == "https"
-            || (parsed.scheme() == "http"
-                && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"))),
-        "Public deployments require HTTPS; HTTP is only allowed on loopback"
-    );
+    let canonical = CanonicalOrigin::parse(&origin).unwrap_or_else(|reason| {
+        // Do not echo the supplied URL: an invalid value may contain credentials.
+        eprintln!("Invalid APP_ORIGIN: {reason}");
+        std::process::exit(1);
+    });
     eprintln!("Generating an ephemeral 2048-bit RSA client key; no fixtures or private key files are used.");
     let signer = Arc::new(
         Ps256Signer::generate(2048, "delegation-demo-ephemeral")
@@ -883,7 +1020,16 @@ async fn main() {
         storage.cleanup();
     });
     std::thread::spawn(move || client_worker(origin, signer, server, decisions, receiver));
-    let router = Router::new()
+    let router = application_router(app, canonical);
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .expect("listen PORT");
+    eprintln!("GNAP delegation demo listening on PORT={port}; no credential values are logged.");
+    axum::serve(listener, router).await.expect("HTTP server");
+}
+
+fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
+    Router::new()
         .route("/", get(|| async { Html(include_str!("../static/index.html")) }))
         .route("/health", get(|| async { Json(json!({"status":"ok", "profile":"GNAP HTTPSig client/AS demonstrator; not certification"})) }))
         .route("/api/status", get(status))
@@ -895,6 +1041,8 @@ async fn main() {
         .route("/resource/folder", get(resource))
         .route("/continue/{handle}", axum::routing::any(protocol))
         .route("/token/{handle}", axum::routing::any(protocol))
+        .route("/app.js", get(|| async { ([("content-type", "text/javascript")], include_str!("../static/app.js")) }))
+        .route_layer(axum::middleware::from_fn_with_state(canonical, canonical_authority))
         .layer(DefaultBodyLimit::max(65_536))
         .layer(axum::middleware::map_response(|mut response: Response| async move {
             let h = response.headers_mut();
@@ -904,18 +1052,259 @@ async fn main() {
             h.insert("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'".parse().unwrap());
             response
         }))
-        .route("/app.js", get(|| async { ([("content-type", "text/javascript")], include_str!("../static/app.js")) }))
-        .with_state(app);
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
-        .await
-        .expect("listen PORT");
-    eprintln!("GNAP delegation demo listening on PORT={port}; no credential values are logged.");
-    axum::serve(listener, router).await.expect("HTTP server");
+        .with_state(app)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower::ServiceExt;
+
+    #[test]
+    fn canonical_origin_rejects_ambiguous_configuration() {
+        for value in [
+            "https://demo.example/",
+            "https://DEMO.example",
+            "https://demo.example:443",
+            "https://user@demo.example",
+            "https://demo.example/path",
+            "https://demo.example?next=x",
+            "https://demo.example#fragment",
+            "http://demo.example",
+            "http://[::2]:18081",
+            "ftp://demo.example",
+        ] {
+            assert!(CanonicalOrigin::parse(value).is_err(), "{value}");
+        }
+        assert!(CanonicalOrigin::parse("https://demo.example").is_ok());
+        assert!(CanonicalOrigin::parse("http://127.0.0.1:18081").is_ok());
+        assert!(CanonicalOrigin::parse("http://[::1]:18081").is_ok());
+    }
+
+    #[test]
+    fn ipv6_authorities_preserve_the_bracketed_host_and_port() {
+        for (value, host) in [
+            ("http://[::1]:18081", "[::1]:18081"),
+            ("https://[::1]", "[::1]"),
+            ("https://[::1]:8443", "[::1]:8443"),
+            ("https://[2001:db8::1]:8443", "[2001:db8::1]:8443"),
+        ] {
+            let origin = CanonicalOrigin::parse(value).unwrap();
+            let parsed: Authority = host.parse().unwrap();
+            assert_eq!(
+                parsed.host(),
+                reqwest::Url::parse(value).unwrap().host_str().unwrap()
+            );
+            for version in [Version::HTTP_11, Version::HTTP_2] {
+                let request = Request::builder()
+                    .version(version)
+                    .uri(format!("{value}/api/status"))
+                    .header("host", host)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                assert_eq!(origin.matches_request(&request), Ok(true));
+            }
+            for invalid in ["[::1]:", "[::1]:invalid", "[::1]:65536"] {
+                assert_eq!(origin.authority(invalid), Err(StatusCode::BAD_REQUEST));
+            }
+            assert_ne!(origin.authority("[::1]:9443").unwrap(), origin.authority);
+        }
+    }
+
+    #[test]
+    fn authority_checks_host_uri_and_http_version_without_forwarded_trust() {
+        let origin = CanonicalOrigin::parse("https://demo.example").unwrap();
+        let build = |uri: &str, version, host: Option<&str>| {
+            let mut request = Request::builder().uri(uri).version(version);
+            if let Some(host) = host {
+                request = request.header("host", host);
+            }
+            request.body(axum::body::Body::empty()).unwrap()
+        };
+        assert_eq!(
+            origin.matches_request(&build("/", Version::HTTP_11, Some("DEMO.example:443"))),
+            Ok(true)
+        );
+        assert_eq!(
+            origin.matches_request(&build("/", Version::HTTP_11, Some("demo.example:444"))),
+            Ok(false)
+        );
+        assert_eq!(
+            origin.matches_request(&build(
+                "https://demo.example/callback?a=%2F",
+                Version::HTTP_2,
+                None
+            )),
+            Ok(true)
+        );
+        assert_eq!(
+            request_target(&"https://demo.example/callback?a=%2F".parse().unwrap()),
+            "/callback?a=%2F"
+        );
+        assert_eq!(
+            origin.matches_request(&build(
+                "http://demo.example/",
+                Version::HTTP_2,
+                Some("demo.example")
+            )),
+            Ok(true)
+        );
+        for request in [
+            build("/", Version::HTTP_11, None),
+            build("/", Version::HTTP_2, None),
+            build("https://demo.example/", Version::HTTP_11, None),
+            build(
+                "https://demo.example/",
+                Version::HTTP_2,
+                Some("other.example"),
+            ),
+            build("ftp://demo.example/", Version::HTTP_2, Some("demo.example")),
+            build("/", Version::HTTP_11, Some("demo.example:invalid")),
+            build("/", Version::HTTP_11, Some("demo.example:65536")),
+            build("/", Version::HTTP_11, Some("demo.example:+443")),
+            build("/", Version::HTTP_11, Some("demo.example:")),
+            build("/", Version::HTTP_11, Some("user@demo.example")),
+            build("/", Version::HTTP_11, Some("demo.example/path")),
+            build("/", Version::HTTP_11, Some("%64emo.example")),
+        ] {
+            assert_eq!(
+                origin.matches_request(&request),
+                Err(StatusCode::BAD_REQUEST),
+                "{:?}",
+                request.uri()
+            );
+        }
+        let mut duplicate = build("/", Version::HTTP_11, Some("demo.example"));
+        duplicate
+            .headers_mut()
+            .append("host", "demo.example".parse().unwrap());
+        assert_eq!(
+            origin.matches_request(&duplicate),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        let mut forwarded = build("/", Version::HTTP_11, Some("alias.example"));
+        forwarded.headers_mut().insert(
+            "forwarded",
+            "host=demo.example;proto=https".parse().unwrap(),
+        );
+        forwarded
+            .headers_mut()
+            .insert("x-forwarded-host", "demo.example".parse().unwrap());
+        assert_eq!(origin.matches_request(&forwarded), Ok(false));
+    }
+
+    #[tokio::test]
+    async fn router_canonicalizes_navigation_before_sessions_and_never_redirects_protocols() {
+        // The command receiver is absent: reaching a session handler would fail.
+        let app = test_app();
+        let starts = app.starts.clone();
+        let router =
+            application_router(app, CanonicalOrigin::parse("https://demo.example").unwrap());
+        for method in [Method::GET, Method::HEAD] {
+            for target in [
+                "/",
+                "/interact/synthetic",
+                "/callback?hash=a%2Bb%2F%3D&interact_ref=x%26y",
+            ] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method.clone())
+                            .uri(target)
+                            .header("host", "alias.example")
+                            .header("forwarded", "host=attacker.invalid")
+                            .header("x-forwarded-host", "attacker.invalid")
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+                assert_eq!(
+                    response.headers()["location"],
+                    format!("https://demo.example{target}")
+                );
+                assert_eq!(response.headers()["cache-control"], "no-store");
+                assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+                assert!(!response.headers().contains_key("set-cookie"));
+            }
+        }
+        for (method, target) in [
+            (Method::POST, "/api/start"),
+            (Method::GET, "/api/status"),
+            (Method::POST, "/gnap"),
+            (Method::POST, "/continue"),
+            (Method::GET, "/continue/handle"),
+            (Method::DELETE, "/token/handle"),
+            (Method::GET, "/resource/folder"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(target)
+                        .header("host", "alias.example")
+                        .header("origin", "https://demo.example")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::MISDIRECTED_REQUEST,
+                "{target}"
+            );
+            assert!(!response.headers().contains_key("location"));
+            assert!(!response.headers().contains_key("set-cookie"));
+        }
+        assert!(starts.lock().unwrap().is_empty());
+        for scheme in ["https", "http"] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .version(Version::HTTP_2)
+                        .uri(format!("{scheme}://demo.example/api/status"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        for (target, host, expected) in [
+            ("/", Some("demo.example"), StatusCode::OK),
+            ("/app.js", Some("demo.example"), StatusCode::OK),
+            ("/api/status", Some("demo.example"), StatusCode::OK),
+            (
+                "/callback?hash=x",
+                Some("demo.example"),
+                StatusCode::UNAUTHORIZED,
+            ),
+            ("/", None, StatusCode::BAD_REQUEST),
+            ("/health", None, StatusCode::OK),
+            ("/health", Some("internal.example"), StatusCode::OK),
+            ("/unknown", Some("alias.example"), StatusCode::NOT_FOUND),
+        ] {
+            let mut request = Request::builder().uri(target);
+            if let Some(host) = host {
+                request = request.header("host", host);
+            }
+            let response = router
+                .clone()
+                .oneshot(request.body(axum::body::Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{target}");
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+            assert!(response.headers().contains_key("content-security-policy"));
+        }
+    }
+
     #[test]
     fn origin_check_is_exact_and_mandatory() {
         let mut headers = HeaderMap::new();

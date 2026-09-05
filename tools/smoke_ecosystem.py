@@ -168,6 +168,41 @@ def wait_for_continuation(browser, base):
         time.sleep(wait + 0.1)
 
 
+def demo_alias(base, alias, outcomes):
+    """Check an explicitly supplied alias without following its redirects."""
+    browser = client()
+    status, _, _, _ = request(browser, alias, "/health")
+    expect(status == 200, "Demo alias health failed")
+    for method in ("GET", "HEAD"):
+        for path in ("/", "/interact/synthetic", "/callback?hash=a%2Bb%2F%3D&interact_ref=x%26y"):
+            status, headers, _, _ = request(browser, alias, path, method)
+            expect(status == 307, "Alias navigation did not redirect temporarily")
+            expect(headers.get("location") == base + path, "Alias redirect changed the fixed origin or raw query")
+            expect(headers.get("cache-control") == "no-store", "Alias redirect is cacheable")
+            expect(headers.get("referrer-policy") == "no-referrer", "Alias redirect may leak callback data")
+            expect(headers.get("set-cookie") is None, "Alias redirect created browser state")
+    outcomes.append({"check": "alias-navigation-preserves-target", "status": "pass"})
+
+    for method, path in (
+        ("POST", "/api/start"),
+        ("GET", "/api/status"),
+        ("POST", "/gnap"),
+        ("POST", "/continue"),
+        ("POST", "/continue/synthetic"),
+        ("DELETE", "/token/synthetic"),
+        ("GET", "/resource/folder"),
+    ):
+        status, headers, _, _ = request(browser, alias, path, method, browser_origin=base)
+        expect(status == 421, "Noncanonical API or protocol request was not rejected")
+        expect(headers.get("location") is None, "Protocol request was redirected")
+        expect(headers.get("set-cookie") is None, "Rejected alias request created browser state")
+    outcomes.append({"check": "alias-protocol-does-not-redirect", "status": "pass"})
+
+    status, headers, _, _ = request(browser, alias, "/unknown-smoke-route")
+    expect(status == 404 and headers.get("location") is None, "Unknown alias route was redirected")
+    outcomes.append({"check": "alias-health-and-unknown-route", "status": "pass"})
+
+
 def workbench(base, outcomes):
     browser = client()
     status, _, _, _ = request(browser, base, "/health")
@@ -190,15 +225,20 @@ def workbench(base, outcomes):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", type=origin)
+    parser.add_argument("--demo-alias", type=origin, help="An additional demo origin you control; requires --demo")
     parser.add_argument("--workbench", type=origin)
     args = parser.parse_args()
     if not args.demo and not args.workbench:
         parser.error("Provide --demo and/or --workbench; only test targets you control")
+    if args.demo_alias and (not args.demo or args.demo_alias == args.demo):
+        parser.error("--demo-alias requires a distinct --demo origin")
     outcomes = []
     try:
         if args.demo:
             ready(args.demo)
             demo(args.demo, outcomes)
+            if args.demo_alias:
+                demo_alias(args.demo, args.demo_alias, outcomes)
         if args.workbench:
             ready(args.workbench)
             workbench(args.workbench, outcomes)

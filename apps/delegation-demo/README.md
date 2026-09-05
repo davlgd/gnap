@@ -36,7 +36,8 @@ resource rejection. It is not a third-party interoperability test.
 
 - `PORT`: listening port, default `8080`; binds `0.0.0.0`.
 - `APP_ORIGIN`: exact externally visible HTTPS origin, no trailing slash, path,
-  userinfo, query or fragment. HTTP is accepted only for localhost development.
+  userinfo, query or fragment. Use its canonical spelling: lowercase hostname,
+  without an explicit default port. HTTP is accepted only for localhost development.
 - Binary: `gnap-delegation-demo`; readiness: `GET /health`.
 - Clever Cloud: use this app directory as `APP_FOLDER`, a **Build M** instance,
   and exactly one runtime instance. Set `APP_ORIGIN` to its public HTTPS origin.
@@ -47,6 +48,41 @@ The app reconstructs signed target URIs from the configured origin and actual
 request target, never from untrusted `Forwarded`/`X-Forwarded-*` headers. Outbound
 HTTP only reaches that fixed origin and the protocol's known paths, disables
 redirects and environmental proxy configuration, and limits response size/time.
+
+The incoming Host (or HTTP/2 authority) must match the configured origin before
+an API or protocol handler runs. Conflicting or malformed authorities are
+rejected. Navigation requests to `/`, `/interact/{handle}` and `/callback` on
+another hostname receive a temporary 307 redirect to the configured origin,
+preserving the path and query without creating or using a session. Other known
+routes return 421 on a noncanonical authority, without redirecting signed
+requests or forwarding credentials. `/health` remains available independently
+of Host for platform probes. This is deployment policy, not a GNAP requirement.
+
+A reverse proxy must preserve the original authority. Its backend connection
+may use HTTP even when the public origin is HTTPS, including HTTP/2 cleartext
+(h2c) after TLS termination. The app accepts either HTTP scheme on incoming
+requests, but always derives signed URIs, redirects and the cookie's Secure
+attribute from `APP_ORIGIN`; forwarded headers do not override that configuration.
+
+### Changing the public hostname
+
+Deploy the authority guard before changing `APP_ORIGIN`. Keep the previous
+domain attached, add the new domain, then update `APP_ORIGIN` and restart the
+reviewed revision. Update the diagnostic workbench's AS/RS target allowlists
+to the new origin as well. Wait for instance replacement to finish before
+testing: old and new processes can temporarily disagree about the origin.
+
+This does not migrate live sessions. Cookies are host-only, and restarting the
+demo discards its keys, grants and tokens. Visitors must start a new synthetic
+session; an old browser tab may need to be reloaded, and an old callback cannot
+restore a lost session. Do not broaden the cookie's domain to share it across
+`cleverapps.io` applications.
+
+After migration, test both the canonical origin and the previous alias:
+
+```sh
+python3 tools/smoke_ecosystem.py --demo https://demo.example --demo-alias https://previous.example
+```
 
 The single deployment contains three roles, not three independent security
 administrations. `gnap-client::Session` exchanges actual HTTP requests with

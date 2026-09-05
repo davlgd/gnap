@@ -7,7 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
@@ -17,3 +17,6 @@ gnap-client = { path = "../../crates/gnap-client" }
 gnap-crypto = { path = "../../crates/gnap-crypto" }
 gnap-types = { path = "../../crates/gnap-types" }
 gnap-registry = { path = "../../crates/gnap-registry" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
