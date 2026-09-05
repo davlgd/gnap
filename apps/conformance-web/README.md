@@ -2,8 +2,9 @@
 
 A standalone application consuming the SDK as a real integrator. It analyzes
 imported test messages and can send one fixed malformed initial grant request to
-an operator-approved AS, or a credential-free GET to an operator-declared
-protected RS endpoint. It does **not** certify AS, RS or client conformance.
+an operator-approved AS, an OPTIONS discovery request to that same AS endpoint,
+or a credential-free GET to an operator-declared protected RS endpoint. It does
+**not** certify AS, RS or client conformance.
 
 ## Run and test
 
@@ -36,7 +37,7 @@ The stable import envelope is:
 }
 ```
 
-Kinds: `grant_request`, `grant_response`, `continue_request`. Body is a string,
+Kinds: `grant_request`, `grant_response`, `continue_request`, `as_discovery`. Body is a string,
 not an object: digest checks need the original UTF-8 bytes, without JSON
 reformatting. Omit `headers` when they were not captured; `[]` explicitly means
 none were received. Duplicate header instances remain separate. The optional
@@ -52,7 +53,7 @@ Downloadable reports contain neither the submitted body nor raw server replies.
 
 ## Tested scope and its limits
 
-The passive checks reuse `gnap-types` deserialization and explicitly selected
+The three original message kinds reuse `gnap-types` deserialization and explicitly selected
 `validate()` methods, plus `gnap-crypto` Content-Digest verification:
 
 - JSON shape and polymorphism; no repeated `client` in continuation requests.
@@ -67,6 +68,94 @@ enforcement, RFC 9767 introspection, or interoperability with another vendor.
 Even an empty grant response can pass the JSON shape check; whether it is
 appropriate in a particular exchange is outside an isolated message check.
 Missing optional material is `not_tested`, never a vacuous pass.
+
+### AS discovery diagnostics (RFC 9635 section 9)
+
+The `as_discovery` kind checks a captured discovery response without fetching
+anything, including its URLs. Load the synthetic discovery example in the UI,
+or post `fixtures/as-discovery.json` to `/api/analyze`:
+
+```json
+{
+  "kind": "as_discovery",
+  "body": "{\"grant_request_endpoint\":\"https://test-as.example/gnap\",\"key_proofs_supported\":[\"httpsig\"],\"key_rotation_supported\":false}",
+  "headers": [["Content-Type", "application/json"]],
+  "queried_endpoint": "https://test-as.example/gnap",
+  "http_status": 200
+}
+```
+
+`queried_endpoint` (maximum 4096 UTF-8 bytes) and `http_status` (100..599)
+are optional captured context. Without them, only their respective checks are
+`not_tested`: malformed JSON or a missing required endpoint still fails.
+Non-null discovery context fields supplied for another message kind are rejected
+with an explicit envelope error, rather than silently ignored.
+`headers` omitted means unobserved; `[]` means a captured response with no
+headers. No digest/signature validation is performed for discovery imports.
+
+The discovery profile checks:
+
+- HTTP 200 as this OPTIONS diagnostic profile's success expectation, **not an
+  explicit status-code MUST in RFC 9635 section 9**.
+- One `application/json` Content-Type and a JSON object. Duplicate top-level
+  members fail an explicitly labelled ambiguity profile (RFC 8259 recommends
+  unique names); a last-wins interpretation is not used for dependent checks.
+- A string `grant_request_endpoint`, HTTPS URL syntax, nonempty host, no
+  fragment, and exact identity with the URL queried. Path/query/port are allowed
+  in imported documents; URL normalization is not used for comparison. HTTP
+  loopback fails even with the SDK's development-only response header.
+  After explicit raw syntax prechecks, unsupported URL interpretations are
+  `not_tested`: IPvFuture hosts, numeric ports outside u16, and other reg-name
+  forms refused by the WHATWG URL parser (for example numeric-looking names).
+  The raw grammar prechecks reject literal spaces, raw non-ASCII characters
+  (IRIs are not accepted as URIs here), malformed percent triplets, invalid
+  literal syntax and nondigit ports before consulting the parser. This is not
+  a blanket rejection of percent-encoded UTF-8 or IDNA-encoded hostnames.
+  This coverage limit is not full URI
+  validation: for example, `%FF.example` matches the reg-name production but
+  leaves the separate host UTF-8 production requirements unresolved. It is
+  neither certified nor declared invalid merely because reqwest refuses it.
+  Exact identity remains checked independently for these unusual URLs. See
+  [RFC 3986 section 3.2.2](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.2.2)
+  and [RFC 9110 section 4.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.2).
+- The safe discovery profile rejects userinfo, including `user@host`,
+  `user:password@host` and `@host`. This adopts the recipient **SHOULD** to treat
+  userinfo in an untrusted received URI as an error in
+  [RFC 9110 section 4.2.4](https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.4).
+  It is not an invented GNAP MUST or an assumption that a JSON member is an
+  HTTP field value. The finding and remediation explicitly identify this policy.
+- Optional capability arrays contain strings whose names occur in this build's
+  registry data. Absent or empty arrays mean nothing is announced and are
+  `not_tested`, not protocol failures. Unknown names are explicitly unresolved
+  (`not_tested` with remediation), not silently accepted or definitively rejected
+  as unregistered. Malformed arrays, including explicit null, fail.
+- Optional `key_rotation_supported` is boolean. Omission means unsupported;
+  a declaration of true is **not** proof that rotation works.
+
+These HTTP/JSON/URL assertions are authored independently of the SDK's
+`AsDiscovery::validate_for` and deserializer. They still use general JSON/URL
+libraries and reuse **data** from `gnap-registry`, not a second GNAP registry
+catalogue. Subject Identifier formats are not present in that crate; the eight
+names in `src/discovery.rs` were checked against the official IANA registry on
+2026-09-05. Review unknown names against the current
+[GNAP registries](https://www.iana.org/assignments/gnap/) and
+[Subject Identifier Formats](https://www.iana.org/assignments/secevent/#subject-identifier-formats).
+Registry membership proves neither feature implementation nor authorization
+for a particular client. Extra discovery fields are not validated. No live IANA
+fetch occurs while analyzing a message.
+This is not a complete HTTP/URI production audit. The live-target configuration
+also forbids credentials and never constructs a network request from an
+imported endpoint.
+
+Discovery reports use `gnap-as-discovery-diagnostics-v1`. Executing declared
+capabilities, a client discovery helper, and RS discovery/introspection under
+RFC 9767 remain untested. Synthetic fixtures and response-adapter tests are not
+evidence that a deployed AS or the complete protocol has passed.
+
+A separate [manual network smoke](LIVE_SMOKE.md) records the actual local
+workbench → deployed HTTPS AS path, observed per-check results, shared cooldown,
+reproduction commands and the remaining fixture-only limits. It is a dated
+observation, not a source-revision attestation or certification receipt.
 
 References: [RFC 9635](https://www.rfc-editor.org/rfc/rfc9635.html),
 [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767.html).
@@ -98,6 +187,22 @@ error-code membership in its registry snapshot, and `no-store`. A separate
 status class. HTTP 200 with a GNAP error is not by itself a GNAP conformance
 failure. These probes do not prove successful authentication.
 
+For discovery on a configured **AS** target, send:
+
+```json
+{"target_id":0,"consent":true,"operation":"as_discovery"}
+```
+
+This sends one OPTIONS request to the same exact configured grant endpoint,
+with no body, authorization, cookies, proof or Origin header. An authentication
+middleware denial, unsupported-method response or redirect is reported as a
+failed discovery status check, not worked around using credentials or another
+URL. The response passes through the same independent discovery assertions as
+imports, with actual status/headers and the configured URL as context. Redirect
+locations and all server response values are never echoed or followed.
+`operation` omitted (or `"rejection"`) preserves the previous API behavior.
+An RS target with `"as_discovery"` is rejected before DNS/network activity.
+
 Set `GNAP_RS_TEST_TARGETS` to an additional JSON array of at most eight exact
 protected resource URLs, with the same URL restrictions. A RS probe sends one
 credential-free GET and checks for 401 or 403. This is an operator-defined
@@ -105,7 +210,9 @@ protected-resource policy test, not a claim that every GNAP resource must be
 private. A deny-all server also passes. Valid-token access, proof, rights,
 audience, introspection and lifecycle remain untested. `/api/targets` includes
 the server-selected `role` (`as` or `rs`); public requests cannot change it.
-AS and RS share the same process-global cooldown and egress protections.
+AS rejection, AS discovery and RS rejection share the same process-global
+cooldown and egress protections. Existing AS allowlist configuration therefore
+authorizes both fixed AS operations; no new caller-controlled destination is added.
 
 Safety boundaries: no caller URL, no suffix/wildcard allowlist, no query,
 credentials, non-443 port or IP literal; resolve once, reject any private,
