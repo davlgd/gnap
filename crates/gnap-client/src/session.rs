@@ -17,13 +17,11 @@
 use crate::error::ClientError;
 use crate::transport::{HttpRequest, HttpResponse, HttpTransport};
 use gnap_core::{check_response, Event, Grant, State};
-use gnap_crypto::digest::{content_digest, DigestAlgorithm};
 use gnap_crypto::hash::{verify_interaction_hash, HashMethod, InteractionHashInput};
-use gnap_crypto::httpsig::{fresh_nonce, sign, Component, Message, SignatureInput, Tag};
 use gnap_crypto::proof::Signer;
 use gnap_types::interact::InteractCallback;
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
-use gnap_types::token::{AccessToken, Cardinality, TokenManage};
+use gnap_types::token::{AccessToken, Cardinality, TokenManage, TokenValue};
 use gnap_types::user::SubjectResponse;
 
 /// Where a grant stands after a round trip with the AS.
@@ -488,13 +486,8 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         };
 
         // GNAP-9635-§3.1-M03 — the continuation URI is used exactly as given.
-        let http = self.signed_request(
-            "POST",
-            &cont.uri,
-            body,
-            Some(cont.access_token.value.as_str()),
-            now,
-        )?;
+        let http =
+            self.signed_request("POST", &cont.uri, body, Some(&cont.access_token.value), now)?;
         let response = self.round_trip(http)?;
         let before = self.grant.clone();
         self.grant = attempt;
@@ -570,7 +563,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             "PATCH",
             &cont.uri,
             Some(body),
-            Some(cont.access_token.value.as_str()),
+            Some(&cont.access_token.value),
             now,
         )?;
         let response = self.round_trip(http)?;
@@ -718,7 +711,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             method,
             &manage.uri,
             body,
-            Some(manage.access_token.value.as_str()),
+            Some(&manage.access_token.value),
             now,
         )?;
         self.round_trip(http)
@@ -730,56 +723,14 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         method: &str,
         url: &str,
         body: Option<Vec<u8>>,
-        token: Option<&str>,
+        token: Option<&TokenValue>,
         now: u64,
     ) -> Result<HttpRequest, ClientError> {
-        let digest = body
-            .as_ref()
-            .map(|b| content_digest(b, DigestAlgorithm::Sha256));
-        // GNAP-9635-§7.2-M03 — the token travels in Authorization with the
-        // GNAP scheme, alongside the key proof.
-        let authorization = token.map(|t| format!("GNAP {t}"));
-
-        let mut components = vec![Component::Method, Component::TargetUri];
-        if digest.is_some() {
-            components.push(Component::ContentDigest);
-        }
-        if authorization.is_some() {
-            components.push(Component::Authorization);
-        }
-
-        let message = Message {
-            method,
-            target_uri: url,
-            content_digest: digest.as_deref(),
-            authorization: authorization.as_deref(),
-            other: Vec::new(),
-        };
-        let input = SignatureInput {
-            components,
-            created: now,
-            keyid: self.signer.key_id().to_owned(),
-            // §7.3.1-S13 — a unique, unguessable nonce on every signature, so
-            // that a captured request is good for one use and not for the whole
-            // of the verifier's clock window.
-            nonce: Some(fresh_nonce()?),
-            tag: Tag::Gnap,
-        };
-        let (sig_input, signature) = sign(&message, &input, self.signer, "sig1")?;
-
         let mut http = HttpRequest::new(method, url);
-        if let Some(a) = authorization {
-            http = http.header("Authorization", a);
-        }
         if let Some(b) = body {
             http = http.json_body(b);
         }
-        if let Some(d) = digest {
-            http = http.header("Content-Digest", d);
-        }
-        Ok(http
-            .header("Signature-Input", sig_input)
-            .header("Signature", signature))
+        crate::sign_request(http, self.signer, token, now)
     }
 
     fn round_trip(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
