@@ -14,7 +14,7 @@ use gnap_crypto::verify::{verify_request, Expectations, SignedRequest};
 use gnap_registry::{ErrorCode, InteractionFinishMethod};
 use gnap_types::http::{HttpRequest, HttpResponse};
 use gnap_types::interact::{InteractCallback, InteractFinish, InteractResponse};
-use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
+use gnap_types::message::{AsDiscovery, Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{AccessToken, AccessTokenResponse, BoundToken, TokenManage, TokenValue};
 use gnap_types::GnapError;
 use std::fmt;
@@ -147,6 +147,7 @@ pub struct AuthorizationServer<P, K, S, N> {
     storage: S,
     nonces: N,
     endpoints: Endpoints,
+    development_http_discovery: bool,
 }
 
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K, S, N> {
@@ -158,7 +159,21 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
             storage,
             nonces,
             endpoints,
+            development_http_discovery: false,
         }
+    }
+
+    /// Explicitly permits HTTP-loopback discovery for local development only.
+    ///
+    /// RFC 9635 §9 requires HTTPS. This opt-in does not claim an RFC exception:
+    /// HTTP discovery is allowed only for `localhost`, IPv4 loopback or `::1`,
+    /// and responses carry `GNAP-Development-Only: insecure-loopback-discovery`.
+    /// Non-loopback HTTP remains rejected. Leave this disabled in production.
+    /// It affects discovery only; it does not change grant or proof validation.
+    #[must_use]
+    pub const fn with_development_http_discovery(mut self) -> Self {
+        self.development_http_discovery = true;
+        self
     }
 
     /// The store, for inspection.
@@ -172,13 +187,77 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
     /// Handles a request, routing on its URI.
     pub fn handle(&self, request: &HttpRequest, now: u64) -> HttpResponse {
         if request.url == self.endpoints.grant {
-            self.handle_grant_request(request, now)
+            if request.method.eq_ignore_ascii_case("OPTIONS") {
+                self.handle_discovery(request)
+            } else {
+                self.handle_grant_request(request, now)
+            }
         } else if request.url.starts_with(&self.endpoints.continuation) {
             self.handle_continuation(request, now)
         } else if request.url.starts_with(&self.endpoints.token_management) {
             self.handle_token_management(request, now)
         } else {
             not_found()
+        }
+    }
+
+    /// Answers OPTIONS discovery at the exact configured grant endpoint (§9).
+    ///
+    /// No grant, key resolution, signature check or nonce consumption occurs.
+    /// Only fixed engine capabilities are announced: `httpsig` and lack of
+    /// token-bound key rotation. Optional interaction/subject fields are omitted
+    /// because their availability depends on policy and HTTP adapter behavior;
+    /// a registry enum is not a deployment's capability catalogue.
+    /// This is discovery, not a CORS preflight policy: it adds no cross-origin
+    /// permission headers. An HTTP adapter must define any such policy separately.
+    ///
+    /// Invalid public endpoint configuration returns an explicit server error,
+    /// rather than publishing a nonconformant successful discovery document.
+    /// Local HTTP requires [`Self::with_development_http_discovery`].
+    pub fn handle_discovery(&self, request: &HttpRequest) -> HttpResponse {
+        if request.url != self.endpoints.grant {
+            return not_found();
+        }
+        if !request.method.eq_ignore_ascii_case("OPTIONS") {
+            return method_not_allowed("POST, OPTIONS");
+        }
+        let discovery = AsDiscovery {
+            grant_request_endpoint: self.endpoints.grant.clone(),
+            interaction_start_modes_supported: None,
+            interaction_finish_methods_supported: None,
+            key_proofs_supported: Some(vec![gnap_registry::KeyProofingMethod::Httpsig]),
+            sub_id_formats_supported: None,
+            assertion_formats_supported: None,
+            key_rotation_supported: Some(false),
+            extra: serde_json::Map::new(),
+        };
+        let validity = if self.development_http_discovery {
+            discovery.validate_for_local_development(&request.url)
+        } else {
+            discovery.validate_for(&request.url)
+        };
+        if let Err(reason) = validity {
+            return misconfigured(&reason.to_string());
+        }
+        let body = match serde_json::to_vec(&discovery) {
+            Ok(body) => body,
+            Err(reason) => return misconfigured(&reason.to_string()),
+        };
+        let mut headers = vec![
+            ("Content-Type".into(), "application/json".into()),
+            ("Cache-Control".into(), "no-store".into()),
+            ("Allow".into(), "POST, OPTIONS".into()),
+        ];
+        if discovery.validate_for(&request.url).is_err() {
+            headers.push((
+                "GNAP-Development-Only".into(),
+                "insecure-loopback-discovery".into(),
+            ));
+        }
+        HttpResponse {
+            status: 200,
+            headers,
+            body,
         }
     }
 
@@ -190,7 +269,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
         // §2 — "The request MUST be sent as a JSON object in the content of the
         // HTTP POST request with Content-Type application/json."
         if !request.method.eq_ignore_ascii_case("POST") {
-            return method_not_allowed("POST");
+            return method_not_allowed("POST, OPTIONS");
         }
         // §4.2.3 hashes "the grant endpoint URI the client instance used to
         // make its initial request", and this server hashes the endpoint it was

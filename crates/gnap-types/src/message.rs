@@ -253,3 +253,102 @@ pub struct AsDiscovery {
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
+
+/// An unusable grant endpoint in an AS discovery response (RFC 9635 §9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryError {
+    /// The endpoint is not an absolute URL with a nonempty host and no fragment.
+    InvalidEndpoint,
+    /// RFC 9635 §9 requires HTTPS; HTTP is not a conformant discovery endpoint.
+    HttpsRequired,
+    /// The announced endpoint differs from the exact URL queried by the client.
+    EndpointMismatch,
+}
+
+impl fmt::Display for DiscoveryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidEndpoint => "grant_request_endpoint must be an absolute URL with a host and no fragment (RFC 9635 §9)",
+            Self::HttpsRequired => "grant_request_endpoint must use HTTPS (RFC 9635 §9); HTTP loopback is a separate development-only exception",
+            Self::EndpointMismatch => "grant_request_endpoint must exactly match the discovery request URL (RFC 9635 §9)",
+        })
+    }
+}
+
+impl std::error::Error for DiscoveryError {}
+
+impl AsDiscovery {
+    /// Validates the required endpoint's syntax, HTTPS scheme and exact identity.
+    ///
+    /// Port, path and query are allowed; fragments and an empty host are not.
+    /// The endpoint is compared without URL normalization. This checks the
+    /// endpoint, not whether advertised capabilities actually work or belong to
+    /// their respective current registries. Unknown extension fields are kept.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DiscoveryError`] for a malformed, non-HTTPS or mismatched URL.
+    pub fn validate_for(&self, queried_endpoint: &str) -> Result<(), DiscoveryError> {
+        self.validate_endpoint(queried_endpoint, false)
+    }
+
+    /// Development-only variant permitting HTTP on explicit loopback hosts.
+    ///
+    /// **This is not RFC 9635 §9 conformance.** It exists for local examples
+    /// running without a TLS reverse proxy. Only `localhost`, IPv4 loopback
+    /// addresses and `::1` may use HTTP. Other schemes/hosts remain rejected.
+    /// It does not resolve DNS or relax exact endpoint identity. Production and
+    /// conformance consumers must use [`Self::validate_for`] instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DiscoveryError`] for an invalid URL, non-loopback HTTP endpoint
+    /// or a mismatch with the URL queried by the client.
+    pub fn validate_for_local_development(
+        &self,
+        queried_endpoint: &str,
+    ) -> Result<(), DiscoveryError> {
+        self.validate_endpoint(queried_endpoint, true)
+    }
+
+    fn validate_endpoint(
+        &self,
+        queried_endpoint: &str,
+        allow_loopback_http: bool,
+    ) -> Result<(), DiscoveryError> {
+        let endpoint = &self.grant_request_endpoint;
+        if !crate::uri::is_absolute(endpoint) {
+            return Err(DiscoveryError::InvalidEndpoint);
+        }
+        let (scheme, rest) = endpoint
+            .split_once("://")
+            .ok_or(DiscoveryError::InvalidEndpoint)?;
+        // The shared URI grammar has already checked authority/IP/port syntax.
+        // RFC 3986 allows an empty reg-name; discovery additionally needs a host.
+        let authority = rest.split(['/', '?']).next().unwrap_or_default();
+        let host_port = authority.rsplit('@').next().unwrap_or_default();
+        let host = host_port.strip_prefix('[').map_or_else(
+            || host_port.split(':').next().unwrap_or_default(),
+            |literal| literal.split(']').next().unwrap_or_default(),
+        );
+        if host.is_empty() {
+            return Err(DiscoveryError::InvalidEndpoint);
+        }
+        let loopback = host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback());
+        if !(scheme.eq_ignore_ascii_case("https")
+            || allow_loopback_http
+                && scheme.eq_ignore_ascii_case("http")
+                && loopback
+                && !authority.contains('@'))
+        {
+            return Err(DiscoveryError::HttpsRequired);
+        }
+        if endpoint != queried_endpoint {
+            return Err(DiscoveryError::EndpointMismatch);
+        }
+        Ok(())
+    }
+}
