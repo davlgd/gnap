@@ -7,7 +7,7 @@
     "test_as_discovery.DiscoveryResponse.test_options_response_media_type",
     "test_as_discovery.DiscoveryResponse.test_response_is_json_object"
   ],
-  "finished_at_unix_utc": 1788645383,
+  "finished_at_unix_utc": 1788646465,
   "observation": {
     "capture_origin": "live",
     "capture_path": "conformance/captures/gnap-delegation-discovery-2026-09-05.json",
@@ -52,9 +52,9 @@
     "conformance/captures/gnap-delegation-discovery-2026-09-05.json": "90a8ea8d27ce8f546a14de28aff0273d62f1e85a3e275bcb4d2e38a93e73246f",
     "conformance/discovery.py": "0e9ffda0a6b82435d6536279568966cd9cceb083cff63b70598efe54c448362b",
     "conformance/scenarios/test_as_discovery.py": "36f564c4b4c6f8c6595f911112b00bceb4dcfbcec3a73a4f5a7c611ced8befbc",
-    "tools/conformance_ledger.py": "0fbde7df50084292613d00788e890d32cc02194ecce72cfc4a7d265e093b97c0"
+    "tools/conformance_ledger.py": "44aca4be5508834631a99b114bfe13276e8b68c80e8c26d0b3c36f1f2e69f016"
   },
-  "source_revision": "28275dca68cb5933f27a34af0af3c0076cf470f4",
-  "started_at_unix_utc": 1788645383,
+  "source_revision": "e45b96352239e27092b98a2c9834bd01137a8168",
+  "started_at_unix_utc": 1788646465,
   "working_tree_dirty": false
 }
