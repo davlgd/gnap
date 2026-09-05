@@ -18,6 +18,12 @@ steps, and key-bound requests and tokens as the default.
 > or an implementation of the RFC 9767 connection APIs.
 > See [what is implemented, and what is not](#what-is-implemented-and-what-is-not).
 
+The [support matrix](docs/support-matrix.md) records the selected scope and its
+evidence: Biscuit is the structured-token target, signed/encrypted JWTs are
+acceptable alternatives, and Macaroon/ZCAP implementations are out of scope for
+now. HTTP Message Signatures are preferred; mTLS is an allowed addition.
+These are project decisions, not claims that those features are already present.
+
 [RFC 9635]: https://www.rfc-editor.org/rfc/rfc9635
 [RFC 9767]: https://www.rfc-editor.org/rfc/rfc9767
 
@@ -105,7 +111,7 @@ their own dependency locks and toolchain requirements:
   certification verdict.
 
 Try the hosted [delegation demo](https://app-05b4e19a-d5da-408d-b524-2d9609e5cd01.cleverapps.io)
-and [diagnostic workbench](https://app-dd74490a-b66e-4d69-beb1-ed9fcfdd6d91.cleverapps.io).
+and [diagnostic workbench](https://gnap-conformance.cleverapps.io).
 These experimental deployments use synthetic data and volatile state. Do not
 submit personal data or production credentials. Active probes are restricted to
 operator-approved targets, not arbitrary public endpoints.
@@ -276,11 +282,22 @@ Revoked-token records are removed. A later call to the old management URI is
 rejected because its key binding can no longer be verified; the idempotent
 revocation recommended in §6.2 would require retaining authentication metadata.
 
+Access-token values are opaque references: the SDK does not yet issue or validate
+JWT, Biscuit, Macaroon or ZCAP access tokens. Registry entries alone are not
+implementations. The AS issues neither bearer nor `durable` tokens.
+
+Key objects reach the deployment's `KeyResolver`, but no JWK or X.509 conversion
+to a verifier is supplied. Subject assertions are represented, not authenticated:
+the `id_token` payload is decoded only for within-response consistency checks,
+and no ID-token or SAML validation service is provided. Push-finish callbacks
+are constructed and validated in protocol tests; sending them over HTTP remains
+the adapter's responsibility.
+
 ## Roadmap
 
 | | |
 |---|---|
-| ✅ | IANA registries, message model, key proofing, interaction hash |
+| ✅ | Vendored IANA data, message model, `httpsig`/PS256 primitives and interaction hash; not every represented capability has a runtime implementation |
 | ✅ | `gnap-core` — the grant state machine (§1.5) |
 | ✅ | `gnap-client` — the client instance role, §2 through §5 |
 | ✅ | `gnap-as` — the authorization server role, §2 through §5 |
@@ -289,7 +306,13 @@ revocation recommended in §6.2 would require retaining authentication metadata.
 | ⬜ | `gnap-rs` — RFC 9767, introspection and resource sets |
 | 🚧 | HTTP application acceptance tests and bounded web diagnostics; full network conformance harness remains open |
 
+The [support matrix](docs/support-matrix.md) is the detailed capability inventory;
+these milestones are not blanket conformance claims for entire RFC sections.
+
 ## Working on it
+
+Changes follow the [contribution and review process](CONTRIBUTING.md), including
+adversarial review and the maintainer's Copilot review gate before merge.
 
 ```console
 cargo test                                   # unit, integration and every RFC vector
