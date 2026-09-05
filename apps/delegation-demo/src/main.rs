@@ -976,7 +976,11 @@ async fn protocol(
 async fn main() {
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
     let origin = std::env::var("APP_ORIGIN").unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
-    let canonical = CanonicalOrigin::parse(&origin).expect("Invalid APP_ORIGIN");
+    let canonical = CanonicalOrigin::parse(&origin).unwrap_or_else(|reason| {
+        // Do not echo the supplied URL: an invalid value may contain credentials.
+        eprintln!("Invalid APP_ORIGIN: {reason}");
+        std::process::exit(1);
+    });
     eprintln!("Generating an ephemeral 2048-bit RSA client key; no fixtures or private key files are used.");
     let signer = Arc::new(
         Ps256Signer::generate(2048, "delegation-demo-ephemeral")
