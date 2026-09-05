@@ -49,6 +49,9 @@ pub struct GrantRecord {
 /// An access token the AS issued, and what it needs to manage it (§6).
 #[derive(Debug, Clone)]
 pub struct TokenRecord {
+    /// Optional format-native identifier for a deployment's live-token index.
+    /// The SDK does not publish or synchronize this state with resource servers.
+    pub identifier: Option<Vec<u8>>,
     /// When this value was issued, in seconds since the Unix epoch.
     /// Successful value rotation replaces this timestamp as well as the value.
     pub issued_at: u64,

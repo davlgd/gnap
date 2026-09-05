@@ -1406,6 +1406,7 @@ mod tests {
     }
     fn test_record(value: &str) -> TokenRecord {
         TokenRecord {
+            identifier: None,
             issued_at: now(),
             token: serde_json::from_value(
                 json!({"value":value,"access":["synthetic-folder:read"],"expires_in":1200}),

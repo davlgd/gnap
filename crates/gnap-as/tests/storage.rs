@@ -127,6 +127,7 @@ fn a_shared_store_is_the_store_itself() {
 
     // Tokens: the same handle names the same record on every side.
     let issued = TokenRecord {
+        identifier: None,
         issued_at: 1_000,
         token: serde_json::from_str(r#"{"value":"AAA","access":["read"]}"#).unwrap(),
         client: serde_json::from_str(r#""client-541-ab""#).unwrap(),
@@ -144,6 +145,7 @@ fn a_shared_store_is_the_store_itself() {
 #[test]
 fn token_record_lifetime_boundaries_and_invalid_external_records() {
     let mut record = gnap_as::TokenRecord {
+        identifier: None,
         issued_at: 100,
         token: serde_json::from_str(r#"{"value":"AAA","expires_in":20}"#).unwrap(),
         client: serde_json::from_str(r#""client""#).unwrap(),

@@ -3005,6 +3005,7 @@ fn management_server<N: Nonces>(
     storage.put_token(
         "oldhandle",
         TokenRecord {
+            identifier: None,
             issued_at: 1_000,
             token,
             client: serde_json::from_str(r#""known-client""#).unwrap(),
@@ -3545,6 +3546,7 @@ fn rotation_refusal_preserves_value_rights_lifetime_and_timestamp() {
             "manage":{"uri":"https://as.example/token/oldhandle", "access_token":{"value":"oldmanagement"}}
         })).unwrap();
         let original = TokenRecord {
+            identifier: None,
             issued_at,
             token,
             client: request().client,
