@@ -61,6 +61,11 @@ test or recorded execution supports a claim that a behavior was exercised.
 There is no overall conformance score. This is a capability-level inventory, not
 yet an exhaustive ledger of every MUST, SHOULD and MAY in both RFCs.
 
+The [public normative ledger](../conformance/README.md) supplies a reproducible
+source inventory for that next level of review. It preserves each BCP14 marker,
+its context and the profile capability lists, without treating an extracted
+block or a passing test of the ledger itself as a completed protocol obligation.
+
 ## Token formats and behavior
 
 Formats are agreed between the AS and RS. The registered names and announcement

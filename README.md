@@ -335,6 +335,13 @@ the adapter's responsibility.
 The [support matrix](docs/support-matrix.md) is the detailed capability inventory;
 these milestones are not blanket conformance claims for entire RFC sections.
 
+The [public normative ledger](conformance/README.md) preserves the source context
+behind RFC 9635 and RFC 9767 requirements, including recommendations and profile
+capability lists. Its [report](conformance/REPORT.md) distinguishes unresolved
+applicability from executed observations. The initial inventory is not yet a
+reviewed set of atomic obligations, and its own regression tests do not count
+as evidence that GNAP is implemented.
+
 ## Working on it
 
 Changes follow the [contribution and review process](CONTRIBUTING.md), including
@@ -347,6 +354,8 @@ cargo doc --workspace --no-deps --open       # every public item is documented
 
 python3 tools/check_quotes.py                # selected RFC quotations match the text
 python3 tools/check_readme.py                # transcript and available local scope check
+python3 -B tools/conformance_ledger.py check  # pinned source inventory and evidence accounting
+python3 -B tools/conformance_ledger.py run-tests  # test the ledger itself, not GNAP
 ```
 
 The last two are worth explaining. The code quotes the RFCs constantly, to say
