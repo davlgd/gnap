@@ -52,7 +52,8 @@ impl CanonicalOrigin {
             || parsed.fragment().is_some()
         {
             return Err(
-                "APP_ORIGIN must be a canonical origin without credentials, path or trailing slash",
+                "APP_ORIGIN must use canonical spelling (lowercase host, no default port), \
+                 without credentials, path, query, fragment or trailing slash",
             );
         }
         if parsed.scheme() != "https"
@@ -1076,6 +1077,35 @@ mod tests {
         }
         assert!(CanonicalOrigin::parse("https://demo.example").is_ok());
         assert!(CanonicalOrigin::parse("http://127.0.0.1:18081").is_ok());
+    }
+
+    #[test]
+    fn ipv6_authorities_preserve_the_bracketed_host_and_port() {
+        for (value, host) in [
+            ("https://[::1]", "[::1]"),
+            ("https://[::1]:8443", "[::1]:8443"),
+            ("https://[2001:db8::1]:8443", "[2001:db8::1]:8443"),
+        ] {
+            let origin = CanonicalOrigin::parse(value).unwrap();
+            let parsed: Authority = host.parse().unwrap();
+            assert_eq!(
+                parsed.host(),
+                reqwest::Url::parse(value).unwrap().host_str().unwrap()
+            );
+            for version in [Version::HTTP_11, Version::HTTP_2] {
+                let request = Request::builder()
+                    .version(version)
+                    .uri(format!("{value}/api/status"))
+                    .header("host", host)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                assert_eq!(origin.matches_request(&request), Ok(true));
+            }
+            for invalid in ["[::1]:", "[::1]:invalid", "[::1]:65536"] {
+                assert_eq!(origin.authority(invalid), Err(StatusCode::BAD_REQUEST));
+            }
+            assert_ne!(origin.authority("[::1]:9443").unwrap(), origin.authority);
+        }
     }
 
     #[test]
