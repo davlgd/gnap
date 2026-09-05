@@ -1,6 +1,6 @@
 //! Actual GNAP Session → AS TokenEncoder → native Biscuit → RS authorization.
 use biscuit_auth::KeyPair;
-use gnap_as::TokenStore;
+use gnap_as::{GrantAggregate, GrantSelector, GrantStore, StoreError};
 use gnap_biscuit::{LiveDecision, VerifiedToken};
 use gnap_biscuit_files::{
     authorization::{self, Engine, Store},
@@ -14,7 +14,8 @@ use gnap_crypto::Ps256Signer;
 use std::{
     cell::Cell,
     collections::BTreeMap,
-    sync::{Arc, OnceLock},
+    sync::{mpsc, Arc, Barrier, OnceLock},
+    time::Duration,
 };
 
 fn client() -> &'static Ps256Signer {
@@ -250,7 +251,7 @@ fn resource_check_authenticates_rs_and_correlates_the_exact_request() {
 }
 
 #[test]
-fn unknown_ambiguous_expired_or_unavailable_authorities_fail_closed() {
+fn colliding_expired_or_unavailable_authorities_fail_closed() {
     let f = fixture();
     let direct = Direct(&f.engine, Cell::new(f.now));
     let mut session = Session::new(&direct, client(), "https://as.example/gnap");
@@ -266,29 +267,51 @@ fn unknown_ambiguous_expired_or_unavailable_authorities_fail_closed() {
         .rsplit('/')
         .next()
         .unwrap();
-    let record = f.store.get_token(handle).unwrap();
+    let snapshot = f
+        .store
+        .lookup(GrantSelector::Management(handle))
+        .unwrap()
+        .unwrap();
+    let record = snapshot.aggregate.tokens[handle].clone();
     let id = record.identifier.clone().unwrap();
     assert_eq!(
         f.store
             .reserve_resource(&id, "first", f.now, || Some(f.now)),
         LiveDecision::Allowed
     );
-    f.store.put_token("duplicate", record.clone());
+    assert_eq!(
+        f.store.create(snapshot.aggregate.clone()).unwrap_err(),
+        StoreError::Collision
+    );
     assert_eq!(
         f.store
-            .reserve_resource(&id, "ambiguous", f.now, || Some(f.now)),
-        LiveDecision::Denied
+            .reserve_resource(&id, "collision-did-not-remove-original", f.now, || Some(
+                f.now
+            )),
+        LiveDecision::Allowed
     );
-    f.store.take_token("duplicate");
-    let mut expired = record.clone();
-    expired.issued_at = f.now - 1200;
-    f.store.put_token(handle, expired);
+    let mut expired = snapshot.aggregate.clone();
+    expired.tokens.get_mut(handle).unwrap().issued_at = f.now - 1200;
+    let expired = f
+        .store
+        .compare_exchange(snapshot.id, snapshot.revision, expired)
+        .unwrap();
     assert_eq!(
         f.store
             .reserve_resource(&id, "expired", f.now, || Some(f.now)),
         LiveDecision::Denied
     );
-    f.store.put_token(handle, record);
+    assert!(f
+        .store
+        .lookup(GrantSelector::Id(snapshot.id))
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        f.store
+            .compare_exchange(snapshot.id, expired.revision, snapshot.aggregate)
+            .unwrap_err(),
+        StoreError::Conflict
+    );
     assert_eq!(
         f.rs.handle_with_clock(
             &proof(&token.value, "GET", "notes", f.now),
@@ -521,6 +544,242 @@ fn resource_check_windows_and_nonce_scope_are_enforced_by_the_as_store() {
             .filter(|d| **d == LiveDecision::Denied)
             .count(),
         3
+    );
+}
+
+#[test]
+fn resource_reservation_and_rotation_share_one_publication_lock() {
+    let f = fixture();
+    let direct = Direct(&f.engine, Cell::new(f.now));
+    let mut session = Session::new(&direct, client(), "https://as.example/gnap");
+    let issued = session
+        .start(&grant(client(), "https://rs.example").unwrap(), f.now)
+        .unwrap();
+    let token = &issued.response().access_token.as_ref().unwrap().tokens[0];
+    let before = f
+        .store
+        .lookup(GrantSelector::AccessToken(token.value.as_str()))
+        .unwrap()
+        .unwrap();
+    let old_id = before
+        .aggregate
+        .tokens
+        .values()
+        .next()
+        .unwrap()
+        .identifier
+        .clone()
+        .unwrap();
+    let manage = token.manage.as_ref().unwrap();
+    let rotation = sign_request(
+        HttpRequest::new("POST", &manage.uri),
+        client(),
+        Some(&manage.access_token.value),
+        f.now,
+    )
+    .unwrap();
+    let (entered, in_check) = mpsc::channel();
+    let (release, proceed) = mpsc::channel();
+    let (finished, completion) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let store = &f.store;
+        let id = &old_id;
+        let now = f.now;
+        let reading = scope.spawn(move || {
+            store.reserve_resource(id, "spent-before-rotation", now, || {
+                entered.send(()).unwrap();
+                proceed.recv_timeout(Duration::from_secs(5)).unwrap();
+                Some(now)
+            })
+        });
+        in_check.recv_timeout(Duration::from_secs(5)).unwrap();
+        let rotating = scope.spawn(|| {
+            let response = f.engine.handle(&rotation, f.now);
+            finished.send(response).unwrap();
+        });
+        // This bounded wait observes the concurrent schedule; it is not a
+        // timing-independent proof of lock ownership. A separate unit test
+        // checks ownership directly with try_lock inside the clock callback.
+        assert!(matches!(
+            completion.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release.send(()).unwrap();
+        assert_eq!(reading.join().unwrap(), LiveDecision::Allowed);
+        rotating.join().unwrap();
+        assert_eq!(completion.recv().unwrap().status, 200);
+    });
+    let after = f
+        .store
+        .lookup(GrantSelector::Id(before.id))
+        .unwrap()
+        .unwrap();
+    let replacement = after.aggregate.tokens.values().next().unwrap();
+    let new_id = replacement.identifier.as_ref().unwrap();
+    assert_ne!(&old_id, new_id);
+    assert!(f
+        .store
+        .lookup(GrantSelector::TokenIdentifier(&old_id))
+        .unwrap()
+        .is_none());
+    assert!(f
+        .store
+        .lookup(GrantSelector::AccessToken(token.value.as_str()))
+        .unwrap()
+        .is_none());
+    assert!(f
+        .store
+        .lookup(GrantSelector::Management(
+            manage.uri.rsplit('/').next().unwrap()
+        ))
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        f.store
+            .reserve_resource(&old_id, "fresh-old", f.now, || Some(f.now)),
+        LiveDecision::Denied
+    );
+    assert_eq!(
+        f.store
+            .reserve_resource(new_id, "spent-before-rotation", f.now, || Some(f.now)),
+        LiveDecision::Denied
+    );
+    assert_eq!(
+        f.store
+            .reserve_resource(new_id, "fresh-new", f.now, || Some(f.now)),
+        LiveDecision::Allowed
+    );
+    assert_eq!(
+        f.store
+            .compare_exchange(before.id, before.revision, before.aggregate)
+            .unwrap_err(),
+        StoreError::Conflict
+    );
+
+    // Reverse ordering: revocation wins before a resource check starts. Even
+    // a previously valid snapshot cannot bring that authority back afterwards.
+    let mut revoked = after.aggregate.clone();
+    revoked.tokens.clear();
+    revoked.revoked = true;
+    f.store
+        .compare_exchange(after.id, after.revision, revoked)
+        .unwrap();
+    assert_eq!(
+        f.store
+            .reserve_resource(new_id, "after-revoke", f.now, || Some(f.now)),
+        LiveDecision::Denied
+    );
+    assert_eq!(
+        f.store
+            .compare_exchange(after.id, after.revision, after.aggregate.clone())
+            .unwrap_err(),
+        StoreError::Conflict
+    );
+    assert!(f
+        .store
+        .lookup(GrantSelector::TokenIdentifier(new_id))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn concurrent_create_enforces_capacity_and_removal_keeps_resource_reservations() {
+    let f = fixture();
+    let direct = Direct(&f.engine, Cell::new(f.now));
+    let mut session = Session::new(&direct, client(), "https://as.example/gnap");
+    let issued = session
+        .start(&grant(client(), "https://rs.example").unwrap(), f.now)
+        .unwrap();
+    let token = &issued.response().access_token.as_ref().unwrap().tokens[0];
+    let original = f
+        .store
+        .lookup(GrantSelector::AccessToken(token.value.as_str()))
+        .unwrap()
+        .unwrap();
+    let native_id = original
+        .aggregate
+        .tokens
+        .values()
+        .next()
+        .unwrap()
+        .identifier
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        f.store
+            .reserve_resource(native_id, "survives-removal", f.now, || Some(f.now)),
+        LiveDecision::Allowed
+    );
+    // These candidates exercise storage publication, not Biscuit verification;
+    // the native-token lifecycle test above covers the actual encoder.
+    let candidate = |n: u64| -> GrantAggregate {
+        let mut candidate = original.aggregate.clone();
+        let mut record = candidate.tokens.drain().next().unwrap().1;
+        record.token.value =
+            gnap_types::token::TokenValue::new(format!("capacity-value-{n}")).unwrap();
+        let mut id = vec![0; 64];
+        id[..8].copy_from_slice(&n.to_be_bytes());
+        record.identifier = Some(id);
+        candidate
+            .tokens
+            .insert(format!("capacity-handle-{n}"), record);
+        candidate
+    };
+    for n in 1..gnap_biscuit_files::MAX_RECORDS as u64 - 1 {
+        f.store.create(candidate(n)).unwrap();
+    }
+    let barrier = Barrier::new(2);
+    let outcomes = std::thread::scope(|scope| {
+        [100, 101]
+            .map(|n| {
+                scope.spawn({
+                    let candidate = &candidate;
+                    let barrier = &barrier;
+                    let store = &f.store;
+                    move || {
+                        let aggregate = candidate(n);
+                        barrier.wait();
+                        store.create(aggregate)
+                    }
+                })
+            })
+            .map(|thread| thread.join().unwrap())
+    });
+    assert_eq!(outcomes.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|r| matches!(r, Err(StoreError::Unavailable)))
+            .count(),
+        1
+    );
+    f.store.remove(original.id, original.revision).unwrap();
+    assert_eq!(
+        f.store
+            .compare_exchange(original.id, original.revision, original.aggregate.clone())
+            .unwrap_err(),
+        StoreError::Conflict
+    );
+    let next = f.store.create(candidate(102)).unwrap();
+    assert_ne!(next.id, original.id);
+    let next_id = next
+        .aggregate
+        .tokens
+        .values()
+        .next()
+        .unwrap()
+        .identifier
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        f.store
+            .reserve_resource(next_id, "survives-removal", f.now, || Some(f.now)),
+        LiveDecision::Denied
+    );
+    assert_eq!(
+        f.store
+            .reserve_resource(next_id, "new-request", f.now, || Some(f.now)),
+        LiveDecision::Allowed
     );
 }
 

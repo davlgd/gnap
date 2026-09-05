@@ -11,16 +11,16 @@ use axum::{
 };
 use biscuit_auth::{KeyPair, PublicKey};
 use gnap_as::{
-    nonce::OsNonces, AuthorizationServer, Decision, EncodedToken, Endpoints, GrantRecord,
-    GrantStore, KeyResolver, MemoryStorage, NonceStore, Policy, TokenEncoder, TokenEncodingContext,
-    TokenEncodingError, TokenRecord, TokenStore,
+    nonce::OsNonces, AuthorizationServer, Decision, EncodedToken, Endpoints, GrantAggregate,
+    GrantId, GrantSelector, GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore,
+    Policy, Revision, StoreError, TokenEncoder, TokenEncodingContext, TokenEncodingError,
 };
 use gnap_biscuit::{FileAction, FileRight, Issuer, VerifiedToken};
 use gnap_crypto::{Ps256Verifier, Verifier};
 use gnap_types::{client::Client, key::Key, message::GrantRequest};
 use serde_json::{Map, Value};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashSet},
     num::NonZeroU64,
     sync::{Arc, Mutex},
 };
@@ -102,20 +102,42 @@ impl TokenEncoder for Encoder {
 
 #[derive(Default)]
 pub struct Store {
-    base: MemoryStorage,
     state: Mutex<LiveState>,
     nonces: crate::resource_check::Nonces,
 }
 #[derive(Default)]
 struct LiveState {
-    tokens: HashMap<String, TokenRecord>,
+    base: MemoryStorage,
+    // Retention inventory only. The SDK owns every credential/native-id index.
+    grants: HashSet<GrantId>,
     requests: crate::replay::Reservations,
 }
+impl LiveState {
+    fn cleanup(&mut self, now: u64) -> Result<(), StoreError> {
+        for id in self.grants.iter().copied().collect::<Vec<_>>() {
+            let snapshot = self
+                .base
+                .lookup(GrantSelector::Id(id))?
+                .ok_or(StoreError::Invalid)?;
+            // This adapter retains at most one token per immediate grant.
+            if snapshot.aggregate.revoked
+                || snapshot
+                    .aggregate
+                    .tokens
+                    .values()
+                    .all(|t| !t.is_valid_at(now))
+            {
+                self.base.remove(id, snapshot.revision)?;
+                self.grants.remove(&id);
+            }
+        }
+        // Reservations outlive an individual authority: never clear them here.
+        Ok(())
+    }
+}
 impl Store {
-    pub fn live_count(&self, now: u64) -> usize {
-        let mut state = self.state.lock().unwrap();
-        state.tokens.retain(|_, t| t.is_valid_at(now));
-        state.tokens.len()
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, LiveState>, StoreError> {
+        self.state.lock().map_err(|_| StoreError::Unavailable)
     }
     /// Authority activity and a client-key-scoped nonce reservation are one
     /// critical section. Rotation never resets this key's request history.
@@ -127,7 +149,9 @@ impl Store {
         clock: impl FnOnce() -> Option<u64>,
     ) -> gnap_biscuit::LiveDecision {
         use gnap_biscuit::LiveDecision;
-        let mut state = self.state.lock().unwrap();
+        let Ok(mut state) = self.lock() else {
+            return LiveDecision::Unavailable;
+        };
         let Some(now) = clock() else {
             state.requests.fail_clock();
             return LiveDecision::Unavailable;
@@ -136,7 +160,16 @@ impl Store {
         if !state.requests.clock_ok(now, instant) {
             return LiveDecision::Unavailable;
         }
-        let mut matches = state
+        if state.cleanup(now).is_err() {
+            return LiveDecision::Unavailable;
+        }
+        let snapshot = match state.base.lookup(GrantSelector::TokenIdentifier(id)) {
+            Ok(Some(snapshot)) if !snapshot.aggregate.revoked => snapshot,
+            Ok(_) => return LiveDecision::Denied,
+            Err(_) => return LiveDecision::Unavailable,
+        };
+        let mut matches = snapshot
+            .aggregate
             .tokens
             .values()
             .filter(|r| r.identifier.as_deref() == Some(id));
@@ -153,17 +186,43 @@ impl Store {
     }
 }
 impl GrantStore for Store {
-    fn put(&self, k: &str, r: GrantRecord) {
-        self.base.put(k, r)
+    fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.lock()?;
+        state.cleanup(crate::now().ok_or(StoreError::Unavailable)?)?;
+        // This consumer issues one finite-lived authority, without continuation.
+        if aggregate.tokens.len() != 1 || aggregate.record.continuation_token.is_some() {
+            return Err(StoreError::Invalid);
+        }
+        if state.grants.len() >= MAX_RECORDS {
+            return Err(StoreError::Unavailable);
+        }
+        let snapshot = state.base.create(aggregate)?;
+        state.grants.insert(snapshot.id);
+        Ok(snapshot)
     }
-    fn get(&self, k: &str) -> Option<GrantRecord> {
-        self.base.get(k)
+    fn lookup(&self, selector: GrantSelector<'_>) -> Result<Option<GrantSnapshot>, StoreError> {
+        let mut state = self.lock()?;
+        state.cleanup(crate::now().ok_or(StoreError::Unavailable)?)?;
+        state.base.lookup(selector)
     }
-    fn take(&self, k: &str) -> Option<GrantRecord> {
-        self.base.take(k)
+    fn compare_exchange(
+        &self,
+        id: GrantId,
+        revision: Revision,
+        replacement: GrantAggregate,
+    ) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.lock()?;
+        state.cleanup(crate::now().ok_or(StoreError::Unavailable)?)?;
+        if replacement.tokens.len() > 1 || replacement.record.continuation_token.is_some() {
+            return Err(StoreError::Invalid);
+        }
+        state.base.compare_exchange(id, revision, replacement)
     }
-    fn update_by_interaction(&self, k: &str, f: &mut dyn FnMut(&mut GrantRecord) -> bool) -> bool {
-        self.base.update_by_interaction(k, f)
+    fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError> {
+        let mut state = self.lock()?;
+        state.base.remove(id, revision)?;
+        state.grants.remove(&id);
+        Ok(())
     }
 }
 impl NonceStore for Store {
@@ -171,30 +230,12 @@ impl NonceStore for Store {
         gnap_crypto::NonceMemory::remember_nonce(&self.nonces, n, now)
     }
 }
-impl TokenStore for Store {
-    fn put_token(&self, k: &str, r: TokenRecord) {
-        self.state.lock().unwrap().tokens.insert(k.into(), r);
-    }
-    fn get_token(&self, k: &str) -> Option<TokenRecord> {
-        self.state.lock().unwrap().tokens.get(k).cloned()
-    }
-    fn take_token(&self, k: &str) -> Option<TokenRecord> {
-        self.state.lock().unwrap().tokens.remove(k)
-    }
-}
 pub struct FilePolicy {
     allowed: Vec<FileRight>,
-    store: Arc<Store>,
 }
 impl Policy for FilePolicy {
     fn evaluate(&self, r: &GrantRequest) -> Decision {
         let deny = || Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
-        let Some(now) = crate::now() else {
-            return deny();
-        };
-        if self.store.live_count(now) >= MAX_RECORDS {
-            return deny();
-        }
         let Some(request) = &r.access_token else {
             return deny();
         };
@@ -241,7 +282,6 @@ pub fn engine(
     let as_ = AuthorizationServer::new(
         FilePolicy {
             allowed: rights(&rs.value),
-            store: store.clone(),
         },
         KnownClient(client),
         store,
@@ -263,7 +303,7 @@ pub fn engine(
 #[derive(Clone)]
 pub struct App {
     pub origin: Origin,
-    pub engine: Arc<Mutex<Engine>>,
+    pub engine: Arc<Engine>,
     pub check: Arc<CheckService>,
     workers: Arc<Semaphore>,
 }
@@ -271,7 +311,7 @@ impl App {
     pub fn new(origin: Origin, engine: Engine, check: CheckService) -> Self {
         Self {
             origin,
-            engine: Arc::new(Mutex::new(engine)),
+            engine: Arc::new(engine),
             check: Arc::new(check),
             workers: Arc::new(Semaphore::new(4)),
         }
@@ -283,9 +323,8 @@ async fn protocol(State(app): State<App>, request: Request) -> axum::response::R
         if request.url == format!("{}/resource-check", app.origin.value) {
             app.check.handle(&request)
         } else {
-            let engine = app.engine.lock().unwrap();
             match crate::now() {
-                Some(now) => engine.handle(&request, now),
+                Some(now) => app.engine.handle(&request, now),
                 None => http::denied(503),
             }
         }
@@ -304,4 +343,50 @@ pub fn router(app: App) -> Router {
             .with_state(app),
         origin,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_decision_holds_the_publication_lock_before_reading_time() {
+        let store = Store::default();
+        let called = std::cell::Cell::new(false);
+        let result = store.reserve_resource(&[0; 64], "request", 1, || {
+            called.set(true);
+            assert!(matches!(
+                store.state.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ));
+            Some(1)
+        });
+        assert!(called.get());
+        assert_eq!(result, gnap_biscuit::LiveDecision::Denied);
+        assert!(store.state.try_lock().is_ok());
+    }
+
+    #[test]
+    fn unavailable_storage_is_not_reported_as_an_unknown_authority() {
+        let store = Store::default();
+        std::thread::scope(|scope| {
+            assert!(scope
+                .spawn(|| {
+                    let _lock = store.state.lock().unwrap();
+                    panic!("injected storage failure");
+                })
+                .join()
+                .is_err());
+        });
+        assert_eq!(
+            store
+                .lookup(GrantSelector::TokenIdentifier(&[0; 64]))
+                .unwrap_err(),
+            StoreError::Unavailable
+        );
+        assert_eq!(
+            store.reserve_resource(&[0; 64], "request", 1, || Some(1)),
+            gnap_biscuit::LiveDecision::Unavailable
+        );
+    }
 }

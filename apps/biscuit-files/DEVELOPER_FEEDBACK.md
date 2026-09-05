@@ -50,13 +50,20 @@ synthetic shared files, fixed immediate approval, authority-wide revocation,
 bounded in-memory state and no public deployment claim. Local attenuation
 preserves the client's key and is not RFC 9767 downstream token derivation.
 
-The current SDK's take/restore management sequence also has a concurrency
-limitation: a failed operation can restore a record while another SDK caller
-is concurrently modifying it. This application serializes its own management
-dispatch with an engine mutex, which mitigates that path here; it does not
-establish that the SDK store contract is race-free for other consumers. The
-SDK's compare-and-swap migration is a separate fix, not something this example
-can claim to provide through its application lock.
+The SDK's former take/restore management sequence exposed another concurrency
+problem: a failed operation could restore a record while another caller was
+modifying it. The SDK now publishes a grant and all its token indexes in one
+version-checked compare-and-swap. This consumer uses that contract directly;
+the temporary engine-wide mutex is gone.
+
+The adapter keeps only an inventory of grant IDs for retention and capacity,
+not a second credential index. A shared lock covers SDK publication and the
+native-identifier lookup plus resource-nonce reservation. Tests suspend a
+resource decision while a real signed rotation is pending, then verify that
+old indexes disappear together and that neither a stale snapshot nor a revoked
+authority can be reactivated. Concurrent creation also respects the 64-authority
+limit. Purging a grant never resets its client's resource reservations, and
+storage unavailability remains an error rather than looking like absence.
 
 HTTP integration caught another boundary detail: an explicit empty signed body
 must not become an absent body. Dispatch now preserves `Some(empty)` when a

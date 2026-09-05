@@ -91,9 +91,10 @@ jobs:
           workspaces: |
             apps/delegation-demo -> target
             apps/conformance-web -> target
+            apps/biscuit-files -> target
       - name: Check and build standalone consumers
         run: |
-          for app in delegation-demo conformance-web; do
+          for app in delegation-demo conformance-web biscuit-files; do
             cargo fmt --manifest-path "apps/$app/Cargo.toml" --check
             cargo clippy --manifest-path "apps/$app/Cargo.toml" --all-targets --locked -- -D warnings
             cargo test --manifest-path "apps/$app/Cargo.toml" --locked

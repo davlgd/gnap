@@ -103,6 +103,14 @@ authority or an RS instance: changing any of these must not reopen that nonce.
 The AS trusts its configured RS to supply parameters from a successfully proved,
 locally authorized request; it does not reverify a resource signature here.
 
+The SDK owns the native-identifier and credential indexes. Its atomic grant
+store publishes replacements only against the revision that was read; a stale
+snapshot cannot restore an old authority. The application retains only grant
+IDs for cleanup and the 64-authority capacity check, both under the same lock.
+This adapter is intentionally limited to one token per immediately approved
+grant without continuation. Expired or closed grants are removed on store
+access, without clearing the client key's resource reservations.
+
 Unknown, ambiguous, expired or removed authorities, repeated resource nonces,
 out-of-window creation times and exhausted reservation quotas return false.
 Failed channel proof, malformed responses, bad correlation, unavailable clocks
@@ -239,7 +247,9 @@ signature, so nonce replay is not mistaken for successful revocation.
 
 Additional tests exercise canonical authorities and worker admission after an
 HTTP waiter is canceled, configuration through injected lookups, and redacted
-malformed-JSON responses. An explicitly signed empty PUT is supported: its
+malformed-JSON responses. Storage tests cover rotation during a suspended resource
+decision, stale writes after revocation or removal, atomic capacity enforcement,
+and unavailable storage. An explicitly signed empty PUT is supported: its
 `Content-Digest` preserves an empty body through HTTP dispatch, and the RS
 clears the selected writable file. A zero Content-Length alone does not imply
 message content for an otherwise bodyless management request.
