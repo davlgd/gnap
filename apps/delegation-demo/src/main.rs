@@ -12,15 +12,16 @@ use gnap_as::{
     AuthorizationServer, Decision, Endpoints, Finish, GrantRecord, GrantStore, KeyResolver,
     MemoryStorage, NonceStore, OsNonces, Policy, TokenRecord, TokenStore,
 };
-use gnap_client::{HttpRequest, HttpResponse, HttpTransport, Session};
+use gnap_client::{sign_request, HttpRequest, HttpResponse, HttpTransport, Session};
 use gnap_crypto::{
-    httpsig::{fresh_nonce, sign, Component, Message, SignatureInput, Tag},
-    proof::{Signer, Verifier},
+    httpsig::fresh_nonce,
+    proof::Verifier,
     ps256::Ps256Signer,
     verify::{verify_request, Expectations, SignedRequest},
 };
 use gnap_types::{
     access::AccessItem, client::Client, interact::InteractCallback, message::GrantRequest,
+    token::TokenValue,
 };
 use serde_json::{json, Value};
 use std::{
@@ -673,35 +674,9 @@ fn resource_request(
     signer: &Ps256Signer,
 ) -> Result<HttpRequest, String> {
     let url = format!("{origin}/resource/folder");
-    let authorization = format!("GNAP {token}");
-    let message = Message {
-        method: "GET",
-        target_uri: &url,
-        authorization: Some(&authorization),
-        ..Message::default()
-    };
-    let input = SignatureInput {
-        components: vec![
-            Component::Method,
-            Component::TargetUri,
-            Component::Authorization,
-        ],
-        created: now(),
-        keyid: signer.key_id().into(),
-        nonce: Some(fresh_nonce().map_err(|e| e.to_string())?),
-        tag: Tag::Gnap,
-    };
-    let (input, signature) = sign(&message, &input, signer, "sig1").map_err(|e| e.to_string())?;
-    Ok(HttpRequest {
-        method: "GET".into(),
-        url,
-        headers: vec![
-            ("authorization".into(), authorization),
-            ("signature-input".into(), input),
-            ("signature".into(), signature),
-        ],
-        body: None,
-    })
+    let token = TokenValue::new(token).map_err(|e| e.to_string())?;
+    sign_request(HttpRequest::new("GET", url), signer, Some(&token), now())
+        .map_err(|e| e.to_string())
 }
 
 /// Resource metadata is authoritative only in this same-deployment index; this
