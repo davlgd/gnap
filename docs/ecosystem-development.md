@@ -5,6 +5,13 @@ that consume their public APIs, and a web-accessible conformance workbench.
 This is a development programme, not a claim that every GNAP feature is already
 implemented or that a green report certifies an implementation.
 
+The [support matrix](support-matrix.md) records the current product decisions and
+implementation evidence. Biscuit is the required structured-token target;
+signed/encrypted JWTs are acceptable alternatives, while Macaroon and ZCAP
+implementations are out of scope for now. Prefer HTTP Message Signatures; mTLS
+is an allowed additional proof method. Delivery follows the
+[review and merge process](../CONTRIBUTING.md).
+
 ## The feedback loop
 
 1. A consumer developer chooses a concrete user task and attempts it using the
