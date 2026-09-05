@@ -371,6 +371,38 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(result.skipped), 4)
         self.assertFalse(result.wasSuccessful())
 
+    def test_recorder_never_downgrades_an_outcome_whatever_the_callback_order(self):
+        class Fixture(unittest.TestCase):
+            def test_case(self):
+                pass
+
+        case = Fixture("test_case")
+        ranked = ["pass", "skipped", "expected_failure", "unexpected_success", "fail", "error"]
+        err = (RuntimeError, RuntimeError("fixture"), None)
+        calls = {
+            "pass": lambda r: r.addSuccess(case),
+            "skipped": lambda r: r.addSkip(case, "fixture"),
+            "expected_failure": lambda r: r.addExpectedFailure(case, err),
+            "unexpected_success": lambda r: r.addUnexpectedSuccess(case),
+            "fail": lambda r: r.addFailure(case, (AssertionError, AssertionError("fixture"), None)),
+            "error": lambda r: r.addError(case, err),
+        }
+        for first in ranked:
+            for second in ranked:
+                with self.subTest(first=first, second=second):
+                    result = ledger.RecordingResult(io.StringIO(), False, 0)
+                    calls[first](result)
+                    calls[second](result)
+                    kept = result.outcomes[case.id()]
+                    self.assertIn(kept, {first, second})
+                    self.assertEqual(ledger.RecordingResult.SEVERITY[kept], max(ledger.RecordingResult.SEVERITY[first], ledger.RecordingResult.SEVERITY[second]))
+        # Exercise a later success explicitly, even though standard unittest
+        # omits the parent's success callback after a skipped subtest.
+        result = ledger.RecordingResult(io.StringIO(), False, 0)
+        result.addSkip(case, "fixture")
+        result.addSuccess(case)
+        self.assertEqual(result.outcomes[case.id()], "skipped")
+
 
 if __name__ == "__main__":
     unittest.main()

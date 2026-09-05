@@ -453,12 +453,14 @@ def flatten_tests(suite):
 
 class RecordingResult(unittest.TextTestResult):
     # A case can report several outcomes: one per failing subtest, then its own
-    # body, which may still fail, raise or skip. The most severe one is kept.
+    # body, which may still fail, raise or skip. The most severe one is kept and
+    # nothing is ever downgraded, whatever order unittest reports them in.
     # "error" outranks "fail": a case that raised something other than an
     # assertion failure did not run as designed, so its result is not a verdict
-    # on the behaviour under test. Both outrank a later skip, which unittest
-    # also refuses to count as success.
-    SEVERITY = {"error": 2, "fail": 1}
+    # on the behaviour under test. An unexpected success is a failure for
+    # unittest too. A skip or an expected failure is inconclusive, so it
+    # outranks "pass": a partly skipped case is not a passing observation.
+    SEVERITY = {"error": 3, "fail": 2, "unexpected_success": 2, "skipped": 1, "expected_failure": 1, "pass": 0}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -466,14 +468,12 @@ class RecordingResult(unittest.TextTestResult):
 
     def record(self, test, outcome):
         # A skipped subtest arrives under a derived ID and leaves its parent
-        # case without a success callback. It counts against the parent, where
-        # a later failure or error still outranks it and a passing remainder
-        # cannot turn a partly skipped case into a passing observation.
+        # case without a success callback. It counts against the parent.
         if isinstance(test, unittest.case._SubTest):
             test = test.test_case
-        if self.SEVERITY.get(self.outcomes.get(test.id()), 0) > self.SEVERITY.get(outcome, 0):
-            return
-        self.outcomes[test.id()] = outcome
+        previous = self.outcomes.get(test.id())
+        if previous is None or self.SEVERITY[previous] <= self.SEVERITY[outcome]:
+            self.outcomes[test.id()] = outcome
 
     def addSuccess(self, test):
         super().addSuccess(test)
