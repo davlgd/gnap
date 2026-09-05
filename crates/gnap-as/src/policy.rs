@@ -12,6 +12,7 @@ use gnap_types::client::Client;
 use gnap_types::message::GrantRequest;
 use gnap_types::token::AccessToken;
 use gnap_types::user::SubjectResponse;
+use std::num::NonZeroU64;
 
 /// What the AS decided to do with a grant request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +78,18 @@ pub enum SubjectGround {
 pub trait Policy {
     /// Evaluates a fresh or modified grant request.
     fn evaluate(&self, request: &GrantRequest) -> Decision;
+
+    /// Lifetime of a newly approved access token, in seconds (§3.2.1).
+    ///
+    /// Called with the approved request, including modifications accepted
+    /// during continuation. `None`, the default, omits `expires_in`; it does
+    /// not promise that the token can never be revoked. A finite duration
+    /// must fit when added to the server's issuance time or issuance fails.
+    /// Rotation preserves this duration and starts it again at rotation time;
+    /// it does not reevaluate this policy method.
+    fn token_lifetime(&self, _request: &GrantRequest) -> Option<NonZeroU64> {
+        None
+    }
 
     /// Whether this access token may be rotated (§6.1).
     ///

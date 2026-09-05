@@ -49,12 +49,43 @@ pub struct GrantRecord {
 /// An access token the AS issued, and what it needs to manage it (§6).
 #[derive(Debug, Clone)]
 pub struct TokenRecord {
+    /// When this value was issued, in seconds since the Unix epoch.
+    /// Successful value rotation replaces this timestamp as well as the value.
+    pub issued_at: u64,
     /// The token as it was issued, in the §3.2.1 format.
     pub token: AccessToken,
     /// The client it was issued to, which is how its key is resolved (§6).
     pub client: Client,
     /// The token that protects the management API (§3.2.1).
     pub management_token: String,
+}
+
+impl TokenRecord {
+    /// Exclusive expiration deadline, or `None` when no lifetime was issued.
+    ///
+    /// The duration comes from `token.expires_in`. For externally constructed
+    /// records, a zero duration or an overflowing deadline expires immediately
+    /// at `issued_at`, rather than silently becoming an unlimited lifetime.
+    /// The server never issues either of these invalid finite lifetimes.
+    #[must_use]
+    pub fn expires_at(&self) -> Option<u64> {
+        self.token.expires_in.map(|seconds| {
+            self.issued_at
+                .checked_add(seconds)
+                .unwrap_or(self.issued_at)
+        })
+    }
+
+    /// Whether the record's issuance time and lifetime permit use at `now`.
+    ///
+    /// Times before issuance and at or after a finite deadline are rejected.
+    /// This only checks time: a resource server must also establish that the
+    /// record is authoritative and live, verify proof, and enforce its rights.
+    /// It does not sweep storage or invalidate related grant records.
+    #[must_use]
+    pub fn is_valid_at(&self, now: u64) -> bool {
+        now >= self.issued_at && self.expires_at().is_none_or(|deadline| now < deadline)
+    }
 }
 
 /// Where the AS keeps grant requests, by continuation token (§5).

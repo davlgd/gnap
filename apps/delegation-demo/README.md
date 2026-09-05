@@ -106,12 +106,14 @@ endpoint is implemented or simulated.**
   A single client worker serializes session operations; a slow HTTP request can
   hold up all sessions until its 10-second timeout. It is intentionally a bounded
   demonstration, not a throughput benchmark.
-- Sessions, application grants and resource access last at most 20 minutes
-  from their creation/update; application stores are swept every 30 seconds.
-  The RS enforces its own 20-minute token deadline. The current AS SDK does
-  **not** advertise `expires_in`; this is a documented application policy, not
-  evidence of an SDK expiration feature. Rotation gives the new stored token
-  a new deadline. Session expiration also removes the accepted client reference.
+- The consent policy chooses a 1,200-second access-token lifetime. The AS
+  advertises `expires_in`, records the issuance time and renews it only after
+  successful rotation. The RS checks that SDK deadline on every access and
+  removes expired tokens without waiting for the 30-second background sweep.
+  Failed rotations do not extend the lifetime. Browser sessions and pending
+  grants retain their separate 20-minute limits; rotating a token does not
+  renew the browser session. Session expiration also removes the accepted
+  client reference, so an unexpired token can still become unusable earlier.
 - Token lookup, live-state check, signature verification and authorization are
   serialized with index updates. A completed revocation cannot be bypassed by a
   subsequent resource read. AS/RS replay caches are separate.

@@ -274,8 +274,12 @@ polling. `app`, `user_code` and `user_code_uri` are modelled in `gnap-types` but
 no AS in this workspace starts them.
 
 The AS currently issues one key-bound token per approval, preserving the
-requested object or array shape. It does not set an expiration duration on that
-token. Authentication of the resource owner, consent, authorization policy, key
+requested object or array shape. `Policy::token_lifetime` can select a positive
+duration, advertised as `expires_in`; the default omits it. The demo selects
+20 minutes. Successful rotation renews that duration, while a refused rotation
+preserves the original timestamp. Resource servers must enforce expiration as
+well as proof and rights; the SDK provides `TokenRecord::is_valid_at` for the
+time check. Authentication of the resource owner, consent, authorization policy, key
 management, durable storage and HTTP adapters belong to the deployment. The
 included store is in memory; the client transport interface is blocking.
 Revoked-token records are removed. A later call to the old management URI is
