@@ -15,6 +15,7 @@ use biscuit_auth::{
     AuthorizerBuilder, Biscuit, BlockBuilder, KeyPair, PublicKey,
 };
 pub use format::{inspect, Inspection};
+pub use gnap_crypto::ReceivedParams;
 use gnap_crypto::{
     verify_request_with_policy, Expectations, NonceMemory, Ps256Verifier, SignedRequest,
 };
@@ -33,12 +34,10 @@ pub enum Error {
     Profile,
     /// Unknown root, invalid chain or invalid public client key.
     Crypto,
-    /// Request proof, rights, context, time or attenuation did not authorize.
+    /// Proof, rights, time, attenuation or the live decision denied access.
     Denied,
-    /// The required clock or live revocation source is unavailable.
+    /// The required clock or live decision source is unavailable.
     Unavailable,
-    /// An authority or attenuation block was revoked.
-    Revoked,
 }
 
 impl std::fmt::Display for Error {
@@ -48,7 +47,6 @@ impl std::fmt::Display for Error {
             Self::Crypto => "Biscuit or client key verification failed",
             Self::Denied => "file request was not authorized",
             Self::Unavailable => "live authorization context unavailable",
-            Self::Revoked => "Biscuit block revoked",
         })
     }
 }
@@ -136,14 +134,14 @@ impl Issuer {
     }
 }
 
-/// Live revocation lookup result. Unknown state must not be treated as active.
+/// A live per-request decision, including revocation and central replay checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RevocationStatus {
-    /// Every supplied native block identifier is currently active.
-    Active,
-    /// At least one supplied identifier is revoked.
-    Revoked,
-    /// The current state could not be established.
+pub enum LiveDecision {
+    /// Live state and any required one-use reservation allow this request.
+    Allowed,
+    /// Access is denied, for example by revocation or a refused nonce reservation.
+    Denied,
+    /// The live decision could not be established; access must fail closed.
     Unavailable,
 }
 
@@ -230,14 +228,24 @@ impl VerifiedToken {
     }
 
     /// Verifies the actual request, evaluates its rights and all carried checks,
-    /// then consults live revocation state. No positive decision is cached.
+    /// then requests a live decision. No positive decision is cached.
+    ///
+    /// The callback receives native block identifiers and the authenticated
+    /// parameters of the signature actually accepted by the verifier. It can
+    /// consult revocation state and atomically reserve that signature's nonce
+    /// centrally, without receiving the access token. It runs only after proof
+    /// and Datalog checks succeed. Do not reconstruct its parameters from the
+    /// first signature header: another candidate may have been accepted.
     ///
     /// The clock is read before proof verification and again after evaluation
     /// and the live callback. Failure or backwards movement denies access. The
     /// final time is checked against the earliest carried deadline and the
     /// signature timestamp, without running Datalog again. The nonce memory
     /// must be atomic and retained/scoped as documented by `gnap_crypto`.
-    /// This profile requires a nonce, even though GNAP allows omitting it.
+    /// This profile requires a nonce, even though GNAP allows omitting it. The
+    /// local nonce memory remains an initial filter; restart-safe replay
+    /// protection requires persistent/shared state or the live callback's
+    /// central one-use decision. Unknown live state must not return `Allowed`.
     ///
     /// # Errors
     /// Fails closed for every malformed, unproven, expired, revoked or unavailable
@@ -248,7 +256,7 @@ impl VerifiedToken {
         context: &RequestContext<'_>,
         nonces: &dyn NonceMemory,
         clock: &mut impl FnMut() -> Option<u64>,
-        revocation: &mut impl FnMut(&[Vec<u8>]) -> RevocationStatus,
+        live: &mut impl FnMut(&[Vec<u8>], &ReceivedParams) -> LiveDecision,
     ) -> Result<(), Error> {
         let mut authorization = request
             .headers
@@ -282,10 +290,10 @@ impl VerifiedToken {
         )
         .map_err(|_| Error::Denied)?;
         self.evaluate(request, now)?;
-        match revocation(&self.revocation_identifiers()) {
-            RevocationStatus::Active => {}
-            RevocationStatus::Revoked => return Err(Error::Revoked),
-            RevocationStatus::Unavailable => return Err(Error::Unavailable),
+        match live(&self.revocation_identifiers(), &accepted.params) {
+            LiveDecision::Allowed => {}
+            LiveDecision::Denied => return Err(Error::Denied),
+            LiveDecision::Unavailable => return Err(Error::Unavailable),
         }
         let final_now = clock().ok_or(Error::Unavailable)?;
         let created = accepted.params.created.ok_or(Error::Denied)?;

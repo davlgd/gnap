@@ -15,8 +15,9 @@ cargo test -p gnap-biscuit --locked
 The example creates fresh root and PS256 client keys, issues one read right,
 adds resource and deadline checks, signs the attenuated token's request, accepts
 it, then revokes its parent and rejects a freshly signed descendant request.
-It has no HTTP server or live deployment. Its in-memory revocation callback and
-nonce set are limited to that single process and short run.
+It has no HTTP server or live deployment. Its in-memory live callback checks
+revocation and reserves nonces for its single configured client key. Both its reservation set
+and local nonce filter are limited to that single process and short run.
 It does not run the `gnap-as` grant flow or the `gnap-client` session API.
 
 ## Access and proof contract
@@ -81,19 +82,35 @@ comparison, including any final base64 padding.
 
 The caller independently configures expected issuer and audience. A fallible
 clock is read before proof verification and again after evaluation and the live
-revocation lookup. The final check rejects backwards time, expired authority or
+decision. The final check rejects backwards time, expired authority or
 attenuation deadlines, and signatures that became stale during processing.
 Applications must use the authorization result immediately for the same request;
 it is not a capability to cache or reuse for another operation.
 
 ## Revocation and boundaries
 
-The mandatory per-request callback receives Biscuit's native revocation
-identifiers for every block, including the authority and all ancestors. Revoking
-any one denies the request. Unavailable or unknown state must return
-`Unavailable`; this crate never caches an active answer. Parsing or signature
-failure does not consult the revocation source. A proved nonce may be consumed
-even if a later policy or availability check denies access.
+The mandatory callback receives `(&[Vec<u8>], &gnap_biscuit::ReceivedParams)`:
+Biscuit's native revocation identifiers for every block, including all ancestors,
+and the authenticated parameters of the signature actually accepted. It runs
+after cryptographic and Datalog checks. A rejected first signature never supplies
+its nonce or timestamp to this decision; applications must not reparse the first
+signature header to reconstruct those parameters.
+
+The callback returns `LiveDecision::Allowed`, `Denied` or `Unavailable`. `Denied`
+covers both revocation and a refused central one-use nonce reservation, and maps
+to `Error::Denied`. Unknown state must return `Unavailable`. The callback receives
+no access token. Its authenticated parameters let a deployment combine live
+revocation checks with an atomic, correctly scoped central replay decision.
+Scope a shared reservation store by the trusted resolved client key, not by
+the `keyid` string alone: different keys can use the same identifier, and the
+same key can be configured under more than one identifier.
+
+The local nonce memory remains the first replay filter. On its own, a volatile
+store loses protection when the RS restarts; durable/shared state or a central
+one-use decision must retain that protection for the full signature acceptance
+window. This crate supplies the callback boundary, not that persistent service.
+It caches no positive decision. A proved nonce or central reservation may be
+consumed even if a later availability or final-clock check denies access.
 
 A deployed RS needs an authenticated, current revocation channel and must retain
 state at least through the corresponding token lifetime. The callback is only

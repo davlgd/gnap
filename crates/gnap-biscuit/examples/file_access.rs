@@ -3,7 +3,7 @@
 
 use biscuit_auth::KeyPair;
 use gnap_biscuit::{
-    Error, FileAction, FileRight, Issuer, RequestContext, RevocationStatus, VerifiedToken,
+    Error, FileAction, FileRight, Issuer, LiveDecision, RequestContext, VerifiedToken,
 };
 use gnap_crypto::{
     httpsig::{sign, Component, Message, SignatureInput, Tag},
@@ -44,11 +44,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seen_nonces = RefCell::new(HashSet::new());
     let nonce_memory = |nonce: &str, _: u64| seen_nonces.borrow_mut().insert(nonce.to_owned());
     let revoked = RefCell::new(HashSet::<Vec<u8>>::new());
-    let mut revocation = |ids: &[Vec<u8>]| {
-        if ids.iter().any(|id| revoked.borrow().contains(id)) {
-            RevocationStatus::Revoked
+    // This reservation set belongs to the one configured client key above.
+    // A multi-key deployment must partition by trusted key identity, not kid.
+    let mut central_nonces = HashSet::new();
+    let mut live = |ids: &[Vec<u8>], params: &gnap_crypto::ReceivedParams| {
+        if ids.iter().any(|id| revoked.borrow().contains(id))
+            || !central_nonces.insert(params.nonce.clone())
+        {
+            LiveDecision::Denied
         } else {
-            RevocationStatus::Active
+            LiveDecision::Allowed
         }
     };
     let mut clock = || {
@@ -60,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (nonce, expected) in [
         ("first-request", Ok(())),
-        ("after-revocation", Err(Error::Revoked)),
+        ("after-revocation", Err(Error::Denied)),
     ] {
         let authorization = format!("GNAP {}", attenuated.as_str());
         let message = Message {
@@ -93,13 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             headers: &headers,
             body: None,
         };
-        let outcome = presented.authorize(
-            &request,
-            &context,
-            &nonce_memory,
-            &mut clock,
-            &mut revocation,
-        );
+        let outcome = presented.authorize(&request, &context, &nonce_memory, &mut clock, &mut live);
         assert_eq!(outcome, expected);
         println!("{nonce}: {outcome:?}");
         revoked

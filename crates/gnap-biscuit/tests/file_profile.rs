@@ -6,7 +6,7 @@ use base64::{
 };
 use biscuit_auth::{Biscuit, BlockBuilder, KeyPair, PublicKey};
 use gnap_biscuit::{
-    inspect, Error, FileAction, FileRight, Issuer, RequestContext, RevocationStatus, VerifiedToken,
+    inspect, Error, FileAction, FileRight, Issuer, LiveDecision, RequestContext, VerifiedToken,
 };
 use gnap_crypto::{
     httpsig::{sign, Component, Message, SignatureInput, Tag},
@@ -130,7 +130,7 @@ fn authorize(
         &context(),
         &|_: &str, _: u64| true,
         &mut || Some(now),
-        &mut |_| RevocationStatus::Active,
+        &mut |_, _| LiveDecision::Allowed,
     )
 }
 
@@ -147,12 +147,12 @@ fn mint_attenuate_sign_authorize_then_revoke_parent() {
     let nonces = |nonce: &str, _: u64| seen.borrow_mut().insert(nonce.to_owned());
     let revoked = RefCell::new(HashSet::<Vec<u8>>::new());
     let lookups = RefCell::new(0);
-    let mut live = |ids: &[Vec<u8>]| {
+    let mut live = |ids: &[Vec<u8>], _: &gnap_crypto::ReceivedParams| {
         *lookups.borrow_mut() += 1;
         if ids.iter().any(|id| revoked.borrow().contains(id)) {
-            RevocationStatus::Revoked
+            LiveDecision::Denied
         } else {
-            RevocationStatus::Active
+            LiveDecision::Allowed
         }
     };
     let h = headers(&f.signer, child.value(), "GET", ONE, 1010, Some("first"));
@@ -188,7 +188,7 @@ fn mint_attenuate_sign_authorize_then_revoke_parent() {
             &mut || Some(1010),
             &mut live
         ),
-        Err(Error::Revoked)
+        Err(Error::Denied)
     );
     assert_eq!(
         *lookups.borrow(),
@@ -264,7 +264,7 @@ fn ambiguous_headers_missing_nonce_tampered_request_and_missing_state_fail() {
             &context(),
             &|_: &str, _: u64| false,
             &mut || Some(1010),
-            &mut |_| panic!("nonce failure")
+            &mut |_, _| panic!("nonce failure")
         ),
         Err(Error::Denied)
     );
@@ -274,7 +274,7 @@ fn ambiguous_headers_missing_nonce_tampered_request_and_missing_state_fail() {
             &context(),
             &|_: &str, _: u64| true,
             &mut || None,
-            &mut |_| panic!("clock failure")
+            &mut |_, _| panic!("clock failure")
         ),
         Err(Error::Unavailable)
     );
@@ -284,7 +284,7 @@ fn ambiguous_headers_missing_nonce_tampered_request_and_missing_state_fail() {
             &context(),
             &|_: &str, _: u64| true,
             &mut || Some(1010),
-            &mut |_| RevocationStatus::Unavailable
+            &mut |_, _| LiveDecision::Unavailable
         ),
         Err(Error::Unavailable)
     );
@@ -314,7 +314,7 @@ fn issuer_audience_and_time_are_checked_independently() {
                 &context,
                 &|_: &str, _: u64| true,
                 &mut || Some(1010),
-                &mut |_| panic!("context mismatch")
+                &mut |_, _| panic!("context mismatch")
             ),
             Err(Error::Denied)
         );
@@ -329,7 +329,7 @@ fn issuer_audience_and_time_are_checked_independently() {
                 &context(),
                 &|_: &str, _: u64| true,
                 &mut || times.next(),
-                &mut |_| RevocationStatus::Active
+                &mut |_, _| LiveDecision::Allowed
             ),
             Err(Error::Denied)
         );
@@ -533,12 +533,12 @@ fn later_deadlines_cannot_relax_earlier_checks() {
             &context(),
             &|_: &str, _: u64| true,
             &mut || Some(1010),
-            &mut |ids| {
+            &mut |ids, _| {
                 assert!(ids.contains(&child_id));
-                RevocationStatus::Revoked
+                LiveDecision::Denied
             }
         ),
-        Err(Error::Revoked)
+        Err(Error::Denied)
     );
 }
 
@@ -652,7 +652,7 @@ fn put_body_is_digest_bound_and_final_clock_is_fail_closed() {
             &context(),
             &|_: &str, _: u64| true,
             &mut || Some(1010),
-            &mut |_| RevocationStatus::Active
+            &mut |_, _| LiveDecision::Allowed
         ),
         Ok(())
     );
@@ -666,7 +666,7 @@ fn put_body_is_digest_bound_and_final_clock_is_fail_closed() {
             &context(),
             &|_: &str, _: u64| true,
             &mut || Some(1010),
-            &mut |_| panic!("bad body")
+            &mut |_, _| panic!("bad body")
         ),
         Err(Error::Denied)
     );
@@ -678,7 +678,7 @@ fn put_body_is_digest_bound_and_final_clock_is_fail_closed() {
                 &context(),
                 &|_: &str, _: u64| true,
                 &mut || clock.next().flatten(),
-                &mut |_| RevocationStatus::Active
+                &mut |_, _| LiveDecision::Allowed
             ),
             Err(expected)
         );
@@ -800,7 +800,18 @@ fn authentication_scheme_obeys_http_grammar_without_normalizing_the_token() {
 fn a_nonce_less_signature_does_not_hide_a_later_acceptable_signature() {
     let f = Fixture::new();
     let mut combined = headers(&f.signer, f.token.value(), "GET", ONE, 1010, None);
-    let mut later = headers(&f.signer, f.token.value(), "GET", ONE, 1010, Some("fresh"));
+    let mut forged = headers(
+        &f.signer,
+        f.token.value(),
+        "GET",
+        ONE,
+        1009,
+        Some("unproven"),
+    );
+    forged[1].1 = forged[1].1.replacen("proof=", "forged=", 1);
+    forged[2].1 = "forged=:AAAA:".into();
+    combined.extend(forged.into_iter().skip(1));
+    let mut later = headers(&f.signer, f.token.value(), "GET", ONE, 1011, Some("fresh"));
     // Labels are dictionary member names, not part of the signature base.
     later[1].1 = later[1].1.replacen("proof=", "second=", 1);
     later[2].1 = later[2].1.replacen("proof=", "second=", 1);
@@ -812,9 +823,92 @@ fn a_nonce_less_signature_does_not_hide_a_later_acceptable_signature() {
             &context(),
             &|nonce: &str, _: u64| nonces.borrow_mut().insert(nonce.to_owned()),
             &mut || Some(1010),
-            &mut |_| RevocationStatus::Active
+            &mut |ids, params| {
+                assert_eq!(ids, f.token.revocation_identifiers());
+                assert_eq!(params.nonce.as_deref(), Some("fresh"));
+                assert_eq!(params.created, Some(1011));
+                assert_eq!(params.keyid.as_deref(), Some("client"));
+                assert_eq!(params.tag.as_deref(), Some("gnap"));
+                LiveDecision::Allowed
+            }
         ),
         Ok(())
     );
     assert_eq!(*nonces.borrow(), HashSet::from(["fresh".to_owned()]));
+}
+
+#[test]
+fn live_one_use_decision_survives_loss_of_the_local_nonce_memory() {
+    let f = Fixture::new();
+    let h = headers(
+        &f.signer,
+        f.token.value(),
+        "GET",
+        ONE,
+        1010,
+        Some("one-use"),
+    );
+    // This set belongs to the single trusted client key configured by Fixture.
+    let mut reserved = HashSet::new();
+    let mut calls = 0;
+    let mut live = |_: &[Vec<u8>], params: &gnap_crypto::ReceivedParams| {
+        calls += 1;
+        if reserved.insert(params.nonce.clone()) {
+            LiveDecision::Allowed
+        } else {
+            LiveDecision::Denied
+        }
+    };
+    for expected in [Ok(()), Err(Error::Denied)] {
+        // A fresh store models restarting the RS without its prior local cache.
+        let local = RefCell::new(HashSet::new());
+        let nonce_memory = |nonce: &str, _: u64| local.borrow_mut().insert(nonce.to_owned());
+        assert_eq!(
+            f.token.authorize(
+                &request(&h, "GET", ONE),
+                &context(),
+                &nonce_memory,
+                &mut || Some(1010),
+                &mut live
+            ),
+            expected
+        );
+    }
+    assert_eq!(calls, 2);
+}
+
+#[test]
+fn cryptographic_or_datalog_refusal_never_calls_the_live_decision() {
+    let f = Fixture::new();
+    let child = f.descendant(Some(ONE), None);
+    let h = headers(
+        &f.signer,
+        child.value(),
+        "PUT",
+        TWO,
+        1010,
+        Some("restricted"),
+    );
+    assert_eq!(
+        child.authorize(
+            &request(&h, "PUT", TWO),
+            &context(),
+            &|_: &str, _: u64| true,
+            &mut || Some(1010),
+            &mut |_, _| panic!("resource check failed in Datalog")
+        ),
+        Err(Error::Denied)
+    );
+    let mut h = headers(&f.signer, f.token.value(), "GET", ONE, 1010, Some("forged"));
+    h[2].1 = "proof=:AAAA:".into();
+    assert_eq!(
+        f.token.authorize(
+            &request(&h, "GET", ONE),
+            &context(),
+            &|_: &str, _: u64| true,
+            &mut || Some(1010),
+            &mut |_, _| panic!("signature did not verify")
+        ),
+        Err(Error::Denied)
+    );
 }
