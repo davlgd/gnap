@@ -59,7 +59,8 @@ terminology occurrences); RFC 9767 supplies 80 (69 plus 11). These numbers count
 the pinned sources, not a percentage of implemented behavior. The original
 inventory had all 339 blocks with `unresolved` applicability and `not_run`
 evidence. Two section 9 blocks now have reviewed AS applicability; all other
-blocks remain unresolved. This implementation lot installs no AS evidence claims. No private
+blocks remain unresolved. The first historical discovery observation below now
+maps six executed assertions to those two blocks, without completing them. No private
 historical coverage decisions or documents were imported.
 
 Each occurrence retains its original keyword. BCP14 synonyms are normalized only
@@ -285,8 +286,15 @@ ignored local run in the public evidence file. Existing receipts are historical:
 CI checks them offline and generates its own separate synthetic oracle receipt,
 without converting either into a new current network observation.
 
-No public receipt or AS claim is fabricated by this source implementation lot.
-Even a successful real capture replay remains
+The first published [receipt](receipts/gnap-delegation-discovery-2026-09-05.json)
+replays the [reviewed capture](captures/gnap-delegation-discovery-2026-09-05.json)
+from `https://gnap-delegation.cleverapps.io/gnap`, captured at UTC Unix
+`1788645193` on 5 September 2026. Its six assertions ran at UTC Unix `1788645383`
+from clean source commit `28275dca68cb5933f27a34af0af3c0076cf470f4`.
+The body contains only the public grant endpoint, announced `httpsig` proof and
+`key_rotation_supported: false`. Only the six listed response assertions are
+mapped: capability execution and remote source revision remain unknown.
+This real capture replay remains
 `passing_observation_not_completion`, contextualized by its capture time and
 endpoint; the ledger still has no global percentage or certification.
 

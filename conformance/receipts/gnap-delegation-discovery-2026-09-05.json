@@ -1,0 +1,60 @@
+{
+  "discovered_cases": [
+    "test_as_discovery.DiscoveryResponse.test_endpoint_absolute_host_without_fragment",
+    "test_as_discovery.DiscoveryResponse.test_endpoint_https",
+    "test_as_discovery.DiscoveryResponse.test_endpoint_matches_exact_request",
+    "test_as_discovery.DiscoveryResponse.test_endpoint_required_string",
+    "test_as_discovery.DiscoveryResponse.test_options_response_media_type",
+    "test_as_discovery.DiscoveryResponse.test_response_is_json_object"
+  ],
+  "finished_at_unix_utc": 1788645383,
+  "observation": {
+    "capture_origin": "live",
+    "capture_path": "conformance/captures/gnap-delegation-discovery-2026-09-05.json",
+    "capture_sha256": "90a8ea8d27ce8f546a14de28aff0273d62f1e85a3e275bcb4d2e38a93e73246f",
+    "captured_at_unix_utc": 1788645193,
+    "collector_config_sha256": "5da70f5b3062631cae0441aa79a36d762b605eba434bc7e3b09ccc6e054121e9",
+    "endpoint": "https://gnap-delegation.cleverapps.io/gnap",
+    "execution_mode": "capture_replay",
+    "kind": "as-discovery-v1",
+    "remote_revision": "unknown"
+  },
+  "results": [
+    {
+      "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_absolute_host_without_fragment",
+      "status": "pass"
+    },
+    {
+      "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_https",
+      "status": "pass"
+    },
+    {
+      "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_matches_exact_request",
+      "status": "pass"
+    },
+    {
+      "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_required_string",
+      "status": "pass"
+    },
+    {
+      "case_id": "test_as_discovery.DiscoveryResponse.test_options_response_media_type",
+      "status": "pass"
+    },
+    {
+      "case_id": "test_as_discovery.DiscoveryResponse.test_response_is_json_object",
+      "status": "pass"
+    }
+  ],
+  "runner": "python-unittest-v1",
+  "schema_version": 1,
+  "scope": "gnap-scenarios",
+  "source_files": {
+    "conformance/captures/gnap-delegation-discovery-2026-09-05.json": "90a8ea8d27ce8f546a14de28aff0273d62f1e85a3e275bcb4d2e38a93e73246f",
+    "conformance/discovery.py": "0e9ffda0a6b82435d6536279568966cd9cceb083cff63b70598efe54c448362b",
+    "conformance/scenarios/test_as_discovery.py": "36f564c4b4c6f8c6595f911112b00bceb4dcfbcec3a73a4f5a7c611ced8befbc",
+    "tools/conformance_ledger.py": "0fbde7df50084292613d00788e890d32cc02194ecce72cfc4a7d265e093b97c0"
+  },
+  "source_revision": "28275dca68cb5933f27a34af0af3c0076cf470f4",
+  "started_at_unix_utc": 1788645383,
+  "working_tree_dirty": false
+}
