@@ -452,38 +452,59 @@ def flatten_tests(suite):
 
 
 class RecordingResult(unittest.TextTestResult):
+    # A case can report several outcomes: one per failing subtest, then its own
+    # body, which may still fail, raise or skip. The most severe one is kept.
+    # "error" outranks "fail": a case that raised something other than an
+    # assertion failure did not run as designed, so its result is not a verdict
+    # on the behaviour under test. Both outrank a later skip, which unittest
+    # also refuses to count as success.
+    SEVERITY = {"error": 2, "fail": 1}
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.outcomes = {}
 
+    def record(self, test, outcome):
+        # A skipped subtest arrives under a derived ID and leaves its parent
+        # case without a success callback. It counts against the parent, where
+        # a later failure or error still outranks it and a passing remainder
+        # cannot turn a partly skipped case into a passing observation.
+        if isinstance(test, unittest.case._SubTest):
+            test = test.test_case
+        if self.SEVERITY.get(self.outcomes.get(test.id()), 0) > self.SEVERITY.get(outcome, 0):
+            return
+        self.outcomes[test.id()] = outcome
+
     def addSuccess(self, test):
         super().addSuccess(test)
-        self.outcomes[test.id()] = "pass"
+        self.record(test, "pass")
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
-        self.outcomes[test.id()] = "fail"
+        self.record(test, "fail")
 
     def addError(self, test, err):
         super().addError(test, err)
-        self.outcomes[test.id()] = "error"
+        self.record(test, "error")
 
     def addSkip(self, test, reason):
         super().addSkip(test, reason)
-        self.outcomes[test.id()] = "skipped"
+        self.record(test, "skipped")
 
     def addExpectedFailure(self, test, err):
         super().addExpectedFailure(test, err)
-        self.outcomes[test.id()] = "expected_failure"
+        self.record(test, "expected_failure")
 
     def addUnexpectedSuccess(self, test):
         super().addUnexpectedSuccess(test)
-        self.outcomes[test.id()] = "unexpected_success"
+        self.record(test, "unexpected_success")
 
     def addSubTest(self, test, subtest, err):
         super().addSubTest(test, subtest, err)
         if err is not None:
-            self.outcomes[test.id()] = "fail"
+            # The same split unittest applies: an assertion failure is a
+            # failure, any other exception is an error.
+            self.record(test, "fail" if issubclass(err[0], test.failureException) else "error")
 
 
 def run_tests(root: Path, directory: str, scope: str, output: str) -> bool:

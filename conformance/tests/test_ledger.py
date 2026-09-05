@@ -8,7 +8,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from collections import Counter
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("conformance_ledger", ROOT / "tools/conformance_ledger.py")
@@ -316,10 +315,61 @@ class RunnerTests(unittest.TestCase):
                 with self.subTest("fixture"):
                     self.assertEqual(1, 2)
 
+            def test_errored_subtest(self):
+                with self.subTest("fixture"):
+                    raise RuntimeError("fixture broke before asserting anything")
+
+            def test_failed_then_errored_subtests(self):
+                with self.subTest("first"):
+                    self.assertEqual(1, 2)
+                with self.subTest("second"):
+                    raise RuntimeError("fixture broke")
+
+            def test_errored_subtest_then_failed_body(self):
+                with self.subTest("fixture"):
+                    raise RuntimeError("fixture broke")
+                self.assertEqual(1, 2)
+
+            def test_failed_subtest_then_skipped_body(self):
+                with self.subTest("fixture"):
+                    self.assertEqual(1, 2)
+                self.skipTest("skipped after failing")
+
+            def test_errored_subtest_then_skipped_body(self):
+                with self.subTest("fixture"):
+                    raise RuntimeError("fixture broke")
+                self.skipTest("skipped after breaking")
+
+            def test_skipped_subtest_then_passing_body(self):
+                with self.subTest("fixture"):
+                    self.skipTest("only this subtest")
+                self.assertEqual(1 + 1, 2)
+
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(Fixture)
+        expected = {
+            "test_good": "pass",
+            "test_skipped": "skipped",
+            "test_failed_subtest": "fail",
+            "test_errored_subtest": "error",
+            "test_failed_then_errored_subtests": "error",
+            "test_errored_subtest_then_failed_body": "error",
+            "test_failed_subtest_then_skipped_body": "fail",
+            "test_errored_subtest_then_skipped_body": "error",
+            "test_skipped_subtest_then_passing_body": "skipped",
+        }
+        discovered = {case.id() for case in suite}
         result = unittest.TextTestRunner(stream=io.StringIO(), resultclass=ledger.RecordingResult).run(suite)
-        self.assertEqual(result.testsRun, 3)
-        self.assertEqual(Counter(result.outcomes.values()), {"pass": 1, "fail": 1, "skipped": 1})
+        self.assertEqual(result.testsRun, len(expected))
+        # Exactly the discovered case IDs, none derived from a subtest, and a
+        # partly skipped case is not a passing observation.
+        self.assertEqual(set(result.outcomes), discovered)
+        by_name = {case_id.rsplit(".", 1)[1]: status for case_id, status in result.outcomes.items()}
+        self.assertEqual(by_name, expected)
+        # The receipt mirrors unittest's own split of the same run.
+        self.assertEqual(len(result.failures), 4)
+        self.assertEqual(len(result.errors), 4)
+        self.assertEqual(len(result.skipped), 4)
+        self.assertFalse(result.wasSuccessful())
 
 
 if __name__ == "__main__":
