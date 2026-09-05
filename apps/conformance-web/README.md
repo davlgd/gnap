@@ -36,7 +36,8 @@ The stable import envelope is:
 }
 ```
 
-Kinds: `grant_request`, `grant_response`, `continue_request`. Body is a string,
+Core kinds: `grant_request`, `grant_response`, `continue_request`. The four
+RFC 9767 kinds and their optional context are described below. Body is a string,
 not an object: digest checks need the original UTF-8 bytes, without JSON
 reformatting. Omit `headers` when they were not captured; `[]` explicitly means
 none were received. Duplicate header instances remain separate. The optional
@@ -52,7 +53,7 @@ Downloadable reports contain neither the submitted body nor raw server replies.
 
 ## Tested scope and its limits
 
-The passive checks reuse `gnap-types` deserialization and explicitly selected
+The core-message checks reuse `gnap-types` deserialization and explicitly selected
 `validate()` methods, plus `gnap-crypto` Content-Digest verification:
 
 - JSON shape and polymorphism; no repeated `client` in continuation requests.
@@ -63,13 +64,94 @@ The passive checks reuse `gnap-types` deserialization and explicitly selected
 These are **shared implementation checks, not an independent oracle**. There is
 no claim of complete key validity, extension validation, stateful flow
 correctness, signatures, replay detection, assertion authenticity, RS rights
-enforcement, RFC 9767 introspection, or interoperability with another vendor.
+enforcement, authenticated RFC 9767 introspection, or interoperability with another vendor.
 Even an empty grant response can pass the JSON shape check; whether it is
 appropriate in a particular exchange is outside an isolated message check.
 Missing optional material is `not_tested`, never a vacuous pass.
 
 References: [RFC 9635](https://www.rfc-editor.org/rfc/rfc9635.html),
 [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767.html).
+
+## RFC 9767 imported-message diagnostics
+
+These four kinds use direct `serde_json` assertions, **not SDK message validators**.
+Only registry data comes from `gnap-registry`; the separately named, optional
+digest check still uses `gnap-crypto`. No new network probe or private-key input
+is included. No report certifies an AS, RS or client.
+
+| Import kind | Report profile | Optional `rs_context` fields |
+| --- | --- | --- |
+| `rs_discovery` | `gnap-rs-discovery-import-v1` | `grant_request_endpoint`, `discovery_url` |
+| `introspection_request` | `gnap-introspection-request-import-v1` | None |
+| `introspection_response` | `gnap-introspection-response-import-v1` | `token_binding`: `bound` or `bearer` |
+| `rs_error_response` | `gnap-rs-error-import-v1` | `http_status`: integer 100..599 |
+
+`rs_context` is a caller-declared comparison, never evidence of network behavior,
+issuer trust or token properties. Inapplicable fields reject the import instead
+of being silently ignored. URL strings are limited to 4096 UTF-8 bytes and never
+fetched. Omission leaves unobservable conditions `not_tested`; it does not hide
+malformed JSON or message contradictions. The UI exposes a separate optional
+context section. Rust consumers can name exported `RsContext` and `TokenBinding`.
+
+- **AS discovery for RSs**, [§3.1](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.1):
+  required grant endpoint, selected HTTPS/host/no-fragment URL checks, exact
+  comparison to a declared client grant endpoint, and declared well-known
+  location `/.well-known/gnap-as-rs` on the same scheme/authority. This is not
+  metadata about an RS itself. The introspection endpoint is required when the
+  AS supports introspection; its absence indicates that introspection is not
+  supported. The equivalent rule applies to dynamic resource registration.
+  Import does not verify that announced services actually behave as advertised.
+  Optional capability arrays may be absent. Known registry names do not prove
+  support; unknown names need external registry review and are `not_tested`.
+- **Introspection request**, [§§3.2–3.3](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.2):
+  required token string and RS identity outer shape, optional access shape and
+  recommended `proof` name. Missing `proof` is not a missing-MUST failure;
+  missing `access` is allowed. No signature or equality to the original client
+  token presentation is verified. Unknown extensions/rights semantics remain
+  `not_tested`: a real AS unable to process a supplied request parameter must
+  not declare the token active.
+- **Introspection response**, [§3.3](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.3):
+  required boolean `active`; inactive responses omit every other member. Active
+  responses require `access` (an empty array is valid) and `iss`, despite the
+  example omitting it. Token `value` is forbidden. Bound tokens require `key`,
+  bearer tokens forbid it. The condition is `not_tested` when it cannot be
+  determined from a bearer flag or caller context. Bearer plus key always fails,
+  regardless of context. Keys are checked only for object/reference shape;
+  optional metadata only for selected types, not validity of their claims.
+- **RS-facing error**, [§3.5](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.5):
+  a single `error` member, string code or object/ASCII code with optional string
+  description, the distinct RS error registry, and HTTP 400 compared only when
+  declared in context. These are not core AS errors.
+
+Imported headers do not create an HTTP 200 or single-Content-Type rule from an
+RFC example. Actual HTTP/media behavior remains untested, not certified valid.
+URI userinfo, including an empty prefix before `@`, is rejected by the safe
+recipient diagnostic profile under RFC 9110 §4.2.4's SHOULD. The finding names
+that policy and source explicitly; it is not an additional GNAP MUST.
+Duplicate JSON members at any depth make field interpretation inconclusive,
+not last-wins or a newly invented GNAP MUST. Number-range/depth limits are also
+`not_tested`. URL prechecks reject proven violations such as missing HTTPS/host,
+fragments, spaces, non-ASCII IRI characters and malformed percent escapes.
+Unsupported URL-library cases (IPvFuture, large numeric ports, some numeric or
+percent-encoded hostnames) are inconclusive. Userinfo receives the explicitly
+labelled recipient-profile failure described above, not a GNAP MUST failure.
+These are selected checks, not a complete URI/HTTP audit.
+
+Synthetic upload fixtures: `rs-discovery.json`, `introspection-request.json`,
+`introspection-active.json`, `introspection-inactive.json`, `rs-error-response.json`,
+and deliberately failing `invalid-introspection-active.json`, all under `fixtures/`.
+They contain no usable tokens or private keys. For example:
+
+```sh
+curl --fail-with-body http://localhost:8080/api/analyze \
+  -H 'Content-Type: application/json' \
+  --data-binary @apps/conformance-web/fixtures/introspection-active.json
+```
+
+Tests in `tests/rs_imports.rs` exercise the diagnostic oracle, not a deployed AS.
+Report time is analysis time, not capture time. State, revocation, effective
+rights, trust, RS authorization and actual publication remain `not_tested`;
+every report has `certification: false`.
 
 ## Bounded live AS/RS probes
 

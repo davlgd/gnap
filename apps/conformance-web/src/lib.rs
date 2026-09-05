@@ -15,6 +15,8 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
 pub mod probe;
+mod rs_import;
+pub use rs_import::{Binding as TokenBinding, Context as RsContext};
 
 pub const MAX_UPLOAD: usize = 65_536;
 pub const MAX_MESSAGE: usize = 32_768;
@@ -25,6 +27,10 @@ pub enum MessageKind {
     GrantRequest,
     GrantResponse,
     ContinueRequest,
+    RsDiscovery,
+    IntrospectionRequest,
+    IntrospectionResponse,
+    RsErrorResponse,
 }
 
 /// Headers are optional: absence means the trace did not capture them, not an
@@ -36,6 +42,7 @@ pub struct Import {
     pub body: String,
     pub headers: Option<Vec<(String, String)>>,
     pub content_digest: Option<String>,
+    pub rs_context: Option<RsContext>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -160,7 +167,12 @@ pub fn analyze(input: Import) -> Result<Report, &'static str> {
         return Err("Content-Digest exceeds 4096 bytes.");
     }
     let mut checks = Vec::new();
+    rs_import::validate_context(&input)?;
     match input.kind {
+        MessageKind::RsDiscovery
+        | MessageKind::IntrospectionRequest
+        | MessageKind::IntrospectionResponse
+        | MessageKind::RsErrorResponse => return rs_import::analyze(&input),
         MessageKind::GrantRequest => {
             if let Some(req) = parse_check::<GrantRequest>(
                 &input.body,
@@ -298,7 +310,7 @@ async fn import_handler(headers: axum::http::HeaderMap, body: Bytes) -> Response
             .into_response();
     }
     let Ok(input) = serde_json::from_slice::<Import>(&body) else {
-        return (StatusCode::BAD_REQUEST, "Invalid import envelope. Expected kind, body string, optional headers array and content_digest string.").into_response();
+        return (StatusCode::BAD_REQUEST, "Invalid import envelope. Expected kind, body string, optional headers array, content_digest string and kind-specific rs_context object.").into_response();
     };
     match analyze(input) {
         Ok(report) => Json(report).into_response(),
@@ -321,6 +333,7 @@ mod tests {
             body: body.into(),
             headers: None,
             content_digest: None,
+            rs_context: None,
         }
     }
     fn status(report: &Report, id: &str) -> Status {

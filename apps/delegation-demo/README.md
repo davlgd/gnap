@@ -55,6 +55,9 @@ suite is a third-party interoperability test.
 Listener tests require working IPv4 and IPv6 loopback interfaces. They check
 actual socket addresses and local HTTP reachability, including `localhost`;
 an unavailable interface is an explicit test-environment failure.
+The introspection composition test also starts a real loopback AS/RS router:
+it checks separate RS/client keys, both replay caches, rotation and revocation
+with fresh signatures, and a 503 resource response when the AS becomes unreachable.
 
 ## Deployment contract
 
@@ -65,6 +68,8 @@ an unavailable interface is an explicit test-environment failure.
   In that mode the app explicitly enables nonstandard HTTP-loopback discovery;
   OPTIONS responses carry `GNAP-Development-Only: insecure-loopback-discovery`.
   Public HTTPS deployments use the strict RFC 9635 discovery checks.
+  RS discovery has the same explicit local exception to RFC 9767's HTTPS rule;
+  its local responses carry `GNAP-Development-Only: insecure-loopback-discovery`.
   HTTP origins with `127.0.0.1` or `localhost` bind only `127.0.0.1`; `[::1]`
   binds only `::1`, without resolving DNS to choose an interface. Prefer the
   explicit IPv4 address in local examples; `localhost` clients must fall back
@@ -121,14 +126,35 @@ python3 tools/smoke_ecosystem.py --demo https://demo.example --demo-alias https:
 
 The single deployment contains three roles, not three independent security
 administrations. `gnap-client::Session` exchanges actual HTTP requests with
-`gnap-as::AuthorizationServer`; the RS shares the SDK's transactional token indexes with
-the AS and calls `gnap-crypto::verify::verify_request`. **No RFC 9767 introspection
-endpoint is implemented or simulated.**
+`gnap-as::AuthorizationServer`. For each resource request, the RS fetches
+`/.well-known/gnap-as-rs` from that configured AS, then calls `/introspect` with
+a signature from its own pre-registered key. This exercises RFC 9767 discovery
+and opaque-token introspection, not dynamic resource registration or derivation.
+The RS has no token-store lookup. The AS returns the client public key, not the
+RS key; the RS verifies the exact incoming request with the shared SDK verifier.
+
+Only the configured origin and those two exact AS paths are reachable through
+the introspection adapter. An advertised endpoint elsewhere is refused before
+credentials are sent. Redirects and environment proxies are disabled; ordinary
+TLS certificate verification remains enabled. Each of the two HTTP calls has a
+two-second timeout and an 8 KiB response limit. Every read makes two HTTP round
+trips: a discovery GET followed by an introspection POST. There is deliberately
+no metadata cache and no positive-token cache; this simple
+consumer does not optimize connection reuse or claim high throughput.
+
+The fixed demo profile requires a public PS256 HTTPSig client key, the exact
+grant issuer, its two understood read rights and `iat`/`exp` describing a
+1,200-second lifetime. Those timestamps are optional in RFC 9767, but not in
+this application's profile. Unsupported flags, key parameters and response
+extensions fail closed. Refusing additional response fields is a restriction of
+this demonstration: RFC 9767 permits additional fields in an active response.
+All resource signatures must include a nonempty nonce.
 
 ## Security and lifecycle limits
 
-- One ephemeral 2048-bit RSA key represents the application; browser sessions
+- One ephemeral 2048-bit RSA key represents the client application; browser sessions
   are isolated client references, not independent cryptographic client owners.
+  A second, distinct ephemeral RSA key authenticates only the RS to the AS.
   Restart invalidates all keys, grants and tokens. No token values appear in
   the browser or application logs.
 - The visitor plays the resource owner; there is no real login, user directory,
@@ -152,7 +178,9 @@ endpoint is implemented or simulated.**
   State-changing POSTs require an exact matching Origin. Callback hashes are
   verified and a callback is consumed once per browser session.
 - At most 64 active sessions, a 32-command worker queue, 40 actions per session,
-  10 new sessions/minute globally, and 16 in-flight protocol/RS operations.
+  10 new sessions/minute globally, 16 in-flight AS/protocol operations and
+  four separate in-flight RS operations. The separate pools let resource
+  workers call the AS in the same process without occupying its worker permits.
   Storage holds at most 256 grant aggregates: saturation returns HTTP 503,
   without evicting grants with live rights to make room for new requests.
   A single client worker serializes session operations; a slow HTTP request can
@@ -160,8 +188,10 @@ endpoint is implemented or simulated.**
   demonstration, not a throughput benchmark.
 - The consent policy chooses a 1,200-second access-token lifetime. The AS
   advertises `expires_in`, records the issuance time and renews it only after
-  successful rotation. The RS checks that SDK deadline on every access and
-  removes expired tokens without waiting for the 30-second background sweep.
+  successful rotation. The AS enforces that SDK deadline during introspection;
+  its storage adapter removes expired tokens without waiting for the 30-second
+  background sweep. The RS checks the returned expiration before and after
+  client-proof verification, and refuses a clock rollback during a read.
   Failed rotations do not extend the lifetime. Browser sessions and pending
   grants retain their separate 20-minute limits; continuation retention starts
   at aggregate creation and is never renewed by a rewrite or failed CAS.
@@ -173,14 +203,19 @@ endpoint is implemented or simulated.**
   replacement and maintenance removal are atomic; the application stores only
   continuation-retention metadata. A bounded sweep removes expired tokens and
   empty/expired or revoked aggregates. Removed grant IDs are never reused.
-  The RS verifies the signature outside the storage lock, then rechecks the
-  aggregate revision and token expiration under the same short lock used by
-  mutations. A rotation/revocation committed during verification invalidates
-  the stale read; a read already authorized can finish before a later revoke.
-  Any change to the aggregate invalidates that snapshot, including a change
-  to a sibling token if a future issuance policy supplies several tokens.
-  AS/RS replay caches are separate. Unavailable storage returns HTTP 503 (not
-  an authentication failure), with no credential values reflected in the error.
+  The AS rechecks the aggregate revision before its introspection decision.
+  A read may still complete when revocation happens after that decision:
+  HTTP introspection is not a distributed transaction with resource access.
+  The next read always performs a new introspection. No result is cached.
+  Client-to-AS, RS-to-AS and client-to-RS replay stores are distinct.
+  An AS unable to determine activity, including a storage lookup failure,
+  returns only `{"active":false}`; the RS refuses that context with 401 without
+  claiming intrinsic token invalidity. Failed lookups produce only a static
+  operator log message. An incomplete HTTP exchange, malformed response or
+  unsupported response profile yields 503 at the resource. Maintenance failures
+  before the AS handler runs also return 503. RS authentication errors are
+  HTTP 400 at the AS, as required by RFC 9767 §3.5; they are not a resource 401.
+  No credential values are reflected in these errors.
   A stale or colliding rotation returns `invalid_rotation`; invalid/colliding
   write candidates outside rotation remain internal server errors.
 - Request/response bodies are limited to 64 KiB. State is in-memory only; there

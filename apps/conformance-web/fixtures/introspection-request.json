@@ -1,0 +1,4 @@
+{
+  "kind": "introspection_request",
+  "body": "{\"access_token\":\"synthetic-not-a-token\",\"resource_server\":\"synthetic-rs\",\"proof\":\"httpsig\",\"access\":[{\"type\":\"files\",\"actions\":[\"read\"]}]}"
+}

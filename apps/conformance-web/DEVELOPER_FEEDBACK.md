@@ -47,5 +47,33 @@ Add a complete synthetic client/AS/RS scenario with consent, token binding,
 rotation and revocation before adding an unauthenticated arbitrary-target probe.
 For third-party self-service probes, add target ownership challenges, immutable
 operation plans, distributed quotas, audit records without secrets, a reviewed
-egress policy, and tightly scoped synthetic credentials. RFC 9767 coverage must
-wait for an actual RS/introspection scenario, not just a UI checkbox.
+egress policy, and tightly scoped synthetic credentials. Authenticated RFC 9767
+behavior now has a real HTTP consumer in the delegation demo, but the workbench
+does not execute that authenticated scenario against imported targets.
+
+## RFC 9767 imported-message increment
+
+The workbench now independently checks selected JSON rules for RS-facing AS
+discovery, introspection requests/responses and RS-facing errors. It reuses the
+registry as reference data, not SDK validators as the oracle. Probes, consent
+and target allowlists are unchanged. Synthetic fixtures test the diagnostics,
+not live interoperability.
+
+- RS-facing errors need their own registry and §3.5 response convention, not
+  accidental reuse of core AS errors.
+- The normative `iss` requirement must outrank the example that omits it.
+  Conversely, examples must not create HTTP 200 or single-header requirements.
+- Request `proof` is recommended and `access` optional. Context-free validators
+  must not manufacture mandatory fields to simplify implementation.
+- Bound/bearer rules need conditional assertions. Caller-declared `RsContext`
+  permits comparisons but is not trusted state and cannot override a bearer/key
+  contradiction. Outer key shape cannot prove a valid key or token binding.
+- Unknown extensions and resource-type semantics remain untested; registry
+  membership cannot establish full parameter processing or effective rights.
+- Lossy JSON maps and URL normalization can hide ambiguity. Duplicate members
+  and parser limitations remain inconclusive; identity compares original strings.
+
+Next evidence requires real signed RS requests with the RS's own key, working
+tokens and negative tests for revocation, audience and rights. An application's
+`/resource-check` is not automatically RFC 9767 introspection. This increment
+introduces no private-key upload or public credentialed probe.

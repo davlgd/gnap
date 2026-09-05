@@ -1,6 +1,25 @@
 'use strict';
 const byId = id => document.getElementById(id);
 let currentReport = null;
+const kindHelp = {
+  rs_discovery: 'AS metadata for resource servers at /.well-known/gnap-as-rs, not metadata about an RS itself. Announced capabilities are not tested in operation.',
+  introspection_request: 'Shape only. The RS signs with its own key; proof describes the client proof and is recommended, not required. Never paste a private key or production token.',
+  introspection_response: 'An active response requires access (possibly empty) and iss. Inactive responses contain active: false only. Neither state nor cryptographic binding is verified.',
+  rs_error_response: 'RS-facing errors use RFC 9767 section 3.5 and its separate error registry. The specified HTTP 400 can only be compared with a declared status.'
+};
+const contextHelp = {
+  rs_discovery: 'Allowed: grant_request_endpoint (expected exact client endpoint), discovery_url (declared publication URL). Example: {"grant_request_endpoint":"https://as.example/gnap","discovery_url":"https://as.example/.well-known/gnap-as-rs"}',
+  introspection_response: 'Allowed: token_binding, either "bound" or "bearer". Example: {"token_binding":"bound"}. An absent context leaves unobservable conditions not tested.',
+  rs_error_response: 'Allowed: http_status, integer 100..599. Example: {"http_status":400}. This is not an observed HTTP response.'
+};
+function updateKind() {
+  const kind = byId('kind').value;
+  byId('kind-help').textContent = kindHelp[kind] || 'Select the message actually captured. Request and response checks are distinct.';
+  byId('context-section').hidden = !contextHelp[kind];
+  byId('context-help').textContent = contextHelp[kind] || '';
+  byId('rs-context').value = '';
+}
+byId('kind').addEventListener('change', () => { clearReport(); updateKind(); });
 const clearReport = () => { currentReport = null; byId('report').replaceChildren(); byId('summary').textContent = ''; byId('download').disabled = true; };
 function renderReport(report) {
   currentReport = report;
@@ -33,7 +52,11 @@ byId('analyze').addEventListener('click', async () => {
     if (byId('headers').value.trim()) {
       try { headers = JSON.parse(byId('headers').value); } catch { throw new Error('Headers must be valid JSON pairs.'); }
     }
-    const response = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', credentials: 'omit', body: JSON.stringify({ kind: byId('kind').value, body, headers, content_digest: byId('digest').value || null }), signal: AbortSignal.timeout(10000) });
+    const envelope = { kind: byId('kind').value, body, headers, content_digest: byId('digest').value || null };
+    if (contextHelp[envelope.kind] && byId('rs-context').value.trim()) {
+      try { envelope.rs_context = JSON.parse(byId('rs-context').value); } catch { throw new Error('Context must be a JSON object with fields appropriate to this message type.'); }
+    }
+    const response = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', credentials: 'omit', body: JSON.stringify(envelope), signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error(`Import rejected (HTTP ${response.status}). Check JSON, field and size limits.`);
     renderReport(await response.json());
   } catch (error) { byId('summary').textContent = error.name === 'TimeoutError' ? 'Request timed out.' : error.message; }
@@ -62,8 +85,8 @@ byId('probe').addEventListener('click', async () => {
   finally { byId('probe').disabled = false; byId('consent').checked = false; }
 });
 loadTargets();
-byId('fixture').addEventListener('click', () => { clearReport(); byId('kind').value = 'continue_request'; byId('body').value = '{"client":"must-not-be-repeated"}'; byId('headers').value = ''; byId('digest').value = ''; });
-byId('clear').addEventListener('click', () => { clearReport(); for (const id of ['body', 'headers', 'digest']) byId(id).value = ''; });
+byId('fixture').addEventListener('click', () => { clearReport(); byId('kind').value = 'continue_request'; updateKind(); byId('body').value = '{"client":"must-not-be-repeated"}'; byId('headers').value = ''; byId('digest').value = ''; });
+byId('clear').addEventListener('click', () => { clearReport(); for (const id of ['body', 'headers', 'digest', 'rs-context']) byId(id).value = ''; });
 byId('download').addEventListener('click', () => {
   if (!currentReport) return;
   const url = URL.createObjectURL(new Blob([JSON.stringify(currentReport, null, 2)], { type: 'application/json' }));

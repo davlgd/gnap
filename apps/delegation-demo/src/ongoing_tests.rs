@@ -85,23 +85,17 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
-    let mut app = tests::test_app();
-    app.origin = origin.clone();
-    app.server = Arc::new(AuthorizationServer::new(
-        ConsentPolicy(app.decisions.clone()),
-        KnownKeys {
-            signer: app.signer.clone(),
-            decisions: app.decisions.clone(),
-        },
-        app.storage.clone(),
-        OsNonces,
-        Endpoints {
-            grant: format!("{origin}/gnap"),
-            continuation: format!("{origin}/continue"),
-            interaction: format!("{origin}/interact"),
-            token_management: format!("{origin}/token"),
-        },
-    ));
+    let mut app = tests::test_app_at(&origin);
+    // Exercise the migrated RS through real HTTP discovery/introspection,
+    // using the same registered RS key but no direct token-store lookup.
+    app.resource_client = Arc::new(introspection::ResourceClient {
+        origin: origin.clone(),
+        signer: app.resource_client.signer.clone(),
+        transport: Arc::new(introspection::Http {
+            origin: origin.clone(),
+        }),
+        nonces: MemoryStorage::default(),
+    });
     let (sender, receiver) = mpsc::sync_channel(8);
     app.commands = sender;
     let (worker_origin, signer, server, storage, decisions) = (
@@ -228,7 +222,13 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
         .token
         .value
         .clone();
-    assert!(read(&app, &token, "/resource/folder").is_ok());
+    let reader = app.clone();
+    let presented = token.clone();
+    assert!(tokio::task::spawn_blocking(
+        move || read(&reader, &presented, "/resource/folder").is_ok()
+    )
+    .await
+    .unwrap());
     let other_before = dispatch(&app, identities[1].clone(), "status".into())
         .await
         .unwrap();
@@ -274,7 +274,13 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
         .unwrap();
     assert_eq!(current.revision, old.revision);
     assert!(!current.aggregate.revoked);
-    assert!(read(&app, &token, "/resource/folder").is_ok());
+    let reader = app.clone();
+    let presented = token.clone();
+    assert!(tokio::task::spawn_blocking(
+        move || read(&reader, &presented, "/resource/folder").is_ok()
+    )
+    .await
+    .unwrap());
     let retained = dispatch(&app, identities[0].clone(), "status".into())
         .await
         .unwrap();
@@ -291,7 +297,13 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
     dispatch(&app, identities[0].clone(), "revoke".into())
         .await
         .unwrap();
-    assert!(read(&app, &token, "/resource/folder").is_err());
+    let reader = app.clone();
+    let presented = token.clone();
+    assert!(tokio::task::spawn_blocking(
+        move || read(&reader, &presented, "/resource/folder").is_err()
+    )
+    .await
+    .unwrap());
 
     serving.abort();
     let _ = serving.await;

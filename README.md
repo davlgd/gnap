@@ -1,8 +1,8 @@
 # gnap
 
 Rust libraries and application examples for the **Grant Negotiation and
-Authorization Protocol** ([RFC 9635]). The resource-server connection APIs
-defined by [RFC 9767] are planned, not yet implemented.
+Authorization Protocol** ([RFC 9635]), with RS-facing discovery and authenticated
+introspection from [RFC 9767] for the opaque reference-token profile.
 
 GNAP is not an extension of OAuth 2.0 and is not compatible with it. It solves
 the same family of problems — delegating authorization to a piece of software —
@@ -14,8 +14,9 @@ steps, and key-bound requests and tokens as the default.
 > continuation, token — with both roles implemented here, and the token it
 > issues can be rotated and revoked (§6). The application examples add a real
 > HTTP client/AS flow, a co-located protected resource, and a diagnostic
-> workbench. These are experimental consumers, not a complete conformance suite
-> or an implementation of the RFC 9767 connection APIs.
+> workbench. The resource server uses authenticated HTTP introspection rather
+> than reading the AS store. These are experimental consumers, not a complete
+> conformance suite or a complete implementation of RFC 9767.
 > See [what is implemented, and what is not](#what-is-implemented-and-what-is-not).
 
 The [support matrix](docs/support-matrix.md) records the selected scope and its
@@ -104,18 +105,21 @@ their own dependency locks and toolchain requirements:
 
 - [Delegation demo](apps/delegation-demo/README.md): approve or deny access to a
   synthetic dossier, read its protected resource, rotate a token and check that
-  retired tokens are rejected. The AS and RS share volatile storage; there is
-  no RFC 9767 introspection endpoint or production user authentication.
+  retired tokens are rejected. The co-located RS discovers and calls the AS's
+  RFC 9767 introspection endpoint over HTTP with a distinct key. It does not
+  read the AS store. State remains volatile and user authentication synthetic.
 - [Web diagnostics](apps/conformance-web/README.md): inspect imported messages
   and run bounded rejection probes against operator-approved AS/RS endpoints.
   Reports distinguish passed, failed and untested checks, with no overall
   certification verdict.
 
-Try the hosted [delegation demo](https://app-05b4e19a-d5da-408d-b524-2d9609e5cd01.cleverapps.io)
+Try the hosted [delegation demo](https://gnap-delegation.cleverapps.io)
 and [diagnostic workbench](https://gnap-conformance.cleverapps.io).
 These experimental deployments use synthetic data and volatile state. Do not
 submit personal data or production credentials. Active probes are restricted to
 operator-approved targets, not arbitrary public endpoints.
+Hosted deployments can lag the source: the RS introspection and import
+diagnostics described here have been tested locally, not deployed yet.
 
 See the [development methodology](docs/ecosystem-development.md), the consumer
 feedback in each application, and the [comparison with modern
@@ -268,7 +272,7 @@ should be read as covering them:
 | §7.3.2–§7.3.4 | The `mtls`, `jwsd` and `jws` key proofing methods |
 | §7.3.1.1 | Key rotation, and with it the `gnap-rotate` signature tag |
 | §9.1 | Resource-server-first discovery |
-| RFC 9767 | Introspection, resource sets, and the RS-facing API |
+| RFC 9767 §§3.4, 4 | Resource-set registration and downstream token derivation; introspection of Biscuit tokens is also not supplied |
 
 The interaction modes the AS drives are `redirect` and, with no finish method,
 polling. `app`, `user_code` and `user_code_uri` are modelled in `gnap-types` but
@@ -279,7 +283,15 @@ The AS answers OPTIONS at its grant endpoint with the discovery document from
 rotation; deployment-dependent capability lists are omitted. Public discovery
 requires HTTPS. Local HTTP loopback is an explicit development-only opt-in,
 labelled in the response; it is not a protocol exception. No client-side
-discovery helper or RFC 9767 discovery service is supplied yet.
+discovery helper is supplied yet.
+
+For resource servers, the AS also exposes RFC 9767 discovery at
+`/.well-known/gnap-as-rs` and an authenticated introspection API. The demo calls
+both endpoints for every protected read: two HTTP round trips, deliberately
+without a metadata or token-result cache. It uses separate client and RS keys;
+the returned client key verifies the resource request, not the RS request to
+the AS. This path handles only opaque reference tokens. It does not register
+resource sets, introspect Biscuit chains, or derive downstream tokens.
 
 The AS currently issues one key-bound token per approval, preserving the
 requested object or array shape. `Policy::token_lifetime` can select a positive
@@ -364,7 +376,7 @@ the adapter's responsibility.
 | ✅ | `gnap-as` — the authorization server role, §2 through §5 |
 | ✅ | `gnap-as` and `gnap-client` — token management (§6): rotate and revoke |
 | ⬜ | Key rotation (§6.1.1, §7.3.1.1) and the remaining key proofing methods |
-| ⬜ | `gnap-rs` — RFC 9767, introspection and resource sets |
+| 🚧 | RFC 9767 — RS-facing discovery and opaque-token introspection; resource registration and downstream derivation remain open |
 | 🚧 | HTTP application acceptance tests and bounded web diagnostics; full network conformance harness remains open |
 
 The [support matrix](docs/support-matrix.md) is the detailed capability inventory;

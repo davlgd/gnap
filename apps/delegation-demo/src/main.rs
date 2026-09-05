@@ -14,12 +14,7 @@ use gnap_as::{
     Policy, Revision, StoreError,
 };
 use gnap_client::{sign_request, HttpRequest, HttpResponse, HttpTransport, Session};
-use gnap_crypto::{
-    httpsig::fresh_nonce,
-    proof::Verifier,
-    ps256::Ps256Signer,
-    verify::{verify_request, Expectations, SignedRequest},
-};
+use gnap_crypto::{httpsig::fresh_nonce, proof::Verifier, ps256::Ps256Signer};
 use gnap_types::{
     access::AccessItem,
     client::Client,
@@ -42,6 +37,7 @@ const MAX_GRANTS: usize = 256;
 const SESSION_LIFETIME: Duration = Duration::from_secs(1200);
 const FOLDER_READ: &str = "synthetic-folder:read";
 const ARCHIVE_READ: &str = "synthetic-archive:read";
+mod introspection;
 #[derive(Default)]
 struct ConsentRegistry {
     clients: HashSet<String>,
@@ -223,7 +219,6 @@ struct RetainedGrants {
 struct IndexedStorage {
     state: Mutex<RetainedGrants>,
     nonces: MemoryStorage,
-    resource_nonces: MemoryStorage,
 }
 impl RetainedGrants {
     fn cleanup(&mut self, now: u64) -> Result<(), StoreError> {
@@ -286,9 +281,15 @@ impl GrantStore for IndexedStorage {
         Ok(snapshot)
     }
     fn lookup(&self, selector: GrantSelector<'_>) -> Result<Option<GrantSnapshot>, StoreError> {
-        let mut state = self.lock()?;
-        state.cleanup(now())?;
-        state.base.lookup(selector)
+        let result = (|| {
+            let mut state = self.lock()?;
+            state.cleanup(now())?;
+            state.base.lookup(selector)
+        })();
+        if result.is_err() {
+            eprintln!("AS lookup unavailable");
+        }
+        result
     }
     fn compare_exchange(
         &self,
@@ -459,11 +460,17 @@ struct App {
     origin: String,
     server: Arc<As>,
     storage: Arc<IndexedStorage>,
+    // Test fixtures drive the client role without starting its browser worker.
+    #[cfg(test)]
     signer: Arc<Ps256Signer>,
+    #[cfg(test)]
     decisions: Decisions,
     commands: mpsc::SyncSender<Command>,
     starts: Arc<Mutex<VecDeque<Instant>>>,
     admission: Arc<tokio::sync::Semaphore>,
+    resource_admission: Arc<tokio::sync::Semaphore>,
+    rs_registration: Arc<introspection::Registration>,
+    resource_client: Arc<introspection::ResourceClient>,
 }
 struct Command {
     session: String,
@@ -842,6 +849,9 @@ fn client_worker(
                     .map_err(|_| "Resource signing failed")?;
                     let response = transport.send(request)?;
                     session.last_resource_status = Some(response.status);
+                    if response.status == 503 {
+                        return Err("The RS could not complete introspection (503). Access is refused temporarily; this does not establish token invalidity.".into());
+                    }
                     if command.action == "check-retired" {
                         if response.status != 401 {
                             return Err(format!(
@@ -860,7 +870,11 @@ fn client_worker(
                         session.folder = Some(
                             serde_json::from_slice(&response.body).map_err(|e| e.to_string())?,
                         );
-                        session.events.push(format!("Signed GET {path} returned {} after the RS checked proof, token and the exact resource right.", response.status));
+                        session.events.push(if response.status == 200 {
+                            format!("Signed GET {path} returned 200: authenticated AS introspection, local client proof and the exact resource right were accepted.")
+                        } else {
+                            format!("Signed GET {path} returned 401: the AS did not establish an active token in this context, or the RS refused the proof or rights.")
+                        });
                     }
                 }
                 "start" | "status" => {}
@@ -924,17 +938,12 @@ fn resource_request(
         .map_err(|e| e.to_string())
 }
 
-/// Resource metadata is authoritative only in this same-deployment index; this
-/// is NOT an implementation of the RFC 9767 introspection protocol.
+/// A refused resource request is distinct from an unusable AS exchange.
+/// An inactive introspection result does not establish why access was refused.
 #[derive(Debug)]
 enum ResourceError {
     Denied,
-    Storage(StoreError),
-}
-impl From<StoreError> for ResourceError {
-    fn from(error: StoreError) -> Self {
-        Self::Storage(error)
-    }
+    Unavailable,
 }
 fn read_resource(app: &App, request: &HttpRequest) -> Result<Value, ResourceError> {
     read_resource_with_clock(app, request, now)
@@ -950,97 +959,9 @@ fn read_resource_with_clock(
         Some("/resource/archive") if request.method == "GET" => ARCHIVE_READ,
         _ => return Err(ResourceError::Denied),
     };
-    let auth: Vec<&str> = request
-        .headers
-        .iter()
-        .filter(|(n, _)| n.eq_ignore_ascii_case("authorization"))
-        .map(|(_, v)| v.as_str())
-        .collect();
-    if auth.len() != 1 {
-        return Err(ResourceError::Denied);
-    }
-    let (scheme, token) = auth[0].split_once(' ').ok_or(ResourceError::Denied)?;
-    let token = token.trim_start_matches(' ');
-    if !scheme.eq_ignore_ascii_case("gnap")
-        || token.is_empty()
-        || token.bytes().any(|b| b.is_ascii_whitespace())
-    {
-        return Err(ResourceError::Denied);
-    }
-    let snapshot = {
-        let mut state = app.storage.lock()?;
-        state.cleanup(clock())?;
-        state
-            .base
-            .lookup(GrantSelector::AccessToken(token))?
-            .ok_or(ResourceError::Denied)?
-    };
-    let record = snapshot
-        .aggregate
-        .tokens
-        .values()
-        .find(|record| record.token.value.as_str() == token)
-        .ok_or(ResourceError::Denied)?;
-    if !app
-        .decisions
-        .lock()
-        .unwrap()
-        .clients
-        .contains(&client_id(&record.client))
-    {
-        return Err(ResourceError::Denied);
-    }
-    if !record
-        .token
-        .access
-        .as_ref()
-        .is_some_and(|a| a.contains(&AccessItem::Reference(right.into())))
-    {
-        return Err(ResourceError::Denied);
-    }
-    let signed = SignedRequest {
-        method: &request.method,
-        target_uri: &request.url,
-        headers: &request.headers,
-        body: request.body.as_deref(),
-    };
-    let nonce = |nonce: &str, time: u64| app.storage.resource_nonces.remember_nonce(nonce, time);
-    let resolver = KnownKeys {
-        signer: app.signer.clone(),
-        decisions: app.decisions.clone(),
-    };
-    let verifier = resolver
-        .resolve(&record.client)
-        .ok_or(ResourceError::Denied)?;
-    verify_request(
-        &signed,
-        verifier.as_ref(),
-        &Expectations {
-            now: clock(),
-            max_clock_skew: 300,
-            // The token's resolved verifier carries its own expected key ID.
-            key_id: None,
-        },
-        &nonce,
-    )
-    .map_err(|_| ResourceError::Denied)?;
-    // Crypto ran without the store lock. Recheck the exact revision and fresh
-    // expiration under the same lock used by commits: rotation/revocation that
-    // won in the meantime cannot authorize a read from this stale snapshot.
-    let mut state = app.storage.lock()?;
-    state.cleanup(clock())?;
-    let current = state
-        .base
-        .lookup(GrantSelector::AccessToken(token))?
-        .ok_or(ResourceError::Denied)?;
-    if current.id != snapshot.id
-        || current.revision != snapshot.revision
-        || current.aggregate.revoked
-    {
-        return Err(ResourceError::Denied);
-    }
+    app.resource_client.authorize(request, right, clock)?;
     Ok(
-        json!({"folder":if right == FOLDER_READ { "synthetic-project-orion" } else { "synthetic-archive" },"documents":[{"name":"readme.txt","content":"Synthetic documents only. This read was authorized by a live key-bound GNAP token."}],"granted_right":right}),
+        json!({"folder":if right == FOLDER_READ { "synthetic-project-orion" } else { "synthetic-archive" },"documents":[{"name":"readme.txt","content":"Synthetic documents only. This read was authorized by a live key-bound GNAP token."}],"granted_right":right,"decision_source":"authenticated AS introspection and local client proof"}),
     )
 }
 async fn resource(
@@ -1050,7 +971,7 @@ async fn resource(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(permit) = app.admission.clone().try_acquire_owned() else {
+    let Ok(permit) = app.resource_admission.clone().try_acquire_owned() else {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
     let request = HttpRequest {
@@ -1069,14 +990,11 @@ async fn resource(
     .await
     {
         Ok(Ok(folder)) => Json(folder).into_response(),
-        Ok(Err(ResourceError::Storage(error))) => {
-            eprintln!("Resource store failure: {error}");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"error":"storage_unavailable"})),
-            )
-                .into_response()
-        }
+        Ok(Err(ResourceError::Unavailable)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"introspection_unavailable"})),
+        )
+            .into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         Ok(Err(ResourceError::Denied)) => (
             StatusCode::UNAUTHORIZED,
@@ -1233,7 +1151,13 @@ async fn protocol(
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         app.storage.cleanup()?;
-        Ok::<_, StoreError>(app.server.handle(&request, now()))
+        Ok::<_, StoreError>(
+            if matches!(uri.path(), "/.well-known/gnap-as-rs" | "/introspect") {
+                introspection::handle(&app, &request, now())
+            } else {
+                app.server.handle(&request, now())
+            },
+        )
     })
     .await;
     let Ok(result) = result else {
@@ -1311,15 +1235,38 @@ async fn main() {
         server
     });
     let (sender, receiver) = mpsc::sync_channel(32);
+    let rs_signer = Arc::new(
+        Ps256Signer::generate(2048, "delegation-demo-rs")
+            .expect("OS randomness and RSA generation"),
+    );
+    let rs_registration = Arc::new(introspection::Registration {
+        key: introspection::public_key(&rs_signer),
+        client_key: introspection::public_key(&signer),
+        decisions: decisions.clone(),
+        nonces: MemoryStorage::default(),
+    });
+    let resource_client = Arc::new(introspection::ResourceClient {
+        origin: origin.clone(),
+        signer: rs_signer,
+        transport: Arc::new(introspection::Http {
+            origin: origin.clone(),
+        }),
+        nonces: MemoryStorage::default(),
+    });
     let app = App {
         origin: origin.clone(),
         server: server.clone(),
         storage: storage.clone(),
+        #[cfg(test)]
         signer: signer.clone(),
+        #[cfg(test)]
         decisions: decisions.clone(),
         commands: sender,
         starts: Arc::default(),
         admission: Arc::new(tokio::sync::Semaphore::new(16)),
+        resource_admission: Arc::new(tokio::sync::Semaphore::new(4)),
+        rs_registration,
+        resource_client,
     };
     let worker_storage = storage.clone();
     std::thread::spawn(move || loop {
@@ -1346,6 +1293,8 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/callback", get(callback))
         .route("/interact/{handle}", get(interaction))
         .route("/gnap", post(protocol).options(protocol))
+        .route("/.well-known/gnap-as-rs", get(protocol))
+        .route("/introspect", post(protocol))
         .route("/continue", axum::routing::any(protocol))
         .route("/resource/folder", get(resource))
         .route("/resource/archive", get(resource))
@@ -1720,6 +1669,9 @@ mod tests {
     }
 
     pub(super) fn test_app() -> App {
+        test_app_at("https://demo.example")
+    }
+    pub(super) fn test_app_at(origin: &str) -> App {
         let signer = Arc::new(Ps256Signer::generate(2048, "test-client").unwrap());
         let storage = Arc::new(IndexedStorage::default());
         let decisions: Decisions = Arc::default();
@@ -1728,7 +1680,7 @@ mod tests {
             .unwrap()
             .clients
             .insert("test-client".into());
-        let server = Arc::new(AuthorizationServer::new(
+        let server = AuthorizationServer::new(
             ConsentPolicy(decisions.clone()),
             KnownKeys {
                 signer: signer.clone(),
@@ -1737,15 +1689,38 @@ mod tests {
             storage.clone(),
             OsNonces,
             Endpoints {
-                grant: "https://demo.example/gnap".into(),
-                continuation: "https://demo.example/continue".into(),
-                interaction: "https://demo.example/interact".into(),
-                token_management: "https://demo.example/token".into(),
+                grant: format!("{origin}/gnap"),
+                continuation: format!("{origin}/continue"),
+                interaction: format!("{origin}/interact"),
+                token_management: format!("{origin}/token"),
             },
-        ));
+        );
+        let server = Arc::new(if origin.starts_with("http:") {
+            server.with_development_http_discovery()
+        } else {
+            server
+        });
         let (commands, _) = mpsc::sync_channel(1);
+        let rs_signer = Arc::new(Ps256Signer::generate(2048, "test-rs").unwrap());
+        let rs_registration = Arc::new(introspection::Registration {
+            key: introspection::public_key(&rs_signer),
+            client_key: introspection::public_key(&signer),
+            decisions: decisions.clone(),
+            nonces: MemoryStorage::default(),
+        });
+        let resource_client = Arc::new(introspection::ResourceClient {
+            origin: origin.into(),
+            signer: rs_signer,
+            transport: Arc::new(introspection::Direct {
+                server: server.clone(),
+                storage: storage.clone(),
+                registration: rs_registration.clone(),
+                origin: origin.into(),
+            }),
+            nonces: MemoryStorage::default(),
+        });
         App {
-            origin: "https://demo.example".into(),
+            origin: origin.into(),
             server,
             storage,
             signer,
@@ -1753,9 +1728,12 @@ mod tests {
             commands,
             starts: Arc::default(),
             admission: Arc::new(tokio::sync::Semaphore::new(2)),
+            resource_admission: Arc::new(tokio::sync::Semaphore::new(2)),
+            rs_registration,
+            resource_client,
         }
     }
-    fn test_record(value: &str) -> TokenRecord {
+    pub(super) fn test_record(value: &str) -> TokenRecord {
         TokenRecord {
             identifier: None,
             issued_at: now(),
@@ -1767,7 +1745,7 @@ mod tests {
             management_token: format!("management-{value}"),
         }
     }
-    fn test_aggregate(handle: &str, token: TokenRecord) -> GrantAggregate {
+    pub(super) fn test_aggregate(handle: &str, token: TokenRecord) -> GrantAggregate {
         let mut aggregate = GrantAggregate::new(GrantRecord {
             grant: Default::default(),
             request: serde_json::from_value(json!({"client":"test-client"})).unwrap(),
@@ -1991,16 +1969,13 @@ mod tests {
             3,
             "checked again after successful proof verification"
         );
-        assert!(app
-            .storage
-            .lookup(GrantSelector::Management("handle"))
-            .unwrap()
-            .is_none());
+        // A remote RS enforces the returned deadline; it does not mutate AS
+        // storage using its own clock. AS maintenance uses the AS's clock.
         assert!(app
             .storage
             .lookup(GrantSelector::AccessToken("access-one"))
             .unwrap()
-            .is_none());
+            .is_some());
     }
 
     #[test]
@@ -2113,7 +2088,7 @@ mod tests {
     }
 
     #[test]
-    fn rotation_and_revocation_between_snapshot_and_proof_cannot_authorize_stale_read() {
+    fn an_introspection_already_decided_can_race_revocation_but_next_read_is_denied() {
         let app = test_app();
         for rotate in [true, false] {
             let snapshot = app
@@ -2125,8 +2100,8 @@ mod tests {
             let result = read_resource_with_clock(&app, &request, || {
                 calls.set(calls.get() + 1);
                 if calls.get() == 2 {
-                    // Runs after snapshot lookup and before proof verification.
-                    // This would deadlock if the RS held the store lock here.
+                    // The authenticated response is already received. A
+                    // network RS cannot retroactively withdraw that decision.
                     let mut replacement = snapshot.aggregate.clone();
                     replacement.tokens.clear();
                     if rotate {
@@ -2142,8 +2117,13 @@ mod tests {
                 }
                 now()
             });
-            assert!(matches!(result, Err(ResourceError::Denied)));
+            assert!(result.is_ok());
             assert_eq!(calls.get(), 3);
+            let fresh = resource_request(&app.origin, "access", &app.signer).unwrap();
+            assert!(matches!(
+                read_resource(&app, &fresh),
+                Err(ResourceError::Denied)
+            ));
             if let Some(current) = app.storage.lookup(GrantSelector::Id(snapshot.id)).unwrap() {
                 app.storage.remove(current.id, current.revision).unwrap();
             }
@@ -2186,11 +2166,13 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).unwrap(),
-                json!({"error":"storage_unavailable"})
+                json!({"error":if path == "/resource/folder" {"introspection_unavailable"} else {"storage_unavailable"}})
             );
         }
     }
 }
 
+#[cfg(test)]
+mod introspection_tests;
 #[cfg(test)]
 mod ongoing_tests;
