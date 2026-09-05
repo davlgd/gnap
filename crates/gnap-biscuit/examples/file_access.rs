@@ -5,10 +5,8 @@ use biscuit_auth::KeyPair;
 use gnap_biscuit::{
     Error, FileAction, FileRight, Issuer, LiveDecision, RequestContext, VerifiedToken,
 };
-use gnap_crypto::{
-    httpsig::{sign, Component, Message, SignatureInput, Tag},
-    Ps256Signer, SignedRequest, Signer,
-};
+use gnap_client::{sign_request, HttpRequest};
+use gnap_crypto::{Ps256Signer, SignedRequest};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashSet},
@@ -63,44 +61,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|time| time.as_secs())
     };
 
-    for (nonce, expected) in [
+    for (step, expected) in [
         ("first-request", Ok(())),
         ("after-revocation", Err(Error::Denied)),
     ] {
-        let authorization = format!("GNAP {}", attenuated.as_str());
-        let message = Message {
-            method: "GET",
-            target_uri: resource,
-            authorization: Some(&authorization),
-            content_digest: None,
-            other: vec![],
-        };
-        let input = SignatureInput {
-            components: vec![
-                Component::Method,
-                Component::TargetUri,
-                Component::Authorization,
-            ],
-            created: clock().ok_or(Error::Unavailable)?,
-            keyid: client.key_id().into(),
-            nonce: Some(nonce.into()),
-            tag: Tag::Gnap,
-        };
-        let (input, signature) = sign(&message, &input, &client, "proof")?;
-        let headers = vec![
-            ("Authorization".into(), authorization),
-            ("Signature-Input".into(), input),
-            ("Signature".into(), signature),
-        ];
+        let http = sign_request(
+            HttpRequest::new("GET", resource),
+            &client,
+            Some(&attenuated),
+            clock().ok_or(Error::Unavailable)?,
+        )?;
         let request = SignedRequest {
-            method: "GET",
-            target_uri: resource,
-            headers: &headers,
-            body: None,
+            method: &http.method,
+            target_uri: &http.url,
+            headers: &http.headers,
+            body: http.body.as_deref(),
         };
         let outcome = presented.authorize(&request, &context, &nonce_memory, &mut clock, &mut live);
         assert_eq!(outcome, expected);
-        println!("{nonce}: {outcome:?}");
+        println!("{step}: {outcome:?}");
         revoked
             .borrow_mut()
             .insert(parent.revocation_identifiers()[0].clone());

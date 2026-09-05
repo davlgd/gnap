@@ -18,7 +18,8 @@ it, then revokes its parent and rejects a freshly signed descendant request.
 It has no HTTP server or live deployment. Its in-memory live callback checks
 revocation and reserves nonces for its single configured client key. Both its reservation set
 and local nonce filter are limited to that single process and short run.
-It does not run the `gnap-as` grant flow or the `gnap-client` session API.
+It uses `gnap_client::sign_request` for fresh signature nonces, but does not run
+the `gnap-as` grant flow or the `gnap-client` session API.
 
 ## Access and proof contract
 

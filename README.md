@@ -296,7 +296,8 @@ revocation recommended in §6.2 would require retaining authentication metadata.
 
 The AS's existing token path uses opaque references. The separate `gnap-biscuit`
 crate issues and verifies a restricted file-access profile, including local
-attenuation, HTTP request proof and a mandatory live-revocation callback. Its
+attenuation, HTTP request proof and a mandatory live-decision callback for
+revocation and replay policy. Its
 [executable example](crates/gnap-biscuit/examples/file_access.rs) runs in process;
 it is not yet an integrated GNAP grant flow, a distributed deployment or an
 authenticated revocation transport. JWT, Macaroon and ZCAP implementations are
