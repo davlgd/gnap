@@ -92,6 +92,19 @@ def demo(base, outcomes):
     browser = client()
     status, _, _, _ = request(browser, base, "/health")
     expect(status == 200, "Demo health failed")
+    # Independent wire assertions: do not reuse the SDK discovery validator.
+    status, headers, body, elapsed = request(browser, base, "/gnap", "OPTIONS")
+    expect(status == 200 and isinstance(body, dict), "AS discovery is not a JSON object response")
+    expect(headers.get_content_type() == "application/json", "AS discovery has the wrong media type")
+    expect(body.get("grant_request_endpoint") == base + "/gnap", "Discovery changed the exact grant endpoint")
+    expect(body.get("key_proofs_supported") == ["httpsig"], "Demo advertised unexpected proof capabilities")
+    expect(body.get("key_rotation_supported") is False, "Demo advertised unsupported key rotation")
+    expect(headers.get("cache-control") == "no-store", "Discovery response is cacheable")
+    expect(headers.get("set-cookie") is None, "Discovery created browser state")
+    expect(headers.get("location") is None, "Discovery redirected the request")
+    expected_deviation = "insecure-loopback-discovery" if base.startswith("http://") else None
+    expect(headers.get("gnap-development-only") == expected_deviation, "Discovery development mode is mislabelled")
+    outcomes.append({"check": "as-options-discovery", "status": "pass", "elapsed_ms": elapsed})
     status, _, _, _ = request(browser, base, "/resource/folder")
     expect(status in (401, 403), "Resource did not reject an unauthenticated request")
     outcomes.append({"check": "resource-requires-authorization", "status": "pass"})
@@ -187,6 +200,7 @@ def demo_alias(base, alias, outcomes):
         ("POST", "/api/start"),
         ("GET", "/api/status"),
         ("POST", "/gnap"),
+        ("OPTIONS", "/gnap"),
         ("POST", "/continue"),
         ("POST", "/continue/synthetic"),
         ("DELETE", "/token/synthetic"),
