@@ -1,4 +1,4 @@
-//! RS-facing discovery and token introspection — RFC 9767 §§3.1–3.3.
+//! RS-facing discovery, introspection and resource registration — RFC 9767 §3.
 //!
 //! Resource-server identities are deliberately distinct from client identities.
 //! These types carry no authentication or token-validity decision by themselves.
@@ -50,6 +50,56 @@ pub struct IntrospectionRequest {
     )]
     pub access: Option<Vec<AccessItem>>,
     /// The AS must account for these parameters before reporting an active token.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// A resource set submitted by its RS to the AS (RFC 9767 §3.4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResourceRegistrationRequest {
+    /// Required rights; their meaning and ownership are deployment decisions.
+    pub access: Vec<AccessItem>,
+    /// The RS proving possession of its own registered key.
+    pub resource_server: ResourceServer,
+    /// Registered formats acceptable to the RS. Empty is not omission.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub token_formats_supported: Option<Vec<TokenFormat>>,
+    /// Whether the RS expects to introspect tokens for these resources.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub token_introspection_required: Option<bool>,
+    /// Extensions preserved for explicit policy handling, never stripped.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// Registration result; a reference is not an access token (RFC 9767 §3.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceRegistrationResponse {
+    /// Required JSON string representing the registered set, without token68 rules.
+    pub resource_reference: String,
+    /// Optional assigned RS identity, not a resource identifier or credential.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub instance_id: Option<String>,
+    /// Optional AS endpoint where this RS can introspect tokens.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub introspection_endpoint: Option<String>,
+    /// Response extensions retained for the consumer to evaluate.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

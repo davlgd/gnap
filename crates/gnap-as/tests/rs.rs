@@ -3,8 +3,8 @@
 use gnap_as::{
     AuthorizationServer, Decision, Endpoints, GrantAggregate, GrantId, GrantSelector,
     GrantSnapshot, GrantStore, IntrospectionDecision, IntrospectionPolicy, KeyResolver,
-    MemoryStorage, NonceStore, Nonces, Policy, ResourceServerResolver, Revision, Storage,
-    StoreError, TokenRecord,
+    MemoryStorage, NonceStore, Nonces, Policy, ResolvedResourceServer, ResourceServerResolver,
+    Revision, RsId, Storage, StoreError, TokenRecord,
 };
 use gnap_client::sign_request;
 use gnap_crypto::{
@@ -74,9 +74,13 @@ impl KeyResolver for ClientKeys {
 }
 struct RsKeys;
 impl ResourceServerResolver for RsKeys {
-    fn resolve(&self, rs: &ResourceServer) -> Option<KeyObject> {
-        (rs.as_reference() == Some("files") || rs.as_value().is_some())
-            .then(|| public(resource_server()))
+    fn resolve(&self, rs: &ResourceServer) -> Option<ResolvedResourceServer> {
+        (rs.as_reference() == Some("files") || rs.as_value().is_some()).then(|| {
+            ResolvedResourceServer {
+                id: RsId("files".into()),
+                key: public(resource_server()),
+            }
+        })
     }
 }
 #[derive(Default)]

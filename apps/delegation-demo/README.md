@@ -19,7 +19,8 @@ From the repository root, with a recent stable Rust toolchain:
 cargo run --manifest-path apps/delegation-demo/Cargo.toml --locked
 ```
 
-Open <http://127.0.0.1:8080>. The initial key generation can take a few seconds.
+Open <http://127.0.0.1:8080>. Key generation and resource registration can take
+a few seconds; the start button stays unavailable until bootstrap succeeds.
 Approve the request, follow the callback, continue after the AS wait period, and
 read both resources. Polling the approved grant renews continuation without
 issuing another access token or extending that token's lifetime. Keep folder
@@ -78,7 +79,10 @@ with fresh signatures, and a 503 resource response when the AS becomes unreachab
   HTTP: the proxy and deployment firewall must block untrusted direct backend
   access. The Host/authority guard is not a network-access boundary or TLS.
   No environment variable overrides this listening policy.
-- Binary: `gnap-delegation-demo`; readiness: `GET /health`.
+- Binary: `gnap-delegation-demo`; `GET /health` is a liveness probe returning
+  HTTP 200 with `status: "ok"` and `bootstrap: "starting"`, `"ready"` or
+  `"failed"`. Readiness requires `bootstrap: "ready"`, not HTTP 200 alone.
+  `/api/start` returns 503 before readiness, without creating a cookie or grant.
 - Clever Cloud: use this app directory as `APP_FOLDER`, a **Build M** instance,
   and exactly one runtime instance. Set `APP_ORIGIN` to its public HTTPS origin.
   The crate has its own `[workspace]` and lockfile; path dependencies require
@@ -128,13 +132,15 @@ The single deployment contains three roles, not three independent security
 administrations. `gnap-client::Session` exchanges actual HTTP requests with
 `gnap-as::AuthorizationServer`. For each resource request, the RS fetches
 `/.well-known/gnap-as-rs` from that configured AS, then calls `/introspect` with
-a signature from its own pre-registered key. This exercises RFC 9767 discovery
-and opaque-token introspection, not dynamic resource registration or derivation.
+a signature from its own pre-registered key. This exercises RFC 9767 discovery,
+opaque-token introspection and resource-set registration, not RS self-enrolment,
+resource-set management or token derivation.
 The RS has no token-store lookup. The AS returns the client public key, not the
 RS key; the RS verifies the exact incoming request with the shared SDK verifier.
 
-Only the configured origin and those two exact AS paths are reachable through
-the introspection adapter. An advertised endpoint elsewhere is refused before
+Only the configured origin and those two exact AS paths, plus
+`/register-resources` for startup registration, are reachable through the RS
+HTTP adapter. An advertised endpoint elsewhere is refused before
 credentials are sent. Redirects and environment proxies are disabled; ordinary
 TLS certificate verification remains enabled. Each of the two HTTP calls has a
 two-second timeout and an 8 KiB response limit. Every read makes two HTTP round
@@ -149,6 +155,51 @@ this application's profile. Unsupported flags, key parameters and response
 extensions fail closed. Refusing additional response fields is a restriction of
 this demonstration: RFC 9767 permits additional fields in an active response.
 All resource signatures must include a nonempty nonce.
+
+### Registering the two resource sets
+
+After the HTTP server starts listening, one internal task discovers the AS and
+registers `[synthetic-folder:read]` and
+`[synthetic-folder:read, synthetic-archive:read]` with fresh RS-signed POSTs.
+The trusted key registry supplies a stable `RsId` for ownership; a caller's
+`kid` or identity string does not establish ownership. Each request requires
+introspection and omits `token_formats_supported`, leaving the format to this
+opaque AS. Any explicit list without a common registered format, including
+`[]`, is refused with HTTP 400; omission and an empty list are not equivalent.
+
+The SDK atomically deduplicates immutable sets by owner and content. The demo
+retains at most two sets, with no updates, deletion, TTL or recursive references.
+A resource reference is a public name for rights, never an access credential.
+The client sends the combined reference initially and on expansion, and the
+folder reference on reduction. Policy resolves them before consent or downscope
+decisions; issued tokens retain the approved leaf rights, not mutable references.
+The UI displays those leaves and keeps its existing controls.
+
+The bootstrap makes at most six attempts within a 120-second monotonic budget,
+with up to ten seconds between attempts and fresh signature nonces on every
+POST. Transport failures, HTTP 404/5xx, `invalid_resource_server`, missing
+capabilities in an otherwise valid discovery document, or an acknowledgement
+from another instance can be transient during replacement. Other protocol
+refusals, malformed metadata and unexpected endpoints stop the sequence.
+Each HTTP call retains its two-second limit; a response completing after the
+bootstrap deadline cannot publish references. No browser action triggers or
+restarts registration. Exhaustion or a permanent failure exits the process
+unsuccessfully with a fixed diagnostic, without logging keys or response bodies.
+
+Before publishing the pair, the co-located supervisor checks both references in
+this AS's resource-set registry, including owner and exact leaves. An old process
+behind the canonical URL cannot supply an acknowledgement that initializes the
+new client incorrectly. This is explicit application coordination, not a GNAP
+wire feature: the RS-to-client handoff is in process. The client does not look
+up resource sets; protected RS reads still have no access to the token store.
+
+Restart discards keys, grants and sets and reruns the bounded bootstrap. Old
+references no longer resolve, and visitors must start new sessions. A platform
+may restart a failed process according to its own policy; the application has
+no unbounded retry loop. Liveness remains separate from readiness so a proxy
+can route bootstrap calls to an instance that has begun listening but is not
+yet ready for browser starts. Canonical routing and ordinary TLS verification
+must work; there is no loopback proxy bypass for a public HTTPS deployment.
 
 ## Security and lifecycle limits
 

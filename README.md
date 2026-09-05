@@ -1,8 +1,9 @@
 # gnap
 
 Rust libraries and application examples for the **Grant Negotiation and
-Authorization Protocol** ([RFC 9635]), with RS-facing discovery and authenticated
-introspection from [RFC 9767] for the opaque reference-token profile.
+Authorization Protocol** ([RFC 9635]), with RS-facing discovery, authenticated
+introspection and resource registration from [RFC 9767] for the opaque
+reference-token profile.
 
 GNAP is not an extension of OAuth 2.0 and is not compatible with it. It solves
 the same family of problems — delegating authorization to a piece of software —
@@ -106,8 +107,10 @@ their own dependency locks and toolchain requirements:
 - [Delegation demo](apps/delegation-demo/README.md): approve or deny access to a
   synthetic dossier, read its protected resource, rotate a token and check that
   retired tokens are rejected. The co-located RS discovers and calls the AS's
-  RFC 9767 introspection endpoint over HTTP with a distinct key. It does not
-  read the AS store. State remains volatile and user authentication synthetic.
+  RFC 9767 introspection endpoint over HTTP with a distinct key. Protected reads
+  do not access the AS token store. At startup the RS registers two resource
+  sets; the client requests their returned references. State remains volatile
+  and user authentication synthetic.
 - [Web diagnostics](apps/conformance-web/README.md): inspect imported messages
   and run bounded rejection probes against operator-approved AS/RS endpoints.
   Reports distinguish passed, failed and untested checks, with no overall
@@ -118,8 +121,8 @@ and [diagnostic workbench](https://gnap-conformance.cleverapps.io).
 These experimental deployments use synthetic data and volatile state. Do not
 submit personal data or production credentials. Active probes are restricted to
 operator-approved targets, not arbitrary public endpoints.
-Hosted deployments can lag the source: the RS introspection and import
-diagnostics described here have been tested locally, not deployed yet.
+Hosted deployments can lag the source: the RS introspection, registration and
+import diagnostics described here have been tested locally, not deployed yet.
 
 See the [development methodology](docs/ecosystem-development.md), the consumer
 feedback in each application, and the [comparison with modern
@@ -272,7 +275,7 @@ should be read as covering them:
 | §7.3.2–§7.3.4 | The `mtls`, `jwsd` and `jws` key proofing methods |
 | §7.3.1.1 | Key rotation, and with it the `gnap-rotate` signature tag |
 | §9.1 | Resource-server-first discovery |
-| RFC 9767 §§3.4, 4 | Resource-set registration and downstream token derivation; introspection of Biscuit tokens is also not supplied |
+| RFC 9767 §4 | Downstream token derivation; introspection of Biscuit tokens is also not supplied |
 
 The interaction modes the AS drives are `redirect` and, with no finish method,
 polling. `app`, `user_code` and `user_code_uri` are modelled in `gnap-types` but
@@ -290,8 +293,19 @@ For resource servers, the AS also exposes RFC 9767 discovery at
 both endpoints for every protected read: two HTTP round trips, deliberately
 without a metadata or token-result cache. It uses separate client and RS keys;
 the returned client key verifies the resource request, not the RS request to
-the AS. This path handles only opaque reference tokens. It does not register
-resource sets, introspect Biscuit chains, or derive downstream tokens.
+the AS. This path handles only opaque reference tokens; it does not introspect
+Biscuit chains or derive downstream tokens.
+
+The RS also registers immutable resource sets using signed HTTP requests. Their
+public references are names, not credentials: a client still needs a grant and
+the resource owner's consent. The demo resolves those names to leaf rights
+before approval and stores the approved leaves in its tokens, so registration
+cannot silently change an existing token's meaning. The client receives the
+references through an explicit in-process channel, not by reading the AS store.
+The co-located startup supervisor checks the returned references against this
+instance's registration catalogue before making them available. This bootstrap
+coordination is not a claim of an independently deployed RS. The catalogue is
+volatile and has no update or delete API; restarts require fresh registration.
 
 The AS currently issues one key-bound token per approval, preserving the
 requested object or array shape. `Policy::token_lifetime` can select a positive
@@ -376,7 +390,7 @@ the adapter's responsibility.
 | ✅ | `gnap-as` — the authorization server role, §2 through §5 |
 | ✅ | `gnap-as` and `gnap-client` — token management (§6): rotate and revoke |
 | ⬜ | Key rotation (§6.1.1, §7.3.1.1) and the remaining key proofing methods |
-| 🚧 | RFC 9767 — RS-facing discovery and opaque-token introspection; resource registration and downstream derivation remain open |
+| 🚧 | RFC 9767 — RS-facing discovery, opaque-token introspection and immutable resource registration; downstream derivation remains open |
 | 🚧 | HTTP application acceptance tests and bounded web diagnostics; full network conformance harness remains open |
 
 The [support matrix](docs/support-matrix.md) is the detailed capability inventory;

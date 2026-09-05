@@ -36,7 +36,7 @@ The stable import envelope is:
 }
 ```
 
-Core kinds: `grant_request`, `grant_response`, `continue_request`. The four
+Core kinds: `grant_request`, `grant_response`, `continue_request`. The six
 RFC 9767 kinds and their optional context are described below. Body is a string,
 not an object: digest checks need the original UTF-8 bytes, without JSON
 reformatting. Omit `headers` when they were not captured; `[]` explicitly means
@@ -74,7 +74,7 @@ References: [RFC 9635](https://www.rfc-editor.org/rfc/rfc9635.html),
 
 ## RFC 9767 imported-message diagnostics
 
-These four kinds use direct `serde_json` assertions, **not SDK message validators**.
+These six kinds use direct `serde_json` assertions, **not SDK message validators**.
 Only registry data comes from `gnap-registry`; the separately named, optional
 digest check still uses `gnap-crypto`. No new network probe or private-key input
 is included. No report certifies an AS, RS or client.
@@ -85,6 +85,8 @@ is included. No report certifies an AS, RS or client.
 | `introspection_request` | `gnap-introspection-request-import-v1` | None |
 | `introspection_response` | `gnap-introspection-response-import-v1` | `token_binding`: `bound` or `bearer` |
 | `rs_error_response` | `gnap-rs-error-import-v1` | `http_status`: integer 100..599 |
+| `resource_registration_request` | `gnap-resource-registration-request-import-v1` | None; even `{}` is rejected |
+| `resource_registration_response` | `gnap-resource-registration-response-import-v1` | None; even `{}` is rejected |
 
 `rs_context` is a caller-declared comparison, never evidence of network behavior,
 issuer trust or token properties. Inapplicable fields reject the import instead
@@ -122,10 +124,39 @@ context section. Rust consumers can name exported `RsContext` and `TokenBinding`
   a single `error` member, string code or object/ASCII code with optional string
   description, the distinct RS error registry, and HTTP 400 compared only when
   declared in context. These are not core AS errors.
+- **Resource registration request**, [§3.4](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.4):
+  required `access` array and `resource_server` reference or object containing
+  `key`. Empty access is not prohibited by this diagnostic. Objects in `access`
+  require string `type` under RFC 9635 §8, despite the registration example
+  omitting it. Selected standard dimensions are checked, not resource-specific
+  semantics, reference resolution or key validity. Optional
+  `token_formats_supported` must be a string array of registered token formats;
+  unknown values are `not_tested` pending external registry review. An empty
+  list can pass the array check but never proves an AS/RS format intersection.
+  Omission leaves the format to the AS. `token_introspection_required` is an
+  optional boolean, not evidence that the AS offers introspection for this RS.
+- **Resource registration response**, [§3.4](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.4):
+  required string `resource_reference`, not an access token. No nonempty, ASCII
+  or SDK token-value restriction is imposed. Optional `instance_id` and
+  `introspection_endpoint` are checked as strings only. Passing these checks
+  proves neither that a reference resolves nor that the endpoint is usable.
+  Its URI syntax, transport and ownership are outside this response diagnostic;
+  the discovery-specific URI checks below are not applied to this field.
+
+Both registration profiles always report `registration-format-compatibility`,
+`registration-introspection-support` and `registration-authentication-and-state`
+as `not_tested`. A real AS must return an error when it supports none of the
+requested token formats or, when the RS requires introspection, does not support
+introspection for that RS.
+These behaviors and the RS's mandatory identification/signature need an actual
+authenticated exchange. Neither imported request nor response proves them.
+Extensions are not forbidden, but their registration and semantics remain
+untested. No comparison context is accepted for registration imports.
 
 Imported headers do not create an HTTP 200 or single-Content-Type rule from an
 RFC example. Actual HTTP/media behavior remains untested, not certified valid.
-URI userinfo, including an empty prefix before `@`, is rejected by the safe
+In the discovery and active-issuer URI checks, userinfo, including an empty
+prefix before `@`, is rejected by the safe
 recipient diagnostic profile under RFC 9110 §4.2.4's SHOULD. The finding names
 that policy and source explicitly; it is not an additional GNAP MUST.
 Duplicate JSON members at any depth make field interpretation inconclusive,
@@ -140,6 +171,10 @@ These are selected checks, not a complete URI/HTTP audit.
 Synthetic upload fixtures: `rs-discovery.json`, `introspection-request.json`,
 `introspection-active.json`, `introspection-inactive.json`, `rs-error-response.json`,
 and deliberately failing `invalid-introspection-active.json`, all under `fixtures/`.
+Resource registration adds `resource-registration-request.json` and
+`resource-registration-response.json`, plus deliberately failing
+`invalid-resource-registration-request.json` and
+`invalid-resource-registration-response.json` in the same directory.
 They contain no usable tokens or private keys. For example:
 
 ```sh
@@ -148,7 +183,8 @@ curl --fail-with-body http://localhost:8080/api/analyze \
   --data-binary @apps/conformance-web/fixtures/introspection-active.json
 ```
 
-Tests in `tests/rs_imports.rs` exercise the diagnostic oracle, not a deployed AS.
+Tests in `tests/rs_imports.rs` and `tests/resource_registration_imports.rs`
+exercise the diagnostic oracle, not a deployed AS.
 Report time is analysis time, not capture time. State, revocation, effective
 rights, trust, RS authorization and actual publication remain `not_tested`;
 every report has `certification: false`.

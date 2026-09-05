@@ -1,8 +1,65 @@
 //! RFC 9767 discovery and introspection message boundaries.
 
 use gnap_types::rs::{
-    IntrospectionRequest, IntrospectionResponse, ResourceServer, RsDiscovery, RsErrorResponse,
+    IntrospectionRequest, IntrospectionResponse, ResourceRegistrationRequest,
+    ResourceRegistrationResponse, ResourceServer, RsDiscovery, RsErrorResponse,
 };
+
+#[test]
+fn registration_preserves_omission_false_empty_lists_and_unknown_parameters() {
+    for (formats, expected) in [
+        ("", None),
+        (",\"token_formats_supported\":[]", Some(Vec::new())),
+    ] {
+        let body =
+            format!(r#"{{"resource_server":"files","access":["read"],"extension":true{formats}}}"#);
+        let request: ResourceRegistrationRequest = serde_json::from_str(&body).unwrap();
+        assert_eq!(request.token_formats_supported, expected);
+        assert_eq!(request.token_introspection_required, None);
+        assert_eq!(request.extra["extension"], true);
+    }
+    let request: ResourceRegistrationRequest = serde_json::from_str(
+        r#"{"resource_server":"files","access":[],"token_introspection_required":false}"#,
+    )
+    .unwrap();
+    assert_eq!(request.token_introspection_required, Some(false));
+    // Empty access is represented by the type and refused by the selected SDK profile.
+    assert!(request.access.is_empty());
+}
+
+#[test]
+fn registration_requires_fields_and_rejects_wrong_optional_types() {
+    for body in [
+        r#"{"access":[]}"#,
+        r#"{"resource_server":"files"}"#,
+        r#"{"resource_server":"files","access":null}"#,
+        r#"{"resource_server":"files","access":[],"token_formats_supported":null}"#,
+        r#"{"resource_server":"files","access":[],"token_formats_supported":"jwt-signed"}"#,
+        r#"{"resource_server":"files","access":[],"token_introspection_required":null}"#,
+        r#"{"resource_server":"files","access":[],"token_introspection_required":1}"#,
+        r#"{"resource_server":"files","access":[],"access":["read"]}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<ResourceRegistrationRequest>(body).is_err(),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn registered_reference_is_a_required_json_string_not_an_access_token() {
+    let wire = serde_json::json!({"resource_reference":"espace / 雪", "extension":true});
+    let response: ResourceRegistrationResponse = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(response.resource_reference, "espace / 雪");
+    assert_eq!(serde_json::to_value(response).unwrap(), wire);
+    for body in [
+        r"{}",
+        r#"{"resource_reference":1}"#,
+        r#"{"resource_reference":"ref","instance_id":null}"#,
+    ] {
+        assert!(serde_json::from_str::<ResourceRegistrationResponse>(body).is_err());
+    }
+}
 
 #[test]
 fn introspection_has_its_own_required_resource_server_identity() {

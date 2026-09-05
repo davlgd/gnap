@@ -10,7 +10,7 @@ fn invalid_rs_api_configuration_is_non_gnap_noncacheable_and_redacted() {
         let mut app = fixture.clone();
         if invalid_grant {
             app.server = Arc::new(AuthorizationServer::new(
-                ConsentPolicy(app.decisions.clone()),
+                ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone()),
                 KnownKeys {
                     signer: app.signer.clone(),
                     decisions: app.decisions.clone(),

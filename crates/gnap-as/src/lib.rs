@@ -100,7 +100,7 @@
 //! RS authentication requires a PS256 public JWK and a nonce. Proof parameter
 //! objects with nonempty extensions are outside this profile. The introspected
 //! value is in the signed JSON body, never an Authorization header. RS-management
-//! access tokens, dynamic registration, derivation and structured-token
+//! access tokens, dynamic RS-key registration, derivation and structured-token
 //! introspection are not implemented. The builder is unavailable with a custom
 //! encoder, and records with native identifiers are also refused.
 //!
@@ -121,6 +121,47 @@
 //! happen after the final read but before delivery. The RS remains responsible for
 //! its final authorization decision and fresh time checks after network/crypto work.
 //! RS API errors are HTTP 400 with only `error`, independently of client API rules.
+//!
+//! # Registering resource sets
+//!
+//! [`ResourceServerApi::with_resource_registration`] enables RFC 9767 §3.4 and
+//! adds its endpoint to discovery; registration is otherwise absent and returns
+//! 404. [`ResourceServerResolver`] now returns [`ResolvedResourceServer`], pairing
+//! a canonical [`RsId`] with the trusted public key. Migrate existing resolvers
+//! by assigning that ID from their key registry, never from an unverified input
+//! or JWK `kid`. Aliases of the same RS must retain one owner identity.
+//!
+//! After proof verification, [`ResourceRegistrationPolicy`] checks every right's
+//! meaning and ownership. Approval also attests that this RS can introspect
+//! tokens, even when it did not explicitly request introspection. The opaque
+//! profile accepts omitted token formats but refuses every explicit list,
+//! including an empty one: opaque tokens have no registered format name.
+//! Unknown top-level parameters are preserved by the types and refused by this
+//! handler. Empty access, more than 64 rights and JSON bodies exceeding 64 KiB
+//! are profile limits, not generic GNAP restrictions.
+//!
+//! [`ResourceSetStore`] atomically creates or retrieves an immutable registration
+//! for the authenticated owner and canonical rights. Outer right ordering and
+//! duplicates do not matter; nested arrays, strings and URI spelling stay exact.
+//! References are public JSON strings, not access credentials. The SDK generates
+//! them in the reserved `rsr_` namespace using a trusted [`Nonces`] source. The
+//! deployment must reserve that namespace against built-in rights, reject recursive
+//! registrations, and resolve references during grant evaluation. Retain resolved
+//! approved rights in tokens, rather than dynamically expanding their authority.
+//!
+//! [`MemoryResourceSetStore`] is bounded and volatile. There is no mutation, TTL,
+//! deletion or eviction: restarting loses the catalog and requires registration
+//! again before new grants. Durable adapters must commit before replying with
+//! success. After a lost response, a fresh signed registration can retrieve the
+//! same reference; replaying the old proof is refused. These persistence decisions
+//! are unrelated to the GNAP `durable` access-token flag.
+//! Allocation, collision, storage-capacity and infrastructure failures receive a redacted
+//! HTTP 503 text response with `no-store`, outside the GNAP error envelope. This
+//! separates infrastructure unavailability from an invalid RS request; it is not
+//! a new registered error or a claim that the RFC explicitly exempts such failures.
+//! In contrast, rights exceeding the store's count, depth, node or serialized-size
+//! input limits return `invalid_request`. Trusted owner/candidate metadata and a
+//! record budget too small for that metadata remain infrastructure failures.
 //!
 //! # Continuing an approved grant
 //!
@@ -215,6 +256,7 @@
 pub mod encoding;
 pub mod nonce;
 pub mod policy;
+pub mod resource_sets;
 pub mod rs;
 pub mod server;
 pub mod storage;
@@ -226,8 +268,13 @@ pub use nonce::{Nonces, OsNonces};
 pub use policy::{
     Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround,
 };
+pub use resource_sets::{
+    MemoryResourceSetStore, ResourceSet, ResourceSetError, ResourceSetLimits, ResourceSetStore,
+    RsId,
+};
 pub use rs::{
-    IntrospectionDecision, IntrospectionPolicy, ResourceServerApi, ResourceServerResolver,
+    IntrospectionDecision, IntrospectionPolicy, ResolvedResourceServer, ResourceRegistrationPolicy,
+    ResourceServerApi, ResourceServerResolver,
 };
 pub use server::{
     AuthorizationServer, Endpoints, Finish, InteractionError, INTERACTION_LIFETIME, MAX_CLOCK_SKEW,

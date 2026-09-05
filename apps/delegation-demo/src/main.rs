@@ -38,6 +38,7 @@ const SESSION_LIFETIME: Duration = Duration::from_secs(1200);
 const FOLDER_READ: &str = "synthetic-folder:read";
 const ARCHIVE_READ: &str = "synthetic-archive:read";
 mod introspection;
+mod resource_registration;
 #[derive(Default)]
 struct ConsentRegistry {
     clients: HashSet<String>,
@@ -315,17 +316,44 @@ impl NonceStore for IndexedStorage {
     }
 }
 
-struct ConsentPolicy(Decisions);
-fn requested_rights(request: &GrantRequest) -> Option<Vec<AccessItem>> {
+struct ConsentPolicy(Decisions, Arc<gnap_as::MemoryResourceSetStore>);
+fn requested_rights(
+    request: &GrantRequest,
+    resources: &gnap_as::MemoryResourceSetStore,
+) -> Option<Vec<AccessItem>> {
+    use gnap_as::ResourceSetStore;
     let tokens = &request.access_token.as_ref()?.tokens;
     if tokens.len() != 1 {
         return None;
     }
     let rights = &tokens[0].access;
-    if rights.is_empty() || rights.len() > 2 || rights.iter().any(|r| !matches!(r, AccessItem::Reference(v) if matches!(v.as_str(), FOLDER_READ | ARCHIVE_READ))) || (rights.len() == 2 && rights[0] == rights[1]) {
+    if rights.is_empty() || rights.len() > 2 || (rights.len() == 2 && rights[0] == rights[1]) {
         return None;
     }
-    Some(rights.clone())
+    let mut resolved = Vec::new();
+    for right in rights {
+        let leaves = if resource_registration::known_leaf(right) {
+            vec![right.clone()]
+        } else {
+            let AccessItem::Reference(reference) = right else {
+                return None;
+            };
+            let set = resources.lookup(reference).ok()??;
+            if set.owner != gnap_as::RsId(resource_registration::RS_OWNER.into())
+                || set.access.is_empty()
+                || !set.access.iter().all(resource_registration::known_leaf)
+            {
+                return None;
+            }
+            set.access
+        };
+        for leaf in leaves {
+            if !resolved.contains(&leaf) {
+                resolved.push(leaf);
+            }
+        }
+    }
+    (resolved.len() <= 2).then_some(resolved)
 }
 impl Policy for ConsentPolicy {
     fn token_lifetime(&self, _: &GrantRequest) -> Option<NonZeroU64> {
@@ -335,14 +363,14 @@ impl Policy for ConsentPolicy {
         true
     }
     fn evaluate(&self, request: &GrantRequest) -> Decision {
-        if requested_rights(request).is_some() {
+        if requested_rights(request, &self.1).is_some() {
             Decision::RequireInteraction
         } else {
             Decision::Deny(gnap_registry::ErrorCode::RequestDenied)
         }
     }
     fn evaluate_context(&self, request: &GrantRequest, context: EvaluationContext<'_>) -> Decision {
-        let Some(rights) = requested_rights(request) else {
+        let Some(rights) = requested_rights(request, &self.1) else {
             return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
         };
         match context {
@@ -471,6 +499,7 @@ struct App {
     resource_admission: Arc<tokio::sync::Semaphore>,
     rs_registration: Arc<introspection::Registration>,
     resource_client: Arc<introspection::ResourceClient>,
+    bootstrap: resource_registration::Bootstrap,
 }
 struct Command {
     session: String,
@@ -584,6 +613,7 @@ fn client_worker(
     storage: Arc<IndexedStorage>,
     decisions: Decisions,
     receiver: mpsc::Receiver<Command>,
+    references: resource_registration::References,
 ) {
     let transport = Network {
         client: reqwest::blocking::Client::builder()
@@ -630,7 +660,7 @@ fn client_worker(
                         .supporting(&["redirect"]);
                 let grant: GrantRequest = serde_json::from_value(json!({
                     "client": command.session,
-                    "access_token": {"access": [FOLDER_READ, ARCHIVE_READ]},
+                    "access_token": {"access": [&references.both]},
                     "interact": {"start": ["redirect"], "finish": {"method":"redirect", "uri":format!("{origin}/callback"), "nonce":fresh_nonce().map_err(|e| e.to_string())?}}
                 })).map_err(|e| e.to_string())?;
                 let step = client.start(&grant, now()).map_err(|e| e.to_string())?;
@@ -665,7 +695,7 @@ fn client_worker(
                         retired_token: None,
                         folder: None,
                         continuation_open: true,
-                        requested_rights: requested_rights(&grant).unwrap(),
+                        requested_rights: resource_registration::leaves(true),
                         last_resource_status: None,
                         next_continuation: now()
                             + step
@@ -748,11 +778,12 @@ fn client_worker(
                     {
                         return Err("An open approved grant is required for this change".into());
                     }
-                    let rights = if command.action == "downscope" {
-                        vec![FOLDER_READ]
+                    let both = command.action == "expand";
+                    let rights = vec![if both {
+                        &references.both
                     } else {
-                        vec![FOLDER_READ, ARCHIVE_READ]
-                    };
+                        &references.folder
+                    }];
                     let changes: ContinueRequest = serde_json::from_value(json!({"access_token":{"access":rights}, "interact":{"start":["redirect"],"finish":{"method":"redirect","uri":format!("{origin}/callback"),"nonce":fresh_nonce().map_err(|_| "Interaction randomness unavailable")?}}})).map_err(|_| "Modification encoding failed")?;
                     let before = session
                         .client
@@ -767,8 +798,7 @@ fn client_worker(
                             "AS refused this modification; existing rights are unchanged".into(),
                         );
                     }
-                    session.requested_rights =
-                        changes.access_token.unwrap().tokens[0].access.clone();
+                    session.requested_rights = resource_registration::leaves(both);
                     session.received(&step, before)?;
                     session.events.push(if session.state == "pending" { "Signed PATCH requested additional rights. A new interaction is required; previous tokens remain live while consent is pending." } else { "Signed PATCH reduced access to a subset of live approved rights. New tokens replaced the entire previous set without another consent prompt." }.into());
                 }
@@ -1049,6 +1079,13 @@ async fn action(
         return StatusCode::NOT_FOUND.into_response();
     }
     let session = if action == "start" {
+        if !matches!(app.bootstrap.get(), Some(Ok(_))) {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error":"Resource registration is not ready"})),
+            )
+                .into_response();
+        }
         if !allow_start(&app.starts) {
             return (StatusCode::TOO_MANY_REQUESTS, Json(json!({"error":"Demo start limit: 10 per minute globally; retry in one minute"}))).into_response();
         }
@@ -1083,6 +1120,10 @@ async fn action(
     response
 }
 async fn status(State(app): State<App>, headers: HeaderMap) -> Response {
+    if !matches!(app.bootstrap.get(), Some(Ok(_))) {
+        return Json(json!({"state":resource_registration::state(&app.bootstrap),"events":[]}))
+            .into_response();
+    }
     let Some(session) = session_cookie(&headers) else {
         return Json(json!({"state":"new", "events":[]})).into_response();
     };
@@ -1152,7 +1193,10 @@ async fn protocol(
         let _permit = permit;
         app.storage.cleanup()?;
         Ok::<_, StoreError>(
-            if matches!(uri.path(), "/.well-known/gnap-as-rs" | "/introspect") {
+            if matches!(
+                uri.path(),
+                "/.well-known/gnap-as-rs" | "/introspect" | resource_registration::PATH
+            ) {
                 introspection::handle(&app, &request, now())
             } else {
                 app.server.handle(&request, now())
@@ -1210,8 +1254,9 @@ async fn main() {
     );
     let decisions: Decisions = Arc::default();
     let storage = Arc::new(IndexedStorage::default());
+    let resources = resource_registration::store();
     let server = AuthorizationServer::new(
-        ConsentPolicy(decisions.clone()),
+        ConsentPolicy(decisions.clone(), resources.clone()),
         KnownKeys {
             signer: signer.clone(),
             decisions: decisions.clone(),
@@ -1244,6 +1289,7 @@ async fn main() {
         client_key: introspection::public_key(&signer),
         decisions: decisions.clone(),
         nonces: MemoryStorage::default(),
+        resources,
     });
     let resource_client = Arc::new(introspection::ResourceClient {
         origin: origin.clone(),
@@ -1267,6 +1313,7 @@ async fn main() {
         resource_admission: Arc::new(tokio::sync::Semaphore::new(4)),
         rs_registration,
         resource_client,
+        bootstrap: Arc::default(),
     };
     let worker_storage = storage.clone();
     std::thread::spawn(move || loop {
@@ -1275,19 +1322,52 @@ async fn main() {
             eprintln!("Background store maintenance failed: {error}");
         }
     });
-    std::thread::spawn(move || {
-        client_worker(origin, signer, server, worker_storage, decisions, receiver)
-    });
     let listener = canonical.bind(port).await.expect("listener initialization");
+    let bootstrap_app = app.clone();
     let router = application_router(app, canonical);
+    let serving = tokio::spawn(async move { axum::serve(listener, router).await });
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let result = resource_registration::bootstrap(
+            &bootstrap_app,
+            || started.elapsed(),
+            std::thread::sleep,
+        )
+        .and_then(|references| {
+            if started.elapsed() < resource_registration::BUDGET {
+                Ok(references)
+            } else {
+                Err("Resource registration bootstrap failed")
+            }
+        });
+        let _ = bootstrap_app.bootstrap.set(result.clone());
+        match result {
+            Ok(references) => client_worker(
+                origin,
+                signer,
+                server,
+                worker_storage,
+                decisions,
+                receiver,
+                references,
+            ),
+            Err(_) => {
+                eprintln!("Resource registration bootstrap failed");
+                std::process::exit(1);
+            }
+        }
+    });
     eprintln!("GNAP delegation demo listening on PORT={port}; no credential values are logged.");
-    axum::serve(listener, router).await.expect("HTTP server");
+    serving
+        .await
+        .expect("HTTP server task")
+        .expect("HTTP server");
 }
 
 fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
     Router::new()
         .route("/", get(|| async { Html(include_str!("../static/index.html")) }))
-        .route("/health", get(|| async { Json(json!({"status":"ok", "profile":"GNAP HTTPSig client/AS demonstrator; not certification"})) }))
+        .route("/health", get(|State(app):State<App>| async move { Json(json!({"status":"ok", "bootstrap":resource_registration::state(&app.bootstrap), "profile":"GNAP HTTPSig client/AS demonstrator; not certification"})) }))
         .route("/api/status", get(status))
         .route("/api/{action}", post(action))
         .route("/callback", get(callback))
@@ -1295,6 +1375,7 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/gnap", post(protocol).options(protocol))
         .route("/.well-known/gnap-as-rs", get(protocol))
         .route("/introspect", post(protocol))
+        .route(resource_registration::PATH, post(protocol))
         .route("/continue", axum::routing::any(protocol))
         .route("/resource/folder", get(resource))
         .route("/resource/archive", get(resource))
@@ -1672,8 +1753,21 @@ mod tests {
         test_app_at("https://demo.example")
     }
     pub(super) fn test_app_at(origin: &str) -> App {
+        configured_test_app(origin, true)
+    }
+    pub(super) fn starting_app_at(origin: &str) -> App {
+        configured_test_app(origin, false)
+    }
+    fn configured_test_app(origin: &str, ready: bool) -> App {
         let signer = Arc::new(Ps256Signer::generate(2048, "test-client").unwrap());
         let storage = Arc::new(IndexedStorage::default());
+        let resources = resource_registration::store();
+        let bootstrap = Arc::new(std::sync::OnceLock::new());
+        if ready {
+            bootstrap
+                .set(Ok(resource_registration::fixture(&resources)))
+                .unwrap();
+        }
         let decisions: Decisions = Arc::default();
         decisions
             .lock()
@@ -1681,7 +1775,7 @@ mod tests {
             .clients
             .insert("test-client".into());
         let server = AuthorizationServer::new(
-            ConsentPolicy(decisions.clone()),
+            ConsentPolicy(decisions.clone(), resources.clone()),
             KnownKeys {
                 signer: signer.clone(),
                 decisions: decisions.clone(),
@@ -1707,6 +1801,7 @@ mod tests {
             client_key: introspection::public_key(&signer),
             decisions: decisions.clone(),
             nonces: MemoryStorage::default(),
+            resources,
         });
         let resource_client = Arc::new(introspection::ResourceClient {
             origin: origin.into(),
@@ -1731,6 +1826,7 @@ mod tests {
             resource_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             rs_registration,
             resource_client,
+            bootstrap,
         }
     }
     pub(super) fn test_record(value: &str) -> TokenRecord {
@@ -2176,3 +2272,5 @@ mod tests {
 mod introspection_tests;
 #[cfg(test)]
 mod ongoing_tests;
+#[cfg(test)]
+mod registration_tests;

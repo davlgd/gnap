@@ -1,7 +1,10 @@
 //! The demo's opaque-token RS: fixed AS discovery, authenticated introspection,
 //! then local verification of the exact resource request. No token-store access.
 use super::*;
-use gnap_as::{IntrospectionDecision, IntrospectionPolicy, ResourceServerResolver, TokenRecord};
+use gnap_as::{
+    IntrospectionDecision, IntrospectionPolicy, MemoryResourceSetStore, ResolvedResourceServer,
+    ResourceRegistrationPolicy, ResourceServerResolver, RsId, TokenRecord,
+};
 use gnap_crypto::verify::{verify_request_with_policy, Expectations, SignedRequest};
 use gnap_crypto::Ps256Verifier;
 use gnap_registry::KeyProofingMethod;
@@ -10,7 +13,7 @@ use gnap_types::{
     rs::{IntrospectionRequest, IntrospectionResponse, ResourceServer, RsDiscovery},
 };
 
-const RS_ID: &str = "delegation-demo-rs";
+pub(super) const RS_ID: &str = "delegation-demo-rs";
 const MAX_RESPONSE: usize = 8192;
 type Transport = dyn HttpTransport<Error = &'static str> + Send + Sync;
 
@@ -19,6 +22,7 @@ pub(super) struct Registration {
     pub client_key: KeyObject,
     pub decisions: Decisions,
     pub nonces: MemoryStorage,
+    pub resources: Arc<MemoryResourceSetStore>,
 }
 
 pub(super) fn public_key(signer: &Ps256Signer) -> KeyObject {
@@ -31,8 +35,20 @@ pub(super) fn public_key(signer: &Ps256Signer) -> KeyObject {
 }
 
 impl ResourceServerResolver for Registration {
-    fn resolve(&self, rs: &ResourceServer) -> Option<KeyObject> {
-        (rs.as_reference() == Some(RS_ID)).then(|| self.key.clone())
+    fn resolve(&self, rs: &ResourceServer) -> Option<ResolvedResourceServer> {
+        (rs.as_reference() == Some(RS_ID)).then(|| ResolvedResourceServer {
+            id: RsId(resource_registration::RS_OWNER.into()),
+            key: self.key.clone(),
+        })
+    }
+}
+
+impl ResourceRegistrationPolicy for Registration {
+    fn authorize(&self, rs: &ResolvedResourceServer, access: &[AccessItem]) -> bool {
+        rs.id == RsId(resource_registration::RS_OWNER.into())
+            && !access.is_empty()
+            && access.len() <= 2
+            && access.iter().all(resource_registration::known_leaf)
     }
 }
 
@@ -97,6 +113,7 @@ impl HttpTransport for Http {
         if ![
             format!("{}/.well-known/gnap-as-rs", self.origin),
             format!("{}/introspect", self.origin),
+            format!("{}{}", self.origin, resource_registration::PATH),
         ]
         .contains(&request.url)
         {
@@ -148,7 +165,7 @@ impl HttpTransport for Http {
     }
 }
 
-fn json_response<T: serde::de::DeserializeOwned>(
+pub(super) fn json_response<T: serde::de::DeserializeOwned>(
     response: HttpResponse,
 ) -> Result<T, ResourceError> {
     let types: Vec<_> = response
@@ -303,12 +320,23 @@ impl ResourceClient {
 
 pub(super) fn handle(app: &App, request: &HttpRequest, time: u64) -> HttpResponse {
     let registration = &app.rs_registration;
-    match app.server.resource_server_api(
-        registration.as_ref(),
-        registration.as_ref(),
-        &registration.nonces,
-        &format!("{}/introspect", app.origin),
-    ) {
+    let registration_endpoint = format!("{}{}", app.origin, resource_registration::PATH);
+    match app
+        .server
+        .resource_server_api(
+            registration.as_ref(),
+            registration.as_ref(),
+            &registration.nonces,
+            &format!("{}/introspect", app.origin),
+        )
+        .and_then(|api| {
+            api.with_resource_registration(
+                &registration_endpoint,
+                registration.as_ref(),
+                registration.resources.as_ref(),
+                &OsNonces,
+            )
+        }) {
         Ok(api) => api.handle(request, time),
         Err(_) => HttpResponse {
             status: 503,
@@ -345,6 +373,15 @@ impl HttpTransport for Direct {
             .server
             .resource_server_api(rs.as_ref(), rs.as_ref(), &rs.nonces, &endpoint)
             .map_err(|_| "test AS configuration")?;
+        let registration_endpoint = format!("{}{}", self.origin, resource_registration::PATH);
+        let api = api
+            .with_resource_registration(
+                &registration_endpoint,
+                rs.as_ref(),
+                rs.resources.as_ref(),
+                &OsNonces,
+            )
+            .map_err(|_| "test resource registration configuration")?;
         Ok(api.handle(&request, now()))
     }
 }

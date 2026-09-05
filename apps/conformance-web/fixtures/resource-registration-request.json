@@ -1,0 +1,5 @@
+{
+  "kind": "resource_registration_request",
+  "body": "{\"access\":[{\"type\":\"demo-folder\",\"actions\":[\"read\"],\"identifier\":\"public-test-folder\"}],\"resource_server\":\"synthetic-rs-reference\",\"token_formats_supported\":[\"biscuit\"],\"token_introspection_required\":true}",
+  "headers": [["Content-Type", "application/json"]]
+}
