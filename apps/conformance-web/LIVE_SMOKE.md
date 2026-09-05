@@ -22,6 +22,12 @@ analyzer and report provenance `source: live`, harness `0.1.0`, revision
 the workbench was running uncommitted implementation work, not a claimed
 published build.
 
+Profile migration after this capture: current live OPTIONS reports identify
+their `ProbeReport` envelope as `gnap-as-discovery-probe-v1`. The historical
+capture preceded this distinction and used `gnap-as-discovery-diagnostics-v1`,
+which is now reserved for import reports. This identifier correction does not
+change the checks or retroactively constitute a new network observation.
+
 Result: **8 pass, 0 fail, 5 not_tested**, with `certification: false`:
 
 | Checks | Result | Interpretation |

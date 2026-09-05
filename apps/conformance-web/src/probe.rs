@@ -132,6 +132,31 @@ pub struct ProbeReport {
     limitations: &'static str,
 }
 
+fn report(target_id: usize, role: Role, operation: Operation, checks: Vec<Check>) -> ProbeReport {
+    ProbeReport {
+        schema_version: 1,
+        profile: if operation == Operation::AsDiscovery {
+            "gnap-as-discovery-probe-v1"
+        } else {
+            match role {
+                Role::As => "gnap-malformed-initial-request-v1",
+                Role::Rs => "gnap-protected-resource-unauthenticated-v1",
+            }
+        },
+        certification: false,
+        observation: observation("live"),
+        target_id,
+        role,
+        operation,
+        checks,
+        limitations: if operation == Operation::AsDiscovery {
+            discovery::INDEPENDENCE
+        } else {
+            "One unsigned request only. AS: malformed initial request. RS: credential-free GET against an operator-declared protected resource (policy test, not a general RFC requirement for all resources). No successful grants, proof verification, replay defense, rights enforcement, introspection or overall conformance. Scenarios are separate from SDK tests; AS response parsing reuses gnap-types. Network failures are inconclusive."
+        },
+    }
+}
+
 /// Redact extractor errors, which can otherwise reflect caller-supplied values.
 pub async fn handler(
     State(probes): State<Probes>,
@@ -193,11 +218,7 @@ pub async fn run(State(probes): State<Probes>, Json(input): Json<ProbeRequest>) 
         *last = Some(Instant::now());
     }
     match tokio::time::timeout(Duration::from_secs(4), request(target, input.operation)).await {
-        Ok(Ok(checks)) => Json(ProbeReport {
-            schema_version: 1, profile: if input.operation == Operation::AsDiscovery { "gnap-as-discovery-diagnostics-v1" } else { match target.role { Role::As => "gnap-malformed-initial-request-v1", Role::Rs => "gnap-protected-resource-unauthenticated-v1" } }, certification: false, observation: observation("live"),
-            target_id: input.target_id, role: target.role, operation: input.operation, checks,
-            limitations: if input.operation == Operation::AsDiscovery { discovery::INDEPENDENCE } else { "One unsigned request only. AS: malformed initial request. RS: credential-free GET against an operator-declared protected resource (policy test, not a general RFC requirement for all resources). No successful grants, proof verification, replay defense, rights enforcement, introspection or overall conformance. Scenarios are separate from SDK tests; AS response parsing reuses gnap-types. Network failures are inconclusive." },
-        }).into_response(),
+        Ok(Ok(checks)) => Json(report(input.target_id, target.role, input.operation, checks)).into_response(),
         _ => (StatusCode::BAD_GATEWAY, "Probe inconclusive: target resolution, address policy, TLS, deadline, body limit or network failed. No response content is returned.").into_response(),
     }
 }
@@ -406,7 +427,15 @@ mod tests {
             let checks = response_checks(response, &target, Operation::AsDiscovery)
                 .await
                 .unwrap();
-            let http = checks
+            let report = report(0, target.role, Operation::AsDiscovery, checks);
+            let wire = serde_json::to_value(&report).unwrap();
+            assert_eq!(wire["profile"], "gnap-as-discovery-probe-v1");
+            assert_eq!(wire["target_id"], 0);
+            assert_eq!(wire["role"], "as");
+            assert_eq!(wire["operation"], "as_discovery");
+            assert!(wire.get("kind").is_none(), "not the import Report envelope");
+            let http = report
+                .checks
                 .iter()
                 .find(|c| c.id == "discovery-http-200")
                 .unwrap();
@@ -418,7 +447,7 @@ mod tests {
                     crate::Status::Fail
                 }
             );
-            assert!(!serde_json::to_string(&checks)
+            assert!(!serde_json::to_string(&report)
                 .unwrap()
                 .contains("TOP-SECRET"));
         }

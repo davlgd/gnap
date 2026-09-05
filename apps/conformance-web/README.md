@@ -147,7 +147,12 @@ This is not a complete HTTP/URI production audit. The live-target configuration
 also forbids credentials and never constructs a network request from an
 imported endpoint.
 
-Discovery reports use `gnap-as-discovery-diagnostics-v1`. Executing declared
+Discovery import reports use `gnap-as-discovery-diagnostics-v1` (the `Report`
+envelope with `kind` and `independence`). Live OPTIONS reports use
+`gnap-as-discovery-probe-v1` (the `ProbeReport` envelope with `target_id`, `role`,
+`operation` and `limitations`). These distinct identifiers let consumers select
+the correct response shape; both reuse the same discovery checks.
+Executing declared
 capabilities, a client discovery helper, and RS discovery/introspection under
 RFC 9767 remain untested. Synthetic fixtures and response-adapter tests are not
 evidence that a deployed AS or the complete protocol has passed.
