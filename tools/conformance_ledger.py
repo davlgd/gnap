@@ -641,9 +641,12 @@ def run_tests(root: Path, directory: str, scope: str, output: str, *, observatio
 
 
 def discovery_tests(root: Path, capture_path: str, output: str, published: bool) -> bool:
-    from conformance.discovery import read_capture
+    from conformance.discovery import read_capture, CaptureError
     path = local_path(root, capture_path)
-    capture = read_capture(path)
+    try:
+        capture = read_capture(path)
+    except CaptureError as error:
+        raise LedgerError(str(error)) from error
     require(not published or not path.is_relative_to((root / "conformance/runs").resolve()),
             "Publish the reviewed capture in conformance/captures before recording a clean-source receipt")
     observation = {"kind": "as-discovery-v1", "execution_mode": "capture_replay",
@@ -679,10 +682,13 @@ def main() -> int:
             return 0 if discovery_tests(ROOT, args.capture, args.output, args.publish) else 1
         elif args.command == "capture-discovery":
             import os
-            from conformance.discovery import acquire, encoded
+            from conformance.discovery import acquire, encoded, CaptureError
             output = local_path(ROOT, args.output)
             require(output.is_relative_to((ROOT / "conformance/runs").resolve()) and output.suffix == ".json", "Live capture output must be conformance/runs/*.json")
-            capture = acquire(os.environ.get("GNAP_DISCOVERY_ENDPOINT"))
+            try:
+                capture = acquire(os.environ.get("GNAP_DISCOVERY_ENDPOINT"))
+            except CaptureError as error:
+                raise LedgerError(str(error)) from error
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(encoded(capture))
         else:
@@ -699,7 +705,7 @@ def main() -> int:
                 print("Source hashes, marker ownership, decisions, evidence and generated artifacts verified. No conformance completion claim.")
             else:
                 print(report, end="")
-    except (ValueError, OSError) as error:
+    except (LedgerError, OSError) as error:
         print(f"ledger error: {error}", file=sys.stderr)
         return 1
     return 0

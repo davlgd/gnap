@@ -23,6 +23,49 @@ ledger = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ledger)
 
 
+class CommandErrorTests(unittest.TestCase):
+    def test_unexpected_command_errors_keep_the_process_traceback(self):
+        for command, operation in (("capture-discovery", "acquire"), ("discovery-tests", "read_capture")):
+            with self.subTest(command=command):
+                script = f"""
+import sys
+from unittest import mock
+sys.path.insert(0, {str(ROOT / 'tools')!r})
+import conformance_ledger as ledger
+from conformance import discovery
+sys.argv = ['ledger', {command!r}]
+with mock.patch.object(discovery, {operation!r}, side_effect=ValueError('unexpected bug')):
+    raise SystemExit(ledger.main())
+"""
+                result = subprocess.run([sys.executable, "-B", "-c", script], cwd=ROOT,
+                                        capture_output=True, text=True, timeout=5, check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Traceback (most recent call last)", result.stderr)
+                self.assertIn("ValueError: unexpected bug", result.stderr)
+                self.assertNotIn("ledger error:", result.stderr)
+
+    def test_expected_capture_errors_are_reported_by_both_commands(self):
+        for command, operation in (("capture-discovery", "acquire"), ("discovery-tests", "read_capture")):
+            with self.subTest(command=command):
+                stream = io.StringIO()
+                with mock.patch.object(sys, "argv", ["ledger", command]), \
+                     mock.patch.object(sys, "stderr", stream), \
+                     mock.patch.object(wire, operation, side_effect=wire.CaptureError("invalid capture")):
+                    self.assertEqual(ledger.main(), 1)
+                self.assertEqual(stream.getvalue(), "ledger error: invalid capture\n")
+
+    def test_unexpected_value_errors_remain_visible_from_both_commands(self):
+        for command, operation in (("capture-discovery", "acquire"), ("discovery-tests", "read_capture")):
+            with self.subTest(command=command):
+                stream = io.StringIO()
+                with mock.patch.object(sys, "argv", ["ledger", command]), \
+                     mock.patch.object(sys, "stderr", stream), \
+                     mock.patch.object(wire, operation, side_effect=ValueError("unexpected bug")):
+                    with self.assertRaisesRegex(ValueError, "unexpected bug"):
+                        ledger.main()
+                self.assertEqual(stream.getvalue(), "")
+
+
 class OracleTests(unittest.TestCase):
     def outcomes(self, body, *, status=200, headers=None, target="https://as.example/gnap"):
         capture = wire.make_capture(target, status, headers if headers is not None else [["content-type", "application/json"]],
