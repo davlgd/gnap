@@ -13,9 +13,17 @@ pour mot dans le texte de la RFC correspondante.
 Les RFC sont formatees en colonnes : une citation est donc comparee apres
 normalisation des espaces et des retours a la ligne, des deux cotes.
 
+Les fichiers Rust sont selectionnes recursivement sous
+crates/*/{src,tests,examples} et apps/*/{src,tests,examples}. Les sorties Cargo
+usuelles sont hors de ces racines et ne sont pas parcourues. Une sortie
+personnalisee dans une racine source n'est pas reconnue automatiquement.
+Les liens symboliques ne sont pas suivis ; seuls les fichiers .rs sont
+selectionnes, y compris sous src/fixtures ou src/target.
+
 Usage : python3 tools/check_quotes.py
 Sortie : 0 si tout est litteral, 1 sinon.
 """
+import os
 import re
 import sys
 import urllib.error
@@ -38,6 +46,36 @@ MIN_WORDS = 5
 
 QUOTE = re.compile(r'"([^"]{20,})"')
 RFC_NEAR = re.compile(r"RFC (9635|9767|9421|9530|9651|3986|7517|9493)|§")
+
+def rust_sources(root):
+    """Yield selected Rust source/test/example files, recursively and deterministically.
+
+    Package roots are immediate children of crates/ and apps/. Sources outside
+    their src/, tests/ and examples/ trees (e.g. build.rs) are outside this scope.
+    Neither directory nor file symlinks are followed, even within the checkout.
+    No directory name inside a source root establishes generated/foreign code.
+    """
+    def walk_error(error):
+        raise error  # An unreadable source tree must not silently pass.
+
+    for category in ("crates", "apps"):
+        collection = root / category
+        if not collection.is_dir() or collection.is_symlink():
+            continue
+        for package in sorted(collection.iterdir()):
+            if package.is_symlink() or not package.is_dir():
+                continue
+            for name in ("src", "tests", "examples"):
+                source = package / name
+                if not source.is_dir() or source.is_symlink():
+                    continue
+                for directory, children, files in os.walk(source, onerror=walk_error, followlinks=False):
+                    base = Path(directory)
+                    children[:] = sorted(child for child in children if not (base / child).is_symlink())
+                    for filename in sorted(files):
+                        path = base / filename
+                        if path.suffix == ".rs" and not path.is_symlink() and path.is_file():
+                            yield path
 
 
 def fetch_missing(rfcs):
@@ -127,9 +165,8 @@ def main():
         return 0
 
     checked = bad = misattributed = 0
-    for path in sorted(ROOT.glob("crates/*/src/*.rs")) + \
-            sorted(ROOT.glob("crates/*/tests/*.rs")) + \
-            sorted(ROOT.glob("crates/*/examples/*.rs")):
+    paths = list(rust_sources(ROOT))
+    for path in paths:
         for line, block in comment_blocks(path):
             if not RFC_NEAR.search(block):
                 continue
@@ -183,7 +220,8 @@ def main():
                           f"{'/'.join(sorted(where))}")
                 print(f"    « {needle[:110]}{'…' if len(needle) > 110 else ''} »")
 
-    print(f"\n{checked} citations verifiees, {bad} a corriger "
+    print(f"\n{len(paths)} fichiers Rust selectionnes (crates et apps, racines src/tests/examples, sans liens symboliques)")
+    print(f"{checked} citations verifiees, {bad} a corriger "
           f"({bad - misattributed} introuvable(s), {misattributed} mal attribuee(s))")
     return 1 if bad else 0
 
