@@ -7,6 +7,7 @@ import sys
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -217,6 +218,37 @@ class LedgerInputTests(unittest.TestCase):
         self.prepare_claim(scope="tooling")
         with self.assertRaisesRegex(ledger.LedgerError, "self-tests"):
             ledger.apply_evidence(self.root, ledger.decision_states(self.root, self.inventory))
+
+    def test_shared_receipt_is_validated_once_per_report_not_cached_between_reports(self):
+        claim = self.prepare_claim()
+        other_id = self.inventory["documents"][1]["clauses"][0]["id"]
+        self.write_json("conformance/decisions.json", {"schema_version": 1, "decisions": [self.decision(), self.decision(clause_id=other_id)]})
+        self.write_json("conformance/evidence.json", {"schema_version": 1, "claims": [claim, claim | {"clause_id": other_id}]})
+        with mock.patch.object(ledger, "validate_run", wraps=ledger.validate_run) as validate:
+            states = ledger.decision_states(self.root, self.inventory)
+            ledger.apply_evidence(self.root, states)
+            self.assertEqual(validate.call_count, 1)
+            for identifier in (self.identifier, other_id):
+                self.assertEqual(states[identifier]["evidence"], "passing_observation_not_completion")
+            receipt = ledger.read_json(self.root / claim["run"])
+            receipt["results"][0]["status"] = "fail"
+            self.write_json(claim["run"], receipt)
+            states = ledger.decision_states(self.root, self.inventory)
+            ledger.apply_evidence(self.root, states)
+            self.assertEqual(validate.call_count, 2)
+            for identifier in (self.identifier, other_id):
+                self.assertEqual(states[identifier]["evidence"], "failing_observation")
+
+    def test_different_receipts_are_each_validated_and_keep_negative_observations(self):
+        claim = self.prepare_claim()
+        other = claim | {"run": "conformance/runs/another.json"}
+        self.write_json(other["run"], self.receipt("fail"))
+        self.write_json("conformance/evidence.json", {"schema_version": 1, "claims": [claim, other]})
+        with mock.patch.object(ledger, "validate_run", wraps=ledger.validate_run) as validate:
+            states = ledger.decision_states(self.root, self.inventory)
+            ledger.apply_evidence(self.root, states)
+            self.assertEqual(validate.call_count, 2)
+            self.assertEqual(states[self.identifier]["evidence"], "failing_observation")
 
     def test_real_tooling_execution_cannot_be_relabelled_as_gnap(self):
         # Actually execute one synthetic tooling test in an isolated temporary

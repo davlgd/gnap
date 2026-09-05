@@ -337,6 +337,9 @@ def apply_evidence(root: Path, states: dict[str, dict]) -> None:
     require(data["schema_version"] == SCHEMA and isinstance(data["claims"], list), "Unsupported evidence mapping")
     seen = set()
     by_clause: dict[str, list[str]] = {}
+    # Reuse one validated snapshot per receipt for this report only. A later
+    # invocation must recheck the receipt and its source hashes from disk.
+    validated: dict[Path, dict[str, str]] = {}
     for claim in data["claims"]:
         fields(claim, {"clause_id", "run", "case_id", "assertion"}, "evidence claim")
         identifier = claim["clause_id"]
@@ -350,9 +353,12 @@ def apply_evidence(root: Path, states: dict[str, dict]) -> None:
         seen.add(key)
         path = local_path(root, claim["run"])
         require(path.is_relative_to((root / "conformance/runs").resolve()), "Evidence receipt must live under conformance/runs")
-        run = read_json(path)
-        outcomes = validate_run(root, run)
-        require(run["scope"] == "gnap-scenarios", "Tooling self-tests cannot attest GNAP behavior")
+        if path not in validated:
+            run = read_json(path)
+            outcomes = validate_run(root, run)
+            require(run["scope"] == "gnap-scenarios", "Tooling self-tests cannot attest GNAP behavior")
+            validated[path] = outcomes
+        outcomes = validated[path]
         require(claim["case_id"] in outcomes, "Evidence refers to an absent test")
         by_clause.setdefault(identifier, []).append(outcomes[claim["case_id"]])
     for identifier, outcomes in by_clause.items():
