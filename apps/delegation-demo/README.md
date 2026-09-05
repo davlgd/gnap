@@ -38,6 +38,9 @@ resource rejection. It is not a third-party interoperability test.
 - `APP_ORIGIN`: exact externally visible HTTPS origin, no trailing slash, path,
   userinfo, query or fragment. Use its canonical spelling: lowercase hostname,
   without an explicit default port. HTTP is accepted only for localhost development.
+  In that mode the app explicitly enables nonstandard HTTP-loopback discovery;
+  OPTIONS responses carry `GNAP-Development-Only: insecure-loopback-discovery`.
+  Public HTTPS deployments use the strict RFC 9635 discovery checks.
 - Binary: `gnap-delegation-demo`; readiness: `GET /health`.
 - Clever Cloud: use this app directory as `APP_FOLDER`, a **Build M** instance,
   and exactly one runtime instance. Set `APP_ORIGIN` to its public HTTPS origin.

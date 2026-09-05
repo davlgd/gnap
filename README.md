@@ -266,12 +266,19 @@ should be read as covering them:
 | §6.1.1 | Binding a **new key** while rotating a token; it needs the two simultaneous proofs of §7.3.1.1, and the AS answers `key_rotation_not_supported` as §6.1.1-M08 provides for |
 | §7.3.2–§7.3.4 | The `mtls`, `jwsd` and `jws` key proofing methods |
 | §7.3.1.1 | Key rotation, and with it the `gnap-rotate` signature tag |
-| §9 | AS and grant endpoint discovery |
+| §9.1 | Resource-server-first discovery |
 | RFC 9767 | Introspection, resource sets, and the RS-facing API |
 
 The interaction modes the AS drives are `redirect` and, with no finish method,
 polling. `app`, `user_code` and `user_code_uri` are modelled in `gnap-types` but
 no AS in this workspace starts them.
+
+The AS answers OPTIONS at its grant endpoint with the discovery document from
+§9. It announces only its implemented proof method and lack of bound-key
+rotation; deployment-dependent capability lists are omitted. Public discovery
+requires HTTPS. Local HTTP loopback is an explicit development-only opt-in,
+labelled in the response; it is not a protocol exception. No client-side
+discovery helper or RFC 9767 discovery service is supplied yet.
 
 The AS currently issues one key-bound token per approval, preserving the
 requested object or array shape. `Policy::token_lifetime` can select a positive

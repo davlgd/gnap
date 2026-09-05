@@ -9,6 +9,111 @@ use gnap_types::token::{
     AccessToken, AccessTokenError, AccessTokenResponse, Cardinality, TokenValue, TokenValueError,
 };
 
+fn discovery(endpoint: &str) -> gnap_types::message::AsDiscovery {
+    serde_json::from_value(serde_json::json!({"grant_request_endpoint": endpoint})).unwrap()
+}
+
+/// RFC 9635 §9: HTTPS URL with host, optional port/path/query, no fragment.
+#[test]
+fn discovery_endpoint_accepts_https_url_components_without_normalizing() {
+    for endpoint in [
+        "https://as.example/gnap",
+        "https://as.example:8443/gnap?tenant=a%2Fb&order=1",
+        "https://[2001:db8::1]:8443/gnap?x=1",
+        "HTTPS://AS.example/gnap",
+    ] {
+        assert_eq!(discovery(endpoint).validate_for(endpoint), Ok(()));
+    }
+    let response = discovery("https://as.example/gnap?tenant=a%2Fb");
+    for different in [
+        "https://as.example/gnap?tenant=a%2fb",
+        "https://AS.example/gnap?tenant=a%2Fb",
+        "https://as.example:443/gnap?tenant=a%2Fb",
+        "https://as.example/gnap?tenant=a/b",
+    ] {
+        assert_eq!(
+            response.validate_for(different),
+            Err(gnap_types::message::DiscoveryError::EndpointMismatch)
+        );
+    }
+}
+
+#[test]
+fn discovery_requires_an_https_host_and_valid_uri_grammar() {
+    for endpoint in [
+        "http://as.example/gnap",
+        "http://127.0.0.1:8080/gnap",
+        "https:/gnap",
+        "https:///gnap",
+        "https://:443/gnap",
+        "https://?query",
+        "https://as.example/gnap#fragment",
+        "https://[invalid]/gnap",
+        "https://[::1]evil/gnap",
+        "https://as.example:invalid/gnap",
+        "https://as.example/a b",
+        "https://as.example/%zz",
+        "mailto:as@example.com",
+    ] {
+        assert!(
+            discovery(endpoint).validate_for(endpoint).is_err(),
+            "{endpoint}"
+        );
+    }
+}
+
+#[test]
+fn discovery_development_exception_does_not_weaken_normative_validation() {
+    for endpoint in [
+        "http://localhost:8080/gnap",
+        "http://127.0.0.1:8080/gnap",
+        "http://127.1.2.3:8080/gnap",
+        "http://[::1]:8080/gnap",
+    ] {
+        let response = discovery(endpoint);
+        assert!(response.validate_for(endpoint).is_err());
+        assert_eq!(response.validate_for_local_development(endpoint), Ok(()));
+        assert_eq!(
+            response.validate_for_local_development("http://localhost/other"),
+            Err(gnap_types::message::DiscoveryError::EndpointMismatch)
+        );
+    }
+    for endpoint in [
+        "http://as.example/gnap",
+        "http://localhost.attacker.example/gnap",
+        "http://127.0.0.1.attacker.example/gnap",
+        "http://10.0.0.1/gnap",
+        "http://[::2]/gnap",
+        "http://[::ffff:127.0.0.1]/gnap",
+        "http://user@localhost/gnap",
+    ] {
+        assert!(
+            discovery(endpoint)
+                .validate_for_local_development(endpoint)
+                .is_err(),
+            "{endpoint}"
+        );
+    }
+}
+
+#[test]
+fn discovery_requires_its_endpoint_but_preserves_extensions() {
+    use gnap_types::message::AsDiscovery;
+    for invalid in [
+        "{}",
+        r#"{"grant_request_endpoint":null}"#,
+        r#"{"grant_request_endpoint":42}"#,
+    ] {
+        assert!(serde_json::from_str::<AsDiscovery>(invalid).is_err());
+    }
+    let response: AsDiscovery = serde_json::from_str(
+        r#"{"grant_request_endpoint":"https://as.example/gnap","example_extension":true}"#,
+    )
+    .unwrap();
+    assert_eq!(response.validate_for("https://as.example/gnap"), Ok(()));
+    assert_eq!(response.extra["example_extension"], true);
+}
+
 /// GNAP-9635-§3.2.1-M30 — the client MUST reject a `bearer` token carrying `key`.
 /// GNAP-9635-§3.2.1-M28 — "If the bearer flag is present, the access token is a
 /// bearer token, and the key field in this response MUST be omitted."

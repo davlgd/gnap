@@ -1006,7 +1006,7 @@ async fn main() {
     );
     let decisions: Decisions = Arc::default();
     let storage = Arc::new(IndexedStorage::default());
-    let server = Arc::new(AuthorizationServer::new(
+    let server = AuthorizationServer::new(
         ConsentPolicy(decisions.clone()),
         KnownKeys {
             signer: signer.clone(),
@@ -1020,7 +1020,16 @@ async fn main() {
             interaction: format!("{origin}/interact"),
             token_management: format!("{origin}/token"),
         },
-    ));
+    );
+    // CanonicalOrigin has already restricted HTTP to explicit loopback hosts.
+    // Local discovery is a labelled development deviation from RFC 9635 §9;
+    // the production HTTPS path never opts in to this exception.
+    let server = Arc::new(if origin.starts_with("http:") {
+        eprintln!("Development-only HTTP loopback discovery enabled; RFC 9635 §9 requires HTTPS in production.");
+        server.with_development_http_discovery()
+    } else {
+        server
+    });
     let (sender, receiver) = mpsc::sync_channel(32);
     let app = App {
         origin: origin.clone(),
@@ -1053,7 +1062,7 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/api/{action}", post(action))
         .route("/callback", get(callback))
         .route("/interact/{handle}", get(interaction))
-        .route("/gnap", post(protocol))
+        .route("/gnap", post(protocol).options(protocol))
         .route("/continue", axum::routing::any(protocol))
         .route("/resource/folder", get(resource))
         .route("/continue/{handle}", axum::routing::any(protocol))
@@ -1076,6 +1085,48 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn actual_router_serves_discovery_and_does_not_redirect_options_aliases() {
+        let app = test_app();
+        let router =
+            application_router(app, CanonicalOrigin::parse("https://demo.example").unwrap());
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/gnap")
+                    .header("host", "demo.example")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "application/json");
+        assert!(!response.headers().contains_key("gnap-development-only"));
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let discovery: gnap_types::message::AsDiscovery = serde_json::from_slice(&body).unwrap();
+        assert_eq!(discovery.validate_for("https://demo.example/gnap"), Ok(()));
+        assert_eq!(discovery.key_rotation_supported, Some(false));
+        assert!(discovery.interaction_start_modes_supported.is_none());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/gnap")
+                    .header("host", "alias.example")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST);
+        assert!(!response.headers().contains_key("location"));
+    }
 
     #[test]
     fn canonical_origin_rejects_ambiguous_configuration() {

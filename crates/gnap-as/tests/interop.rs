@@ -106,6 +106,10 @@ impl<K: KeyResolver, N: Nonces> HttpTransport for Direct<'_, K, N> {
 }
 
 fn server() -> Server {
+    server_at(GRANT)
+}
+
+fn server_at(grant: &str) -> Server {
     AuthorizationServer::new(
         AlwaysInteract {
             interacted: Cell::new(false),
@@ -114,12 +118,120 @@ fn server() -> Server {
         MemoryStorage::new(),
         Counted(Cell::new(0)),
         Endpoints {
-            grant: GRANT.into(),
+            grant: grant.into(),
             continuation: CONTINUE.into(),
             interaction: "https://as.example/i".into(),
             token_management: "https://as.example/token".into(),
         },
     )
+}
+
+/// RFC 9635 §9: discovery does not create a grant or require a client identity.
+#[test]
+fn options_discovery_returns_only_known_engine_capabilities_without_grant_state() {
+    let as_ = server();
+    let response = as_.handle(&HttpRequest::new("OPTIONS", GRANT), 1_000);
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.header_value("content-type"),
+        Some("application/json")
+    );
+    assert_eq!(response.header_value("allow"), Some("POST, OPTIONS"));
+    assert_eq!(response.header_value("gnap-development-only"), None);
+    assert!(response.has_no_store());
+    let actual: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "grant_request_endpoint": GRANT,
+            "key_proofs_supported": ["httpsig"],
+            "key_rotation_supported": false
+        })
+    );
+    let typed: gnap_types::message::AsDiscovery = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(typed.validate_for(GRANT), Ok(()));
+    assert!(as_.storage().is_empty());
+    assert_eq!(as_.storage().remembered_nonces(), 0);
+}
+
+#[test]
+fn discovery_keeps_endpoint_query_and_rejects_other_urls_or_methods() {
+    let endpoint = "https://as.example:8443/gnap?tenant=one%2Ftwo";
+    let as_ = server_at(endpoint);
+    let response = as_.handle(&HttpRequest::new("OPTIONS", endpoint), 1_000);
+    assert_eq!(response.status, 200);
+    let typed: gnap_types::message::AsDiscovery = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(typed.grant_request_endpoint, endpoint);
+    for other in [GRANT, "https://as.example:8443/gnap?tenant=one/two"] {
+        assert_eq!(
+            as_.handle(&HttpRequest::new("OPTIONS", other), 1_000)
+                .status,
+            404
+        );
+        assert_eq!(
+            as_.handle_discovery(&HttpRequest::new("OPTIONS", other))
+                .status,
+            404
+        );
+    }
+    let wrong_method = as_.handle(&HttpRequest::new("GET", endpoint), 1_000);
+    assert_eq!(wrong_method.status, 405);
+    assert_eq!(wrong_method.header_value("allow"), Some("POST, OPTIONS"));
+}
+
+#[test]
+fn discovery_rejects_invalid_public_configuration_without_echoing_endpoint() {
+    for endpoint in [
+        "http://as.example/gnap",
+        "http://127.0.0.1:8080/gnap",
+        "https:///gnap",
+        "https://as.example/gnap#TOP-SECRET",
+    ] {
+        let as_ = server_at(endpoint);
+        let response = as_.handle(&HttpRequest::new("OPTIONS", endpoint), 1_000);
+        assert_eq!(response.status, 500, "{endpoint}");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body.get("error").is_some());
+        assert!(body.get("grant_request_endpoint").is_none());
+        assert!(!String::from_utf8(response.body)
+            .unwrap()
+            .contains("TOP-SECRET"));
+        assert!(as_.storage().is_empty());
+    }
+}
+
+#[test]
+fn local_discovery_is_opt_in_labelled_and_never_allows_remote_http() {
+    for endpoint in [
+        "http://127.0.0.1:8080/gnap",
+        "http://localhost:8080/gnap",
+        "http://[::1]:8080/gnap",
+    ] {
+        let as_ = server_at(endpoint).with_development_http_discovery();
+        let response = as_.handle(&HttpRequest::new("OPTIONS", endpoint), 1_000);
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            response.header_value("gnap-development-only"),
+            Some("insecure-loopback-discovery")
+        );
+        let typed: gnap_types::message::AsDiscovery =
+            serde_json::from_slice(&response.body).unwrap();
+        assert!(typed.validate_for(endpoint).is_err());
+        assert_eq!(typed.validate_for_local_development(endpoint), Ok(()));
+    }
+    let endpoint = "http://as.example/gnap";
+    assert_eq!(
+        server_at(endpoint)
+            .with_development_http_discovery()
+            .handle(&HttpRequest::new("OPTIONS", endpoint), 1_000)
+            .status,
+        500
+    );
+    let secure = server()
+        .with_development_http_discovery()
+        .handle(&HttpRequest::new("OPTIONS", GRANT), 1_000);
+    assert_eq!(secure.status, 200);
+    assert_eq!(secure.header_value("gnap-development-only"), None);
 }
 
 fn request() -> GrantRequest {
@@ -1310,12 +1422,12 @@ fn a_modification_carrying_an_interaction_reference_is_refused() {
 /// GNAP-9635-§2-M06 — "The request MUST be sent as a JSON object in the content
 /// of the HTTP POST request with Content-Type application/json."
 #[test]
-fn the_grant_endpoint_answers_only_a_json_post() {
+fn the_grant_endpoint_accepts_json_post_and_advertises_options() {
     let as_ = server();
 
     let response = as_.handle(&HttpRequest::new("GET", GRANT), 1_000);
     assert_eq!(response.status, 405);
-    assert_eq!(response.header_value("allow"), Some("POST"));
+    assert_eq!(response.header_value("allow"), Some("POST, OPTIONS"));
 
     let response = as_.handle(
         &HttpRequest::new("POST", GRANT)
