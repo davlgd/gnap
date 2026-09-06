@@ -112,7 +112,8 @@ their own dependency locks and toolchain requirements:
   sets; the client requests their returned references. State remains volatile
   and user authentication synthetic.
 - [Web diagnostics](apps/conformance-web/README.md): inspect imported messages
-  and run bounded rejection probes against operator-approved AS/RS endpoints.
+  and AS discovery documents, or run bounded rejection and discovery probes
+  against operator-approved endpoints.
   Reports distinguish passed, failed and untested checks, with no overall
   certification verdict.
 
@@ -130,6 +131,8 @@ OAuth](docs/gnap-and-modern-oauth.md). Benefits are hypotheses to test through
 applications, not claims that OAuth lacks its modern security extensions.
 The [5 September 2026 validation record](docs/validation-2026-09-05.md) separates
 local tests, browser observations and deployed HTTPS checks.
+The [discovery network smoke](apps/conformance-web/LIVE_SMOKE.md) records a
+local workbench calling the hosted AS; it does not attest its source revision.
 
 Sign a grant request, then verify it:
 
@@ -413,6 +416,13 @@ the adapter's responsibility.
 The [support matrix](docs/support-matrix.md) is the detailed capability inventory;
 these milestones are not blanket conformance claims for entire RFC sections.
 
+The [public normative ledger](conformance/README.md) preserves the source context
+behind RFC 9635 and RFC 9767 requirements, including recommendations and profile
+capability lists. Its [report](conformance/REPORT.md) distinguishes unresolved
+applicability from executed observations. The initial inventory is not yet a
+reviewed set of atomic obligations, and its own regression tests do not count
+as evidence that GNAP is implemented.
+
 ## Working on it
 
 Changes follow the [contribution and review process](CONTRIBUTING.md), including
@@ -423,16 +433,29 @@ cargo test                                   # unit, integration and every RFC v
 cargo clippy --workspace --all-targets -- -D warnings
 cargo doc --workspace --no-deps --open       # every public item is documented
 
+python3 -B -m unittest discover -s tools/tests -v  # offline quotation-checker regressions
 python3 tools/check_quotes.py                # selected RFC quotations match the text
 python3 tools/check_readme.py                # transcript and available local scope check
+python3 -B tools/conformance_ledger.py check  # pinned source inventory and evidence accounting
+python3 -B tools/conformance_ledger.py run-tests  # test the ledger itself, not GNAP
 ```
 
-The last two are worth explaining. The code quotes the RFCs constantly, to say
-why it does what it does; a quotation that has drifted lends the authority of
-the normative text to a sentence the working group never wrote.
+The quotation and README checks are worth explaining. The code quotes the RFCs
+constantly, to say why it does what it does; a quotation that has drifted lends
+the authority of the normative text to a sentence the working group never wrote.
 `check_quotes.py` checks double-quoted passages of at least five words in
-comments near RFC citations, excluding documentation code blocks. It downloads
-missing RFCs and compares the passages after normalising whitespace, quotes,
+comments near RFC citations, excluding documentation code blocks. It recursively
+selects `.rs` files beneath `crates/*/{src,tests,examples}` and
+`apps/*/{src,tests,examples}`, never following file or directory symlinks.
+Usual Cargo outputs in repository-level or package-level `target` directories
+are outside those roots and are not traversed. A custom build output inside a
+source root is not automatically recognised or excluded.
+Non-Rust inputs and files outside those roots, such as `apps/demo/build.rs`
+or `apps/demo/fixtures/input.rs`, are outside its scope.
+Rust modules inside source roots remain covered even under names such as
+`fixtures`, `target`, `vendor` or `external`; directory names alone do not
+establish generated code or third-party authorship. It downloads missing RFCs
+and compares the passages after normalising whitespace, quotes,
 backticks, emphasis markers and line-break hyphenation. It accepts an explicit
 `[...]` elision. This checks selected quotations, not every paraphrase, section
 reference or claim of conformance.

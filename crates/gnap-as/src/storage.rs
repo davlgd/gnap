@@ -69,6 +69,30 @@ pub struct TokenRecord {
 }
 
 impl TokenRecord {
+    /// A record with no derivation metadata or format-native identifier.
+    ///
+    /// Prefer this constructor to a struct literal when neither is needed.
+    /// Optional metadata can then receive defaults here as the
+    /// record evolves; existing struct literals still need every public field.
+    /// It stores what it is given; it does not validate the token, the client
+    /// or the credential, which is the issuing server's job.
+    #[must_use]
+    pub fn new(
+        token: AccessToken,
+        client: Client,
+        management_token: impl Into<String>,
+        issued_at: u64,
+    ) -> Self {
+        Self {
+            derivation: None,
+            identifier: None,
+            issued_at,
+            token,
+            client,
+            management_token: management_token.into(),
+        }
+    }
+
     /// Exclusive expiration deadline, or `None` when no lifetime was issued.
     ///
     /// The duration comes from `token.expires_in`. For externally constructed
@@ -211,25 +235,6 @@ pub trait GrantStore {
     /// Returns a collision, invalid candidate, capacity or availability failure.
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError>;
 
-    /// Atomically creates an independent child grant against a live parent token.
-    ///
-    /// Validate the expected parent revision, exact value, one-hop provenance,
-    /// child expiry and all indexes under the transaction. Reread `clock` at
-    /// that decision point, including after waiting for a lock. This trusted
-    /// callback must be brief, non-reentrant and side-effect-free. Cascade parent
-    /// token removal/replacement through every write path, including maintenance.
-    /// No partial state may be published on failure and no callback is retried.
-    /// # Errors
-    /// Refuses stale/dead parents, invalid children, collisions, budgets or outages.
-    fn create_derived(
-        &self,
-        parent: GrantId,
-        revision: Revision,
-        value: &TokenValue,
-        child: GrantAggregate,
-        clock: &dyn Fn() -> u64,
-    ) -> Result<GrantSnapshot, StoreError>;
-
     /// Reads one consistent snapshot through an index.
     /// # Errors
     /// Returns an availability failure rather than disguising it as absence.
@@ -258,6 +263,35 @@ pub trait GrantStore {
     fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError>;
 }
 
+/// Optional storage capability: atomic creation of one-hop derived grants.
+///
+/// Downstream derivation is a deployment choice, not a base requirement of
+/// [`GrantStore`]. A server exposes the derivation handler only for stores
+/// implementing this trait. Calling that handler without the capability is
+/// refused by the compiler rather than reported at run time as a storage outage
+/// or a policy denial. Stores used only with the ordinary grant handler do not
+/// need to implement this trait.
+pub trait DerivedGrantStore: GrantStore {
+    /// Atomically creates an independent child grant against a live parent token.
+    ///
+    /// Validate the expected parent revision, exact value, one-hop provenance,
+    /// child expiry and all indexes under the transaction. Reread `clock` at
+    /// that decision point, including after waiting for a lock. This trusted
+    /// callback must be brief, non-reentrant and side-effect-free. Cascade parent
+    /// token removal/replacement through every write path, including maintenance.
+    /// No partial state may be published on failure and no callback is retried.
+    /// # Errors
+    /// Refuses stale/dead parents, invalid children, collisions, budgets or outages.
+    fn create_derived(
+        &self,
+        parent: GrantId,
+        revision: Revision,
+        value: &TokenValue,
+        child: GrantAggregate,
+        clock: &dyn Fn() -> u64,
+    ) -> Result<GrantSnapshot, StoreError>;
+}
+
 /// Signature replay state may use a separate, short-lived shared store.
 pub trait NonceStore {
     /// Atomically remembers a nonce at `now`, or returns false for replay/failure.
@@ -272,16 +306,6 @@ impl<T: GrantStore + NonceStore> Storage for T {}
 macro_rules! forward_storage {
     ($pointer:ty) => {
         impl<T: GrantStore + ?Sized> GrantStore for $pointer {
-            fn create_derived(
-                &self,
-                parent: GrantId,
-                revision: Revision,
-                value: &TokenValue,
-                child: GrantAggregate,
-                clock: &dyn Fn() -> u64,
-            ) -> Result<GrantSnapshot, StoreError> {
-                (**self).create_derived(parent, revision, value, child, clock)
-            }
             fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
                 (**self).create(aggregate)
             }
@@ -301,6 +325,18 @@ macro_rules! forward_storage {
             }
             fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError> {
                 (**self).remove(id, revision)
+            }
+        }
+        impl<T: DerivedGrantStore + ?Sized> DerivedGrantStore for $pointer {
+            fn create_derived(
+                &self,
+                parent: GrantId,
+                revision: Revision,
+                value: &TokenValue,
+                child: GrantAggregate,
+                clock: &dyn Fn() -> u64,
+            ) -> Result<GrantSnapshot, StoreError> {
+                (**self).create_derived(parent, revision, value, child, clock)
             }
         }
         impl<T: NonceStore + ?Sized> NonceStore for $pointer {
@@ -603,6 +639,103 @@ impl GrantStore for MemoryStorage {
         Ok(snapshot)
     }
 
+    fn lookup(&self, selector: GrantSelector<'_>) -> Result<Option<GrantSnapshot>, StoreError> {
+        let state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
+        Ok(state
+            .indices
+            .locate(selector)
+            .and_then(|id| state.grants.get(&id))
+            .cloned())
+    }
+
+    fn compare_exchange(
+        &self,
+        id: GrantId,
+        revision: Revision,
+        replacement: GrantAggregate,
+    ) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
+        let previous = state.grants.get(&id).ok_or(StoreError::Conflict)?;
+        if previous.revision != revision || previous.aggregate.revoked {
+            return Err(StoreError::Conflict);
+        }
+        if previous.aggregate.record.grant.state() == gnap_core::State::Finalized
+            && replacement.record.grant.state() != gnap_core::State::Finalized
+        {
+            return Err(StoreError::Invalid);
+        }
+        if previous.aggregate.record.request.client != replacement.record.request.client {
+            return Err(StoreError::Invalid);
+        }
+        if state.derived_origins.contains_key(&id) {
+            // A child is one-shot: only removal of its token is allowed. No
+            // reparenting, clearing provenance, rotation or renewed authority.
+            if replacement.record.request != previous.aggregate.record.request
+                || replacement.record.continuation_token.is_some()
+                || replacement.tokens.iter().any(|(handle, token)| {
+                    previous.aggregate.tokens.get(handle).is_none_or(|old| {
+                        token.token != old.token
+                            || token.client != old.client
+                            || token.issued_at != old.issued_at
+                            || token.identifier != old.identifier
+                            || token.derivation != old.derivation
+                            || token.management_token != old.management_token
+                    })
+                })
+            {
+                return Err(StoreError::Invalid);
+            }
+        } else if replacement.record.request.existing_access_token.is_some()
+            || replacement
+                .tokens
+                .values()
+                .any(|token| token.derivation.is_some())
+        {
+            return Err(StoreError::Invalid);
+        }
+        let cascade = state.cascade(previous, Some(&replacement))?;
+        let next = revision.0.checked_add(1).ok_or(StoreError::Exhausted)?;
+        let indices = Indices::candidate(&replacement, id)?;
+        state.indices.check(&indices, id)?;
+        let snapshot = GrantSnapshot {
+            id,
+            revision: Revision(next),
+            aggregate: replacement,
+        };
+        for child in cascade {
+            state.publish(child, Indices::default());
+        }
+        state.publish(snapshot.clone(), indices);
+        drop(state);
+        Ok(snapshot)
+    }
+
+    fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError> {
+        let mut state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
+        let previous = state.grants.get(&id).ok_or(StoreError::Conflict)?;
+        if previous.revision != revision {
+            return Err(StoreError::Conflict);
+        }
+        let cascade = state.cascade(previous, None)?;
+        for child in cascade {
+            state.publish(child, Indices::default());
+        }
+        if let Some(parent) = state.derived_origins.remove(&id) {
+            if let Some(children) = state.children.get_mut(&parent) {
+                children.remove(&id);
+                if children.is_empty() {
+                    state.children.remove(&parent);
+                }
+            }
+        }
+        state.indices.replace(id, Indices::default());
+        state.grants.remove(&id);
+        drop(state);
+        Ok(())
+    }
+}
+
+impl DerivedGrantStore for MemoryStorage {
     fn create_derived(
         &self,
         parent: GrantId,
@@ -700,101 +833,6 @@ impl GrantStore for MemoryStorage {
         state.last_id = next;
         drop(state);
         Ok(snapshot)
-    }
-
-    fn lookup(&self, selector: GrantSelector<'_>) -> Result<Option<GrantSnapshot>, StoreError> {
-        let state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
-        Ok(state
-            .indices
-            .locate(selector)
-            .and_then(|id| state.grants.get(&id))
-            .cloned())
-    }
-
-    fn compare_exchange(
-        &self,
-        id: GrantId,
-        revision: Revision,
-        replacement: GrantAggregate,
-    ) -> Result<GrantSnapshot, StoreError> {
-        let mut state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
-        let previous = state.grants.get(&id).ok_or(StoreError::Conflict)?;
-        if previous.revision != revision || previous.aggregate.revoked {
-            return Err(StoreError::Conflict);
-        }
-        if previous.aggregate.record.grant.state() == gnap_core::State::Finalized
-            && replacement.record.grant.state() != gnap_core::State::Finalized
-        {
-            return Err(StoreError::Invalid);
-        }
-        if previous.aggregate.record.request.client != replacement.record.request.client {
-            return Err(StoreError::Invalid);
-        }
-        if state.derived_origins.contains_key(&id) {
-            // A child is one-shot: only removal of its token is allowed. No
-            // reparenting, clearing provenance, rotation or renewed authority.
-            if replacement.record.request != previous.aggregate.record.request
-                || replacement.record.continuation_token.is_some()
-                || replacement.tokens.iter().any(|(handle, token)| {
-                    previous.aggregate.tokens.get(handle).is_none_or(|old| {
-                        token.token != old.token
-                            || token.client != old.client
-                            || token.issued_at != old.issued_at
-                            || token.identifier != old.identifier
-                            || token.derivation != old.derivation
-                            || token.management_token != old.management_token
-                    })
-                })
-            {
-                return Err(StoreError::Invalid);
-            }
-        } else if replacement.record.request.existing_access_token.is_some()
-            || replacement
-                .tokens
-                .values()
-                .any(|token| token.derivation.is_some())
-        {
-            return Err(StoreError::Invalid);
-        }
-        let cascade = state.cascade(previous, Some(&replacement))?;
-        let next = revision.0.checked_add(1).ok_or(StoreError::Exhausted)?;
-        let indices = Indices::candidate(&replacement, id)?;
-        state.indices.check(&indices, id)?;
-        let snapshot = GrantSnapshot {
-            id,
-            revision: Revision(next),
-            aggregate: replacement,
-        };
-        for child in cascade {
-            state.publish(child, Indices::default());
-        }
-        state.publish(snapshot.clone(), indices);
-        drop(state);
-        Ok(snapshot)
-    }
-
-    fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError> {
-        let mut state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
-        let previous = state.grants.get(&id).ok_or(StoreError::Conflict)?;
-        if previous.revision != revision {
-            return Err(StoreError::Conflict);
-        }
-        let cascade = state.cascade(previous, None)?;
-        for child in cascade {
-            state.publish(child, Indices::default());
-        }
-        if let Some(parent) = state.derived_origins.remove(&id) {
-            if let Some(children) = state.children.get_mut(&parent) {
-                children.remove(&id);
-                if children.is_empty() {
-                    state.children.remove(&parent);
-                }
-            }
-        }
-        state.indices.replace(id, Indices::default());
-        state.grants.remove(&id);
-        drop(state);
-        Ok(())
     }
 }
 

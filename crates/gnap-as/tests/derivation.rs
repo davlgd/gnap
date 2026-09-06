@@ -1,10 +1,10 @@
 //! Signed one-hop derivation, exact-token dependencies and bounded storage.
 
 use gnap_as::{
-    AuthorizationServer, Decision, DerivationPolicy, DerivedAccess, Endpoints, GrantSelector,
-    GrantSnapshot, GrantStore, IntrospectionDecision, IntrospectionPolicy, KeyResolver,
-    MemoryStorage, Nonces, Policy, ResolvedResourceServer, ResourceServerResolver, RsId,
-    StoreError, TokenRecord,
+    AuthorizationServer, Decision, DerivationPolicy, DerivedAccess, DerivedGrantStore, Endpoints,
+    GrantSelector, GrantSnapshot, GrantStore, IntrospectionDecision, IntrospectionPolicy,
+    KeyResolver, MemoryStorage, Nonces, Policy, ResolvedResourceServer, ResourceServerResolver,
+    RsId, StoreError, TokenRecord,
 };
 use gnap_client::sign_request;
 use gnap_crypto::{proof::Verifier, ps256::Ps256Signer};

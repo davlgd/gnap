@@ -15,7 +15,8 @@ use crate::policy::{
     Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround,
 };
 use crate::storage::{
-    GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot, Storage, StoreError, TokenRecord,
+    DerivedGrantStore, GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot, Storage,
+    StoreError, TokenRecord,
 };
 use gnap_core::{Event, Grant, State};
 use gnap_crypto::hash::{interaction_hash_named, InteractionHashInput};
@@ -182,8 +183,53 @@ struct ApprovedDerivation {
     ttl: u64,
 }
 
-impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K, S, N> {
+impl<P: Policy, K: KeyResolver, S: Storage + DerivedGrantStore, N: Nonces>
+    AuthorizationServer<P, K, S, N>
+{
     /// Opts the grant endpoint into the one-hop opaque downstream profile.
+    ///
+    /// This handler exists only for stores implementing [`DerivedGrantStore`];
+    /// a deployment whose store lacks that capability cannot enable derivation.
+    ///
+    /// ```
+    /// use gnap_as::{
+    ///     AuthorizationServer, DerivationPolicy, DerivedGrantStore, KeyResolver,
+    ///     Nonces, NonceStore, Policy, ResourceServerResolver, Storage,
+    /// };
+    /// use gnap_types::http::{HttpRequest, HttpResponse};
+    /// # #[allow(dead_code)]
+    /// fn handle<P: Policy, K: KeyResolver, S: Storage + DerivedGrantStore, N: Nonces>(
+    ///     server: &AuthorizationServer<P, K, S, N>,
+    ///     request: &HttpRequest,
+    ///     keys: &impl ResourceServerResolver,
+    ///     policy: &impl DerivationPolicy,
+    ///     nonces: &dyn NonceStore,
+    ///     clock: &dyn Fn() -> u64,
+    /// ) -> HttpResponse {
+    ///     server.handle_grant_with_derivation(request, keys, policy, nonces, clock)
+    /// }
+    /// ```
+    ///
+    /// The same code without the capability bound does not compile:
+    ///
+    /// ```compile_fail,E0599
+    /// use gnap_as::{
+    ///     AuthorizationServer, DerivationPolicy, KeyResolver,
+    ///     Nonces, NonceStore, Policy, ResourceServerResolver, Storage,
+    /// };
+    /// use gnap_types::http::{HttpRequest, HttpResponse};
+    /// # #[allow(dead_code)]
+    /// fn handle<P: Policy, K: KeyResolver, S: Storage, N: Nonces>(
+    ///     server: &AuthorizationServer<P, K, S, N>,
+    ///     request: &HttpRequest,
+    ///     keys: &impl ResourceServerResolver,
+    ///     policy: &impl DerivationPolicy,
+    ///     nonces: &dyn NonceStore,
+    ///     clock: &dyn Fn() -> u64,
+    /// ) -> HttpResponse {
+    ///     server.handle_grant_with_derivation(request, keys, policy, nonces, clock)
+    /// }
+    /// ```
     ///
     /// All POST grant bodies entering this handler are bounded to 64 KiB;
     /// ordinary requests then follow the normal flow. Derivation allows
@@ -405,6 +451,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
             Err(failure) => storage_failure(failure),
         }
     }
+}
+
+impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K, S, N> {
     /// Offers discovery and introspection for this AS's opaque reference tokens.
     ///
     /// The RS resolver and replay memory are separate from client authentication.

@@ -432,6 +432,30 @@ def workbench(base, outcomes):
         expect(checks.get("request-proof") == "not_tested", "Import report claimed live signature verification")
         outcomes.append({"check": "workbench-" + label, "status": "pass", "elapsed_ms": elapsed})
 
+    for label, endpoint, captured, endpoint_status in [
+        ("discovery", "https://test-as.example/gnap", True, "pass"),
+        ("discovery-userinfo", "https://user@test-as.example/gnap", True, "fail"),
+        ("discovery-without-http-context", "https://test-as.example/gnap", False, "pass"),
+    ]:
+        envelope = {
+            "kind": "as_discovery",
+            "body": json.dumps({"grant_request_endpoint": endpoint, "key_proofs_supported": ["httpsig"]}),
+        }
+        if captured:
+            envelope.update({"headers": [["Content-Type", "application/json"]],
+                             "http_status": 200, "queried_endpoint": endpoint})
+        status, headers, result, elapsed = request(browser, base, "/api/analyze", "POST", envelope)
+        expect(status == 200 and result.get("certification") is False, "Discovery import failed or claimed certification")
+        expect(headers.get("cache-control") == "no-store", "Discovery report is cacheable")
+        expect(result.get("observation", {}).get("source") == "import", "Synthetic discovery import claimed live provenance")
+        checks = {item["id"]: item["status"] for item in result["checks"]}
+        expect(checks.get("discovery-endpoint") == endpoint_status, "Wrong discovery endpoint diagnostic")
+        context_status = "pass" if captured else "not_tested"
+        for check in ("discovery-http-200", "discovery-media-type", "discovery-endpoint-match"):
+            expect(checks.get(check) == context_status, "Wrong discovery HTTP context diagnostic")
+        expect(checks.get("discovery-capability-behavior") == "not_tested", "Discovery import claimed capability execution")
+        outcomes.append({"check": "workbench-" + label, "status": "pass", "elapsed_ms": elapsed})
+
 
 def rs_imports(base, outcomes):
     """Check imported wire diagnostics, never infer live AS/RS authentication."""

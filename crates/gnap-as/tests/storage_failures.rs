@@ -23,20 +23,6 @@ struct Faults {
     fault: Cell<Fault>,
 }
 impl GrantStore for Faults {
-    fn create_derived(
-        &self,
-        parent: GrantId,
-        revision: Revision,
-        value: &gnap_types::token::TokenValue,
-        child: GrantAggregate,
-        clock: &dyn Fn() -> u64,
-    ) -> Result<GrantSnapshot, StoreError> {
-        if self.fault.get() == Fault::Create {
-            return Err(StoreError::Unavailable);
-        }
-        self.inner
-            .create_derived(parent, revision, value, child, clock)
-    }
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
         if self.fault.get() == Fault::Create {
             return Err(StoreError::Unavailable);

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "documents": [
+    {
+      "rfc": "9635",
+      "url": "https://www.rfc-editor.org/rfc/rfc9635.xml",
+      "sha256": "325f148145841a026bc5a0b5f2300ec5fd3429e5c2b0b46ad6ad96efb55b8048",
+      "path": "conformance/sources/rfc9635.xml"
+    },
+    {
+      "rfc": "9767",
+      "url": "https://www.rfc-editor.org/rfc/rfc9767.xml",
+      "sha256": "151eb634b8dd0a1b3bc07d3e3aecabf1b84aeb85ba45d918b5655601341854d1",
+      "path": "conformance/sources/rfc9767.xml"
+    }
+  ]
+}

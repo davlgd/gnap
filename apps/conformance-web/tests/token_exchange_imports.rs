@@ -297,6 +297,6 @@ fn fixtures_and_browser_help_name_the_local_pair_and_its_limits() {
     assert!(html.contains("value=\"token_exchange\""));
     assert!(html.contains("id=\"token-fixture\""));
     assert!(html.contains("not a GNAP wire message"));
-    assert!(js.contains("byId(id).disabled = kind === 'token_exchange'"));
+    // Control state and submitted envelopes are exercised by the UI behavior tests.
     assert!(!js.contains("innerHTML"));
 }
