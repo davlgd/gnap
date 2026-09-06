@@ -293,6 +293,13 @@ well as proof and rights; the SDK provides `TokenRecord::is_valid_at` for the
 time check. Authentication of the resource owner, consent, authorization policy, key
 management, durable storage and HTTP adapters belong to the deployment. The
 included store is in memory; the client transport interface is blocking.
+Grant state and its issued tokens now share one revisioned aggregate. The
+storage adapter commits the aggregate and all credential indexes atomically;
+stale writes cannot restore a token removed by a concurrent revoke. Policy and
+proof verification run outside the store transaction. Custom adapters must
+implement the [transactional storage contract](crates/gnap-as/src/lib.rs),
+including collision checks, failure reporting and maintenance removal. This
+does not add persistence or continuation after grant approval.
 Revoked-token records are removed. A later call to the old management URI is
 rejected because its key binding can no longer be verified; the idempotent
 revocation recommended in §6.2 would require retaining authentication metadata.

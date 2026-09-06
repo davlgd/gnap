@@ -1,8 +1,12 @@
 //! The encoder sees approved inputs; the server owns committing its output.
+
+pub mod support;
+use support::TokenLookup;
+
 use gnap_as::{
     AuthorizationServer, Decision, EncodedToken, Endpoints, KeyResolver, MemoryStorage, Nonces,
     OpaqueTokenEncoder, Policy, TokenEncoder, TokenEncodingContext, TokenEncodingError,
-    TokenRecord, TokenStore,
+    TokenRecord,
 };
 use gnap_client::{HttpRequest, HttpResponse, HttpTransport, Session};
 use gnap_crypto::{
@@ -139,6 +143,80 @@ fn request() -> GrantRequest {
 fn signer() -> Ps256Signer {
     Ps256Signer::from_pkcs1_pem(PRIVATE, "test-key").unwrap()
 }
+
+#[test]
+fn a_collision_with_another_grant_publishes_neither_issuance_nor_rotation() {
+    use gnap_as::{GrantSelector, GrantStore};
+    use gnap_client::sign_request;
+    for duplicate_value in [false, true] {
+        let duplicate = if duplicate_value {
+            Outcome::Value("first", Some(vec![3]))
+        } else {
+            Outcome::Value("third", Some(vec![1]))
+        };
+        let f = fixture(vec![
+            Outcome::Value("first", Some(vec![1])),
+            Outcome::Value("second", Some(vec![2])),
+            duplicate,
+        ]);
+        let grant = |now| {
+            sign_request(
+                HttpRequest::new("POST", ENDPOINT)
+                    .json_body(serde_json::to_vec(&request()).unwrap()),
+                &signer(),
+                None,
+                now,
+            )
+            .unwrap()
+        };
+        assert_eq!(f.server.handle(&grant(1_000), 1_000).status, 200);
+        let original = f
+            .server
+            .storage()
+            .lookup(GrantSelector::AccessToken("first"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(f.server.handle(&grant(1_001), 1_001).status, 200);
+        let second = f.server.storage().get_token("nonce0005").unwrap();
+        let management = second.token.manage.as_ref().unwrap();
+        let rotation = sign_request(
+            HttpRequest::new("POST", &management.uri),
+            &signer(),
+            Some(&management.access_token.value),
+            1_002,
+        )
+        .unwrap();
+        let response = f.server.handle(&rotation, 1_002);
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8_lossy(&response.body).contains("invalid_rotation"));
+        assert!(response.has_no_store());
+        assert_unchanged(&second, &f.server.storage().get_token("nonce0005").unwrap());
+        assert_eq!(
+            f.server
+                .storage()
+                .lookup(GrantSelector::Id(original.id))
+                .unwrap()
+                .unwrap()
+                .revision,
+            original.revision
+        );
+
+        let f = fixture(vec![
+            Outcome::Value("first", Some(vec![1])),
+            if duplicate_value {
+                Outcome::Value("first", Some(vec![2]))
+            } else {
+                Outcome::Value("second", Some(vec![1]))
+            },
+        ]);
+        assert_eq!(f.server.handle(&grant(1_000), 1_000).status, 200);
+        let response = f.server.handle(&grant(1_001), 1_001);
+        assert_eq!(response.status, 500);
+        assert!(response.body.is_empty());
+        assert!(f.server.storage().get_token("nonce0002").is_some());
+        assert!(f.server.storage().get_token("nonce0005").is_none());
+    }
+}
 fn assert_unchanged(before: &TokenRecord, after: &TokenRecord) {
     assert_eq!(after.identifier, before.identifier);
     assert_eq!(after.issued_at, before.issued_at);
@@ -232,7 +310,7 @@ fn initial_encoder_refusal_and_invalid_output_store_no_access_token() {
         let mut client = Session::new(&transport, &signer, ENDPOINT);
         assert!(client.start(&request(), 1_000).is_err());
         assert!(f.server.storage().get_token("nonce0002").is_none());
-        assert!(f.server.storage().is_empty());
+        assert!(f.server.storage().is_empty().unwrap());
         assert_eq!(f.seen.borrow().len(), 1);
     }
 }
@@ -284,7 +362,7 @@ fn issuance_rejects_a_candidate_repeating_the_management_credential_before_encod
     assert!(response.has_no_store());
     assert!(!String::from_utf8_lossy(&response.body).contains("management-secret"));
     assert!(server.storage().get_token("handle").is_none());
-    assert!(server.storage().is_empty());
+    assert!(server.storage().is_empty().unwrap());
 }
 
 #[test]
@@ -301,7 +379,7 @@ fn issuance_rejects_an_encoded_value_equal_to_the_management_credential_before_s
     assert!(!(200..300).contains(&response.status));
     assert!(response.has_no_store());
     assert!(f.server.storage().get_token("nonce0002").is_none());
-    assert!(f.server.storage().is_empty());
+    assert!(f.server.storage().is_empty().unwrap());
     let seen = f.seen.borrow();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].candidate, "nonce0001");
@@ -309,7 +387,7 @@ fn issuance_rejects_an_encoded_value_equal_to_the_management_credential_before_s
 }
 
 #[test]
-fn encoder_failures_and_identifier_or_value_collisions_restore_the_entire_record() {
+fn encoder_failures_and_identifier_or_value_collisions_preserve_the_entire_record() {
     for outcome in [
         Outcome::Refuse,
         Outcome::Value("new-value", Some(vec![])),

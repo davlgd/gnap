@@ -106,6 +106,8 @@ endpoint is implemented or simulated.**
   verified and a callback is consumed once per browser session.
 - At most 64 active sessions, a 32-command worker queue, 40 actions per session,
   10 new sessions/minute globally, and 16 in-flight protocol/RS operations.
+  Storage holds at most 256 grant aggregates: saturation returns HTTP 503,
+  without evicting grants with live rights to make room for new requests.
   A single client worker serializes session operations; a slow HTTP request can
   hold up all sessions until its 10-second timeout. It is intentionally a bounded
   demonstration, not a throughput benchmark.
@@ -114,12 +116,26 @@ endpoint is implemented or simulated.**
   successful rotation. The RS checks that SDK deadline on every access and
   removes expired tokens without waiting for the 30-second background sweep.
   Failed rotations do not extend the lifetime. Browser sessions and pending
-  grants retain their separate 20-minute limits; rotating a token does not
+  grants retain their separate 20-minute limits; continuation retention starts
+  at aggregate creation and is never renewed by a rewrite or failed CAS.
+  Expiration of that continuation does not delete an otherwise live token.
+  Rotating a token does not
   renew the browser session. Session expiration also removes the accepted
   client reference, so an unexpired token can still become unusable earlier.
-- Token lookup, live-state check, signature verification and authorization are
-  serialized with index updates. A completed revocation cannot be bypassed by a
-  subsequent resource read. AS/RS replay caches are separate.
+- The SDK owns all credential indexes. Aggregate creation, revision-checked
+  replacement and maintenance removal are atomic; the application stores only
+  continuation-retention metadata. A bounded sweep removes expired tokens and
+  empty/expired or revoked aggregates. Removed grant IDs are never reused.
+  The RS verifies the signature outside the storage lock, then rechecks the
+  aggregate revision and token expiration under the same short lock used by
+  mutations. A rotation/revocation committed during verification invalidates
+  the stale read; a read already authorized can finish before a later revoke.
+  Any change to the aggregate invalidates that snapshot, including a change
+  to a sibling token if a future issuance policy supplies several tokens.
+  AS/RS replay caches are separate. Unavailable storage returns HTTP 503 (not
+  an authentication failure), with no credential values reflected in the error.
+  A stale or colliding rotation returns `invalid_rotation`; invalid/colliding
+  write candidates outside rotation remain internal server errors.
 - Request/response bodies are limited to 64 KiB. State is in-memory only; there
   is no durable store, horizontal scaling, rate-limit fairness guarantee or
   production abuse protection. Never deploy this as a real authorization service.

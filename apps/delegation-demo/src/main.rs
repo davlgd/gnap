@@ -9,8 +9,9 @@ use axum::{
     Json, Router,
 };
 use gnap_as::{
-    AuthorizationServer, Decision, Endpoints, Finish, GrantRecord, GrantStore, KeyResolver,
-    MemoryStorage, NonceStore, OsNonces, Policy, TokenRecord, TokenStore,
+    AuthorizationServer, Decision, Endpoints, Finish, GrantAggregate, GrantId, GrantSelector,
+    GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore, OsNonces, Policy, Revision,
+    StoreError,
 };
 use gnap_client::{sign_request, HttpRequest, HttpResponse, HttpTransport, Session};
 use gnap_crypto::{
@@ -33,6 +34,7 @@ use std::{
 };
 
 const MAX_SESSIONS: usize = 64;
+const MAX_GRANTS: usize = 256;
 const SESSION_LIFETIME: Duration = Duration::from_secs(1200);
 type Decisions = Arc<Mutex<HashMap<String, bool>>>;
 type As = AuthorizationServer<ConsentPolicy, KnownKeys, Arc<IndexedStorage>, OsNonces>;
@@ -178,102 +180,105 @@ async fn canonical_authority(
     }
 }
 
-/// Application adapter: GNAP TokenStore is indexed by management handle; this
-/// resource server also needs a token-value index. Both mutate under one lock.
+/// Only retention metadata is local: all credential indexes belong to the SDK.
+/// The outer lock serializes maintenance and commits, never proof or network IO.
 #[derive(Default)]
-struct TokenIndex {
-    handles: HashMap<String, TokenRecord>,
-    values: HashMap<String, String>,
+struct RetainedGrants {
+    base: MemoryStorage,
+    continuation_deadlines: HashMap<GrantId, u64>,
 }
 #[derive(Default)]
 struct IndexedStorage {
-    base: MemoryStorage,
-    grants: Mutex<HashMap<String, (GrantRecord, u64)>>,
-    tokens: Mutex<TokenIndex>,
+    state: Mutex<RetainedGrants>,
+    nonces: MemoryStorage,
     resource_nonces: MemoryStorage,
 }
+impl RetainedGrants {
+    fn cleanup(&mut self, now: u64) -> Result<(), StoreError> {
+        // Bounded by MAX_GRANTS. No clone of a credential index or token TTL.
+        let ids: Vec<_> = self.continuation_deadlines.keys().copied().collect();
+        for id in ids {
+            let snapshot = self
+                .base
+                .lookup(GrantSelector::Id(id))?
+                .ok_or(StoreError::Invalid)?;
+            let mut candidate = snapshot.aggregate;
+            let previous_count = candidate.tokens.len();
+            candidate.tokens.retain(|_, token| token.is_valid_at(now));
+            let continuation_expired = self.continuation_deadlines[&id] <= now;
+            if candidate.revoked
+                || (candidate.tokens.is_empty()
+                    && (candidate.record.continuation_token.is_none() || continuation_expired))
+            {
+                self.base.remove(id, snapshot.revision)?;
+                self.continuation_deadlines.remove(&id);
+            } else {
+                let clear_continuation =
+                    continuation_expired && candidate.record.continuation_token.is_some();
+                if clear_continuation {
+                    candidate.record.continuation_token = None;
+                    candidate.record.interact_handle = None;
+                    candidate.record.interact_ref = None;
+                    candidate.record.interact_expires_at = None;
+                }
+                if clear_continuation || previous_count != candidate.tokens.len() {
+                    self.base
+                        .compare_exchange(id, snapshot.revision, candidate)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
 impl IndexedStorage {
-    fn cleanup(&self) {
-        let now = now();
-        self.grants
-            .lock()
-            .unwrap()
-            .retain(|_, (_, until)| *until > now);
-        let mut tokens = self.tokens.lock().unwrap();
-        tokens.handles.retain(|_, record| record.is_valid_at(now));
-        let valid: std::collections::HashSet<String> = tokens.handles.keys().cloned().collect();
-        tokens.values.retain(|_, handle| valid.contains(handle));
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, RetainedGrants>, StoreError> {
+        self.state.lock().map_err(|_| StoreError::Unavailable)
+    }
+    fn cleanup(&self) -> Result<(), StoreError> {
+        self.lock()?.cleanup(now())
     }
 }
 impl GrantStore for IndexedStorage {
-    fn put(&self, key: &str, record: GrantRecord) {
-        self.grants
-            .lock()
-            .unwrap()
-            .insert(key.into(), (record, now() + 1200));
-    }
-    fn get(&self, key: &str) -> Option<GrantRecord> {
-        self.grants
-            .lock()
-            .unwrap()
-            .get(key)
-            .filter(|(_, until)| *until > now())
-            .map(|(r, _)| r.clone())
-    }
-    fn take(&self, key: &str) -> Option<GrantRecord> {
-        self.grants
-            .lock()
-            .unwrap()
-            .remove(key)
-            .filter(|(_, until)| *until > now())
-            .map(|(r, _)| r)
-    }
-    fn update_by_interaction(
-        &self,
-        handle: &str,
-        update: &mut dyn FnMut(&mut GrantRecord) -> bool,
-    ) -> bool {
-        let mut grants = self.grants.lock().unwrap();
-        let Some((record, _)) = grants
-            .values_mut()
-            .find(|(r, until)| r.interact_handle.as_deref() == Some(handle) && *until > now())
-        else {
-            return false;
-        };
-        let mut candidate = record.clone();
-        if !update(&mut candidate) {
-            return false;
+    fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.lock()?;
+        let now = now();
+        state.cleanup(now)?;
+        if state.continuation_deadlines.len() >= MAX_GRANTS {
+            return Err(StoreError::Unavailable);
         }
-        *record = candidate;
-        true
+        let deadline = now
+            .checked_add(SESSION_LIFETIME.as_secs())
+            .ok_or(StoreError::Exhausted)?;
+        let snapshot = state.base.create(aggregate)?;
+        state.continuation_deadlines.insert(snapshot.id, deadline);
+        Ok(snapshot)
+    }
+    fn lookup(&self, selector: GrantSelector<'_>) -> Result<Option<GrantSnapshot>, StoreError> {
+        let mut state = self.lock()?;
+        state.cleanup(now())?;
+        state.base.lookup(selector)
+    }
+    fn compare_exchange(
+        &self,
+        id: GrantId,
+        revision: Revision,
+        replacement: GrantAggregate,
+    ) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.lock()?;
+        state.cleanup(now())?;
+        // Neither a successful rewrite nor a refused CAS renews retention.
+        state.base.compare_exchange(id, revision, replacement)
+    }
+    fn remove(&self, id: GrantId, revision: Revision) -> Result<(), StoreError> {
+        let mut state = self.lock()?;
+        state.base.remove(id, revision)?;
+        state.continuation_deadlines.remove(&id);
+        Ok(())
     }
 }
 impl NonceStore for IndexedStorage {
     fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
-        self.base.remember_nonce(nonce, now)
-    }
-}
-impl TokenStore for IndexedStorage {
-    fn put_token(&self, handle: &str, record: TokenRecord) {
-        let mut tokens = self.tokens.lock().unwrap();
-        if let Some(old) = tokens.handles.remove(handle) {
-            tokens.values.remove(old.token.value.as_str());
-        }
-        tokens
-            .values
-            .insert(record.token.value.as_str().into(), handle.into());
-        // Store the AS timestamp unchanged: restoring a refused rotation must
-        // not restart its lifetime. Browser sessions have a separate deadline.
-        tokens.handles.insert(handle.into(), record);
-    }
-    fn get_token(&self, handle: &str) -> Option<TokenRecord> {
-        self.tokens.lock().unwrap().handles.get(handle).cloned()
-    }
-    fn take_token(&self, handle: &str) -> Option<TokenRecord> {
-        let mut tokens = self.tokens.lock().unwrap();
-        let record = tokens.handles.remove(handle)?;
-        tokens.values.remove(record.token.value.as_str());
-        Some(record)
+        self.nonces.remember_nonce(nonce, now)
     }
 }
 
@@ -681,7 +686,17 @@ fn resource_request(
 
 /// Resource metadata is authoritative only in this same-deployment index; this
 /// is NOT an implementation of the RFC 9767 introspection protocol.
-fn read_resource(app: &App, request: &HttpRequest) -> Result<Value, ()> {
+#[derive(Debug)]
+enum ResourceError {
+    Denied,
+    Storage(StoreError),
+}
+impl From<StoreError> for ResourceError {
+    fn from(error: StoreError) -> Self {
+        Self::Storage(error)
+    }
+}
+fn read_resource(app: &App, request: &HttpRequest) -> Result<Value, ResourceError> {
     read_resource_with_clock(app, request, now)
 }
 
@@ -689,7 +704,7 @@ fn read_resource_with_clock(
     app: &App,
     request: &HttpRequest,
     clock: impl Fn() -> u64,
-) -> Result<Value, ()> {
+) -> Result<Value, ResourceError> {
     let auth: Vec<&str> = request
         .headers
         .iter()
@@ -697,33 +712,37 @@ fn read_resource_with_clock(
         .map(|(_, v)| v.as_str())
         .collect();
     if auth.len() != 1 {
-        return Err(());
+        return Err(ResourceError::Denied);
     }
-    let (scheme, token) = auth[0].split_once(' ').ok_or(())?;
+    let (scheme, token) = auth[0].split_once(' ').ok_or(ResourceError::Denied)?;
     let token = token.trim_start_matches(' ');
     if !scheme.eq_ignore_ascii_case("gnap")
         || token.is_empty()
         || token.bytes().any(|b| b.is_ascii_whitespace())
     {
-        return Err(());
+        return Err(ResourceError::Denied);
     }
-    // Keep the index locked through verification and authorization: a revoke
-    // cannot commit between checking a live token and authorizing this read.
-    let mut tokens = app.storage.tokens.lock().unwrap();
-    let handle = tokens.values.get(token).ok_or(())?.clone();
-    let record = tokens.handles.get(&handle).ok_or(())?;
-    if !record.is_valid_at(clock()) {
-        tokens.handles.remove(&handle);
-        tokens.values.remove(token);
-        return Err(());
-    }
+    let snapshot = {
+        let mut state = app.storage.lock()?;
+        state.cleanup(clock())?;
+        state
+            .base
+            .lookup(GrantSelector::AccessToken(token))?
+            .ok_or(ResourceError::Denied)?
+    };
+    let record = snapshot
+        .aggregate
+        .tokens
+        .values()
+        .find(|record| record.token.value.as_str() == token)
+        .ok_or(ResourceError::Denied)?;
     if !app
         .decisions
         .lock()
         .unwrap()
         .contains_key(&client_id(&record.client))
     {
-        return Err(());
+        return Err(ResourceError::Denied);
     }
     if !record
         .token
@@ -731,7 +750,7 @@ fn read_resource_with_clock(
         .as_ref()
         .is_some_and(|a| a.contains(&AccessItem::Reference("synthetic-folder:read".into())))
     {
-        return Err(());
+        return Err(ResourceError::Denied);
     }
     let signed = SignedRequest {
         method: &request.method,
@@ -744,7 +763,9 @@ fn read_resource_with_clock(
         signer: app.signer.clone(),
         decisions: app.decisions.clone(),
     };
-    let verifier = resolver.resolve(&record.client).ok_or(())?;
+    let verifier = resolver
+        .resolve(&record.client)
+        .ok_or(ResourceError::Denied)?;
     verify_request(
         &signed,
         verifier.as_ref(),
@@ -756,13 +777,21 @@ fn read_resource_with_clock(
         },
         &nonce,
     )
-    .map_err(|_| ())?;
-    // Verification can take time. Decide on a fresh clock reading while still
-    // holding the same index lock; an expired value cannot authorize this read.
-    if !record.is_valid_at(clock()) {
-        tokens.handles.remove(&handle);
-        tokens.values.remove(token);
-        return Err(());
+    .map_err(|_| ResourceError::Denied)?;
+    // Crypto ran without the store lock. Recheck the exact revision and fresh
+    // expiration under the same lock used by commits: rotation/revocation that
+    // won in the meantime cannot authorize a read from this stale snapshot.
+    let mut state = app.storage.lock()?;
+    state.cleanup(clock())?;
+    let current = state
+        .base
+        .lookup(GrantSelector::AccessToken(token))?
+        .ok_or(ResourceError::Denied)?;
+    if current.id != snapshot.id
+        || current.revision != snapshot.revision
+        || current.aggregate.revoked
+    {
+        return Err(ResourceError::Denied);
     }
     Ok(
         json!({"folder":"synthetic-project-orion","documents":[{"name":"meeting-notes.txt","content":"Synthetic notes: review a GNAP delegation with explicit consent."},{"name":"readme.txt","content":"No personal data. This read was authorized by a live key-bound GNAP token."}],"granted_right":"synthetic-folder:read"}),
@@ -794,7 +823,16 @@ async fn resource(
     .await
     {
         Ok(Ok(folder)) => Json(folder).into_response(),
-        _ => (
+        Ok(Err(ResourceError::Storage(error))) => {
+            eprintln!("Resource store failure: {error}");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error":"storage_unavailable"})),
+            )
+                .into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(Err(ResourceError::Denied)) => (
             StatusCode::UNAUTHORIZED,
             [("www-authenticate", "GNAP")],
             Json(json!({"error":"invalid_token_or_proof"})),
@@ -944,12 +982,23 @@ async fn protocol(
     };
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        app.storage.cleanup();
-        app.server.handle(&request, now())
+        app.storage.cleanup()?;
+        Ok::<_, StoreError>(app.server.handle(&request, now()))
     })
     .await;
     let Ok(result) = result else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let result = match result {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("Protocol store failure: {error}");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error":"storage_unavailable"})),
+            )
+                .into_response();
+        }
     };
     let mut response = (
         StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -1018,7 +1067,9 @@ async fn main() {
     };
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(30));
-        storage.cleanup();
+        if let Err(error) = storage.cleanup() {
+            eprintln!("Background store maintenance failed: {error}");
+        }
     });
     std::thread::spawn(move || client_worker(origin, signer, server, decisions, receiver));
     let router = application_router(app, canonical);
@@ -1059,6 +1110,7 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gnap_as::{GrantRecord, TokenRecord};
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -1416,11 +1468,27 @@ mod tests {
             management_token: "management-only".into(),
         }
     }
+    fn test_aggregate(handle: &str, token: TokenRecord) -> GrantAggregate {
+        let mut aggregate = GrantAggregate::new(GrantRecord {
+            grant: Default::default(),
+            request: serde_json::from_value(json!({"client":"test-client"})).unwrap(),
+            continuation_token: None,
+            as_nonce: None,
+            interact_handle: None,
+            interact_expires_at: None,
+            interact_ref: None,
+            interaction_completed: false,
+        });
+        aggregate.tokens.insert(handle.into(), token);
+        aggregate
+    }
     #[test]
     fn resource_requires_live_bound_token_and_rejects_replays_and_management_tokens() {
         let app = test_app();
         let store = app.storage.clone();
-        store.put_token("handle", test_record("access-one"));
+        let snapshot = store
+            .create(test_aggregate("handle", test_record("access-one")))
+            .unwrap();
         assert!(read_resource(
             &app,
             &HttpRequest::new("GET", "https://demo.example/resource/folder")
@@ -1440,8 +1508,14 @@ mod tests {
             &resource_request(&app.origin, "access-one", &other).unwrap()
         )
         .is_err());
-        store.take_token("handle").unwrap();
-        store.put_token("new-handle", test_record("access-two"));
+        let mut replacement = snapshot.aggregate.clone();
+        replacement.tokens.clear();
+        replacement
+            .tokens
+            .insert("new-handle".into(), test_record("access-two"));
+        let rotated = store
+            .compare_exchange(snapshot.id, snapshot.revision, replacement)
+            .unwrap();
         assert!(read_resource(
             &app,
             &resource_request(&app.origin, "access-one", &app.signer).unwrap()
@@ -1452,44 +1526,54 @@ mod tests {
             &resource_request(&app.origin, "access-two", &app.signer).unwrap()
         )
         .is_ok());
-        store.take_token("new-handle").unwrap();
+        let mut replacement = rotated.aggregate.clone();
+        replacement.tokens.clear();
+        store
+            .compare_exchange(rotated.id, rotated.revision, replacement)
+            .unwrap();
         assert!(read_resource(
             &app,
             &resource_request(&app.origin, "access-two", &app.signer).unwrap()
         )
         .is_err());
-        assert!(app.storage.tokens.lock().unwrap().values.is_empty());
+        assert!(store
+            .lookup(GrantSelector::AccessToken("access-two"))
+            .unwrap()
+            .is_none());
     }
     #[test]
     fn expiry_is_enforced_before_background_cleanup_and_wrong_rights_fail() {
         let app = test_app();
         let store = app.storage.clone();
-        store.put_token("expired", test_record("access-expired"));
-        app.storage
-            .tokens
-            .lock()
-            .unwrap()
-            .handles
-            .get_mut("expired")
-            .unwrap()
-            .issued_at = now().saturating_sub(1200);
-        assert!(store.get_token("expired").is_some(), "no sweep has run");
+        let mut expired = test_record("access-expired");
+        expired.issued_at = now().saturating_sub(1200);
+        store.create(test_aggregate("expired", expired)).unwrap();
+        assert!(
+            store
+                .lock()
+                .unwrap()
+                .base
+                .lookup(GrantSelector::Management("expired"))
+                .unwrap()
+                .is_some(),
+            "no sweep has run"
+        );
         assert!(read_resource(
             &app,
             &resource_request(&app.origin, "access-expired", &app.signer).unwrap()
         )
         .is_err());
-        assert!(store.take_token("expired").is_none());
-        assert!(!app
-            .storage
-            .tokens
-            .lock()
+        assert!(store
+            .lookup(GrantSelector::Management("expired"))
             .unwrap()
-            .values
-            .contains_key("access-expired"));
+            .is_none());
+        assert!(store
+            .lookup(GrantSelector::AccessToken("access-expired"))
+            .unwrap()
+            .is_none());
         let mut record = test_record("wrong-right");
         record.token.access = Some(vec![AccessItem::Reference("other:read".into())]);
-        store.put_token("wrong", record);
+        store.create(test_aggregate("wrong", record)).unwrap();
         assert!(read_resource(
             &app,
             &resource_request(&app.origin, "wrong-right", &app.signer).unwrap()
@@ -1499,7 +1583,9 @@ mod tests {
     #[test]
     fn concurrent_replay_has_one_winner() {
         let app = test_app();
-        app.storage.put_token("h", test_record("access-one"));
+        app.storage
+            .create(test_aggregate("h", test_record("access-one")))
+            .unwrap();
         let request = resource_request(&app.origin, "access-one", &app.signer).unwrap();
         let successes = std::thread::scope(|scope| {
             let workers: Vec<_> = (0..4)
@@ -1533,20 +1619,52 @@ mod tests {
         let mut original = test_record("access-one");
         original.issued_at = now().saturating_sub(600);
         let deadline = original.expires_at();
-        storage.put_token("handle", original.clone());
-        let taken = storage.take_token("handle").unwrap();
-        storage.put_token("handle", taken);
-        let restored = storage.get_token("handle").unwrap();
+        let snapshot = storage
+            .create(test_aggregate("handle", original.clone()))
+            .unwrap();
+        // An earlier deadline makes an accidental reset observable even when
+        // create and CAS happen within the same wall-clock second.
+        let retention = now() + 600;
+        storage
+            .lock()
+            .unwrap()
+            .continuation_deadlines
+            .insert(snapshot.id, retention);
+        let rewritten = storage
+            .compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate.clone())
+            .unwrap();
+        assert!(matches!(
+            storage.compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate),
+            Err(StoreError::Conflict)
+        ));
+        assert_eq!(
+            storage.lock().unwrap().continuation_deadlines[&snapshot.id],
+            retention
+        );
+        let restored = &rewritten.aggregate.tokens["handle"];
         assert_eq!(restored.issued_at, original.issued_at);
         assert_eq!(restored.expires_at(), deadline);
         assert_eq!(restored.token, original.token);
-        storage.cleanup();
-        assert!(storage.get_token("handle").is_some());
+        storage.cleanup().unwrap();
+        assert!(storage
+            .lookup(GrantSelector::Management("handle"))
+            .unwrap()
+            .is_some());
         original.issued_at = now().saturating_sub(1200);
-        storage.put_token("handle", original);
-        storage.cleanup();
-        assert!(storage.get_token("handle").is_none());
-        assert!(storage.tokens.lock().unwrap().values.is_empty());
+        let mut replacement = rewritten.aggregate;
+        replacement.tokens.insert("handle".into(), original);
+        storage
+            .compare_exchange(rewritten.id, rewritten.revision, replacement)
+            .unwrap();
+        storage.cleanup().unwrap();
+        assert!(storage
+            .lookup(GrantSelector::Management("handle"))
+            .unwrap()
+            .is_none());
+        assert!(storage
+            .lookup(GrantSelector::AccessToken("access-one"))
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1554,7 +1672,9 @@ mod tests {
         let app = test_app();
         let record = test_record("access-one");
         let issued_at = record.issued_at;
-        app.storage.put_token("handle", record);
+        app.storage
+            .create(test_aggregate("handle", record))
+            .unwrap();
         let request = resource_request(&app.origin, "access-one", &app.signer).unwrap();
         let calls = std::cell::Cell::new(0);
         let clock = || {
@@ -1572,7 +1692,203 @@ mod tests {
             3,
             "checked again after successful proof verification"
         );
-        assert!(app.storage.get_token("handle").is_none());
-        assert!(app.storage.tokens.lock().unwrap().values.is_empty());
+        assert!(app
+            .storage
+            .lookup(GrantSelector::Management("handle"))
+            .unwrap()
+            .is_none());
+        assert!(app
+            .storage
+            .lookup(GrantSelector::AccessToken("access-one"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn aggregate_capacity_refuses_new_grants_without_evicting_live_tokens() {
+        let storage = IndexedStorage::default();
+        for index in 0..MAX_GRANTS {
+            storage
+                .create(test_aggregate(
+                    &format!("handle-{index}"),
+                    test_record(&format!("access-{index}")),
+                ))
+                .unwrap();
+        }
+        assert!(matches!(
+            storage.create(test_aggregate("overflow", test_record("overflow"))),
+            Err(StoreError::Unavailable)
+        ));
+        assert_eq!(
+            storage.lock().unwrap().continuation_deadlines.len(),
+            MAX_GRANTS
+        );
+        assert!(storage
+            .lookup(GrantSelector::AccessToken("access-0"))
+            .unwrap()
+            .is_some());
+        assert!(storage
+            .lookup(GrantSelector::AccessToken("overflow"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn continuation_retention_does_not_shorten_a_live_token_or_renew_on_cas() {
+        let storage = IndexedStorage::default();
+        let mut aggregate = test_aggregate("handle", test_record("access"));
+        aggregate.record.continuation_token = Some("continue-secret".into());
+        aggregate.record.interact_handle = Some("interaction".into());
+        aggregate.record.interact_expires_at = Some(now() + 60);
+        let snapshot = storage.create(aggregate).unwrap();
+        // Simulate the original continuation deadline having elapsed while a
+        // recently issued/rotated token still has its own SDK lifetime.
+        storage
+            .lock()
+            .unwrap()
+            .continuation_deadlines
+            .insert(snapshot.id, now().saturating_sub(1));
+        storage.cleanup().unwrap();
+        let current = storage
+            .lookup(GrantSelector::AccessToken("access"))
+            .unwrap()
+            .unwrap();
+        assert!(current.aggregate.record.continuation_token.is_none());
+        assert!(current.aggregate.record.interact_expires_at.is_none());
+        assert!(storage
+            .lookup(GrantSelector::Continuation("continue-secret"))
+            .unwrap()
+            .is_none());
+        assert!(storage
+            .lookup(GrantSelector::Interaction("interaction"))
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            current.aggregate.tokens["handle"].issued_at,
+            snapshot.aggregate.tokens["handle"].issued_at
+        );
+        assert!(matches!(
+            storage.compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate),
+            Err(StoreError::Conflict)
+        ));
+        assert!(storage
+            .lookup(GrantSelector::AccessToken("access"))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn cleanup_removes_all_indexes_and_stale_cas_cannot_resurrect() {
+        let storage = IndexedStorage::default();
+        let mut aggregate = test_aggregate("handle", test_record("access"));
+        aggregate.tokens.clear();
+        aggregate.record.continuation_token = Some("continuation".into());
+        aggregate.record.interact_handle = Some("interaction".into());
+        let snapshot = storage.create(aggregate).unwrap();
+        storage
+            .lock()
+            .unwrap()
+            .continuation_deadlines
+            .insert(snapshot.id, 0);
+        storage.cleanup().unwrap();
+        assert!(storage
+            .lookup(GrantSelector::Id(snapshot.id))
+            .unwrap()
+            .is_none());
+        assert!(storage
+            .lookup(GrantSelector::Continuation("continuation"))
+            .unwrap()
+            .is_none());
+        assert!(storage
+            .lookup(GrantSelector::Interaction("interaction"))
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            storage.compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate),
+            Err(StoreError::Conflict)
+        ));
+        let next = storage
+            .create(test_aggregate("next", test_record("next")))
+            .unwrap();
+        assert_ne!(next.id, snapshot.id);
+    }
+
+    #[test]
+    fn rotation_and_revocation_between_snapshot_and_proof_cannot_authorize_stale_read() {
+        let app = test_app();
+        for rotate in [true, false] {
+            let snapshot = app
+                .storage
+                .create(test_aggregate("handle", test_record("access")))
+                .unwrap();
+            let request = resource_request(&app.origin, "access", &app.signer).unwrap();
+            let calls = std::cell::Cell::new(0);
+            let result = read_resource_with_clock(&app, &request, || {
+                calls.set(calls.get() + 1);
+                if calls.get() == 2 {
+                    // Runs after snapshot lookup and before proof verification.
+                    // This would deadlock if the RS held the store lock here.
+                    let mut replacement = snapshot.aggregate.clone();
+                    replacement.tokens.clear();
+                    if rotate {
+                        replacement
+                            .tokens
+                            .insert("new-handle".into(), test_record("new-access"));
+                    } else {
+                        replacement.revoked = true;
+                    }
+                    app.storage
+                        .compare_exchange(snapshot.id, snapshot.revision, replacement)
+                        .unwrap();
+                }
+                now()
+            });
+            assert!(matches!(result, Err(ResourceError::Denied)));
+            assert_eq!(calls.get(), 3);
+            if let Some(current) = app.storage.lookup(GrantSelector::Id(snapshot.id)).unwrap() {
+                app.storage.remove(current.id, current.revision).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn store_failures_are_503_not_authentication_failures_or_secret_reflections() {
+        use tower::ServiceExt;
+        let app = test_app();
+        let storage = app.storage.clone();
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = storage.state.lock().unwrap();
+            panic!("synthetic storage failure");
+        });
+        assert!(matches!(
+            storage.lookup(GrantSelector::AccessToken("secret")),
+            Err(StoreError::Unavailable)
+        ));
+        let router =
+            application_router(app, CanonicalOrigin::parse("https://demo.example").unwrap());
+        for (method, path) in [("GET", "/resource/folder"), ("POST", "/gnap")] {
+            let response = router
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("host", "demo.example")
+                        .header("authorization", "GNAP secret-not-for-reflection")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert!(!response.headers().contains_key("www-authenticate"));
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({"error":"storage_unavailable"})
+            );
+        }
     }
 }
