@@ -48,7 +48,7 @@ def client():
 
 
 def request(opener, base, path, method="GET", data=None, browser_origin=None, *, html=False):
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "text/html" if html else "application/json"}
     if browser_origin is not None:
         headers["Origin"] = browser_origin
     payload = None if data is None else json.dumps(data).encode()
@@ -194,6 +194,16 @@ def wait_for_continuation(browser, base):
         time.sleep(wait + 0.1)
 
 
+def owner_cookie(headers):
+    candidates = []
+    for value in headers.get_all("set-cookie") or []:
+        cookie = SimpleCookie(value).get("gnap_owner")
+        if cookie is not None:
+            candidates.append(cookie)
+    expect(len(candidates) == 1, "Owner response must set exactly one owner cookie")
+    return candidates[0]
+
+
 class CodeEntryPage(HTMLParser):
     """Read only the form ticket; never evaluate the page or follow its URLs."""
 
@@ -226,7 +236,7 @@ def secondary_device_demo(base, outcomes):
         status, headers, page, _ = request(owner, base, "/code", html=True)
         expect(status == 200 and isinstance(page, str)
                and headers.get_content_type() == "text/html", "Code entry is not an HTML page")
-        cookie = SimpleCookie(headers.get("set-cookie", "")).get("gnap_owner")
+        cookie = owner_cookie(headers)
         expect(cookie is not None and cookie["httponly"] and cookie["samesite"] == "Strict"
                and cookie["path"] == "/code" and bool(cookie["secure"]) == base.startswith("https://"),
                "Owner cookie lost its scope or transport protections")
