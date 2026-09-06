@@ -8,7 +8,7 @@ import { runInNewContext } from 'node:vm';
 const html = readFileSync(new URL('../../static/index.html', import.meta.url), 'utf8');
 const script = readFileSync(new URL('../../static/app.js', import.meta.url), 'utf8');
 
-function requestedRights(data) {
+function renderSnapshot(data) {
   const element = () => ({
     textContent: '', dataset: {},
     replaceChildren() {}, append() {}, addEventListener() {},
@@ -38,7 +38,7 @@ function requestedRights(data) {
     data,
   };
   runInNewContext(`${script}\nrender(data);`, context, { timeout: 1000 });
-  return nodes.get('#requested-rights').textContent;
+  return nodes;
 }
 
 for (const [name, mode, tokens, expected] of [
@@ -52,9 +52,26 @@ for (const [name, mode, tokens, expected] of [
   ], 'documents: folder:read'],
 ]) {
   test(name, () => {
-    assert.equal(requestedRights({
+    assert.equal(renderSnapshot({
       state: 'pending', mode, requested_tokens: tokens,
       requested_rights: tokens.flatMap(token => token.rights),
-    }), expected);
+    }).get('#requested-rights').textContent, expected);
+  });
+}
+
+for (const codes of [false, true]) {
+  test(`client consent controls ${codes ? 'refuse code interactions' : 'allow redirect interactions'}`, () => {
+    // Include a reports slot to exercise every consent control, independently
+    // of the current start-code action's single-token selection.
+    const nodes = renderSnapshot({
+      state: 'pending', mode: 'multiple', continuation_open: true,
+      requested_tokens: [{ label: 'reports', rights: ['reports:read'] }],
+      ...(codes ? { user_code_uri: { uri: 'https://example.test/code', code: 'ABCD2345' } } : {}),
+    });
+    for (const action of ['approve', 'approve-reports', 'deny']) {
+      assert.equal(nodes.get(`[data-action="${action}"]`).disabled, codes, action);
+    }
+    assert.equal(nodes.get('[data-action="continue"]').disabled, !codes);
+    assert.equal(nodes.get('[data-action="revoke-grant"]').disabled, false);
   });
 }

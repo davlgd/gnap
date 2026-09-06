@@ -2,6 +2,7 @@
 let ticket = document.body.dataset.ticket;
 let busy = false;
 const consent = document.querySelector('#consent');
+const failureMessage = 'The request could not be completed. Reload before trying again.';
 async function submit(path, payload) {
   if (busy) return;
   busy = true;
@@ -9,12 +10,13 @@ async function submit(path, payload) {
   for (const button of document.querySelectorAll('button')) button.disabled = true;
   try {
     const response = await fetch(path, {method: 'POST', credentials: 'same-origin', headers: {'content-type': 'application/json'}, body: JSON.stringify({ticket, ...payload})});
-    const data = await response.json();
+    const data = await response.json().catch(() => null);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(failureMessage);
     if (data.ticket) ticket = data.ticket;
     if (Number.isInteger(data.remaining)) document.querySelector('#remaining').textContent = `${data.remaining} attempts remain. Invalid submissions and decisions count too.`;
     if (!response.ok) {
       consent.hidden = true;
-      throw new Error(data.error || 'The request could not be completed. Reload before trying again.');
+      throw new Error(data.error || failureMessage);
     }
     if (data.rights) {
       const list = document.querySelector('#rights'); list.replaceChildren();
@@ -26,7 +28,7 @@ async function submit(path, payload) {
       document.querySelector('#lookup').hidden = true;
       document.querySelector('#result').textContent = 'Your decision is recorded. Return to the first screen and poll for the result.';
     }
-  } catch (e) { document.querySelector('#error').textContent = e.message; }
+  } catch (e) { consent.hidden = true; document.querySelector('#error').textContent = e.message; }
   finally { busy = false; for (const button of document.querySelectorAll('button')) button.disabled = false; }
 }
 document.querySelector('#lookup').addEventListener('submit', event => {
