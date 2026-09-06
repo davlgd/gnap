@@ -59,9 +59,10 @@ terminology occurrences); RFC 9767 supplies 80 (69 plus 11). These numbers count
 the pinned sources, not a percentage of implemented behavior. The original
 inventory had all 339 blocks with `unresolved` applicability and `not_run`
 evidence. Two section 9 blocks now have reviewed AS applicability; all other
-blocks remain unresolved. The first historical discovery observation below now
-maps six executed assertions to those two blocks, without completing them. No private
-historical coverage decisions or documents were imported.
+blocks remain unresolved. The historical discovery scenario below exercises six
+assertions for those two blocks without completing them. Only a receipt matching
+the current sources can support an active evidence mapping. No private historical
+coverage decisions or documents were imported.
 
 Each occurrence retains its original keyword. BCP14 synonyms are normalized only
 for the separate `strength`/`polarity` fields: `REQUIRED` and `SHALL` are mandatory,
@@ -285,20 +286,24 @@ from that actual Git commit, not merely a supplied `dirty: false`. The subsequen
 artifact commit can differ. The claims CI checkout fetches history so offline
 `git show` can verify the earlier commit. `runs/` stays ignored; `receipts/` and
 reviewed `captures/` are publishable and checked on a fresh clone. Do not map an
-ignored local run in the public evidence file. Existing receipts are historical:
-CI checks them offline and generates its own separate synthetic oracle receipt,
-without converting either into a new current network observation.
+ignored local run in the public evidence file. Active receipts are checked
+against both current source files and their recorded source commit. CI checks
+them offline and generates its own separate synthetic oracle receipt, without
+converting either into a new current network observation.
 
-The published [receipt](receipts/gnap-delegation-discovery-2026-09-05.json)
+The archived [receipt](archive/receipts/gnap-delegation-discovery-2026-09-05.json)
 replays the [reviewed capture](captures/gnap-delegation-discovery-2026-09-05.json)
 from `https://gnap-delegation.cleverapps.io/gnap`, captured at UTC Unix
 `1788645193` on 5 September 2026. The receipt records the exact replay time and
-clean source commit. A runner change requires a fresh replay receipt, not a new
+clean source commit. It is preserved byte for byte after the scenario changed;
+it is no longer an active evidence mapping and is not checked against the
+current source tree. Its recorded sources remain available at commit
+`f8e7093992f6a07032ea3af9a7fc9f17f4d58afb` in Git history.
+A scenario, helper or runner change requires a fresh replay receipt, not a new
 network capture or a change to the historical capture time.
 The body contains only the public grant endpoint, announced `httpsig` proof and
-`key_rotation_supported: false`. Only the six listed response assertions are
-mapped: capability execution and remote source revision remain unknown.
-This real capture replay remains
+`key_rotation_supported: false`. The six response assertions do not establish
+capability execution or the remote source revision. A passing replay is only
 `passing_observation_not_completion`, contextualized by its capture time and
 endpoint; the ledger still has no global percentage or certification.
 

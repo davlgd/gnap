@@ -24,64 +24,7 @@ both occurrences, and a passing observation cannot erase a recommendation.
 | --- | ---: |
 | applicability: `applicable` | 2 |
 | applicability: `unresolved` | 337 |
-| evidence: `not_run` | 337 |
-| evidence: `passing_observation_not_completion` | 2 |
-
-## Bound discovery observations
-
-Capture replay describes the historical response at the recorded endpoint/time,
-not current server behavior, remote source attestation or block completion.
-
-```json
-{
-  "conformance/receipts/gnap-delegation-discovery-2026-09-05.json": {
-    "assertions": [
-      {
-        "assertion": "Historical captured OPTIONS response has unambiguous application/json media type. No HTTP 200 requirement or general header-cardinality MUST is claimed.",
-        "case_id": "test_as_discovery.DiscoveryResponse.test_options_response_media_type",
-        "clause_id": "rfc9635:section-9-2"
-      },
-      {
-        "assertion": "Exact historical response body parses as one JSON object. This does not establish all fields or capability behavior in the source block.",
-        "case_id": "test_as_discovery.DiscoveryResponse.test_response_is_json_object",
-        "clause_id": "rfc9635:section-9-2"
-      },
-      {
-        "assertion": "Historical discovery document contains grant_request_endpoint as a JSON string, following the REQUIRED field and its string field context.",
-        "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_required_string",
-        "clause_id": "rfc9635:section-9-3.2.1"
-      },
-      {
-        "assertion": "The endpoint in this historical response satisfies the independent absolute-URI grammar assertion, with a host and without a fragment. No separate userinfo safety policy is mapped to a GNAP MUST.",
-        "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_absolute_host_without_fragment",
-        "clause_id": "rfc9635:section-9-3.2.1"
-      },
-      {
-        "assertion": "The historical response's grant_request_endpoint has the HTTPS scheme. This is not an independent TLS or remote-code attestation.",
-        "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_https",
-        "clause_id": "rfc9635:section-9-3.2.1"
-      },
-      {
-        "assertion": "The announced endpoint equals the exact URL recorded by the collector for the historical OPTIONS request, without URL normalization.",
-        "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_matches_exact_request",
-        "clause_id": "rfc9635:section-9-3.2.1"
-      }
-    ],
-    "observation": {
-      "capture_origin": "live",
-      "capture_path": "conformance/captures/gnap-delegation-discovery-2026-09-05.json",
-      "capture_sha256": "90a8ea8d27ce8f546a14de28aff0273d62f1e85a3e275bcb4d2e38a93e73246f",
-      "captured_at_unix_utc": 1788645193,
-      "collector_config_sha256": "5da70f5b3062631cae0441aa79a36d762b605eba434bc7e3b09ccc6e054121e9",
-      "endpoint": "https://gnap-delegation.cleverapps.io/gnap",
-      "execution_mode": "capture_replay",
-      "kind": "as-discovery-v1",
-      "remote_revision": "unknown"
-    }
-  }
-}
-```
-
+| evidence: `not_run` | 339 |
 
 `condition_false` requires a reviewed condition, role, profile and rationale;
 it does not remove a source block or mean a missing project target is completed.

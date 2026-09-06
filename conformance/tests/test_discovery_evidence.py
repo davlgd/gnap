@@ -67,6 +67,18 @@ with mock.patch.object(discovery, {operation!r}, side_effect=ValueError('unexpec
 
 
 class OracleTests(unittest.TestCase):
+    def test_endpoint_reads_and_parses_its_capture_once(self):
+        capture = wire.make_capture("https://as.example/gnap", 200,
+                                    [["content-type", "application/json"]],
+                                    b'{"grant_request_endpoint":"https://as.example/gnap"}',
+                                    origin="synthetic", timestamp=None)
+        case = scenario.DiscoveryResponse("test_endpoint_required_string")
+        with mock.patch.object(case, "capture", return_value=capture) as read, \
+                mock.patch.object(wire, "document", wraps=wire.document) as parse:
+            self.assertEqual(case.endpoint(), "https://as.example/gnap")
+        read.assert_called_once_with()
+        parse.assert_called_once_with(capture)
+
     def outcomes(self, body, *, status=200, headers=None, target="https://as.example/gnap"):
         capture = wire.make_capture(target, status, headers if headers is not None else [["content-type", "application/json"]],
                                     body, origin="synthetic", timestamp=None)
