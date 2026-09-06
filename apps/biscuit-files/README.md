@@ -197,7 +197,10 @@ without an unbounded CPU queue. A worker permit is retained until its blocking
 job really finishes, even after client cancellation. Inbound bodies and network
 responses are capped at 32 KiB; file writes at 4 KiB; resource-check request
 bodies at 384 bytes and accepted decision responses at 64 bytes. Outbound calls time out
-after two seconds and body reads after three seconds. The Biscuit verifier adds
+after two seconds and body reads after three seconds. An oversized inbound body
+returns 413, a body-read timeout 408, and another body-read failure 400. These
+failures release admission without invoking the application or exposing the
+underlying error. The Biscuit verifier adds
 its own structural and Datalog limits; those are not hard CPU preemption.
 
 The client has one blocking worker, eight queued commands, at most 64 sessions,

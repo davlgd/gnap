@@ -16,6 +16,60 @@ use tokio::sync::Semaphore;
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn body_read_failures_have_distinct_statuses_and_release_admission() {
+    use axum::body::{to_bytes, Bytes};
+    use futures_util::stream;
+    let workers = Arc::new(Semaphore::new(1));
+    let origin = Origin::parse("http://127.0.0.1:18080").unwrap();
+    for (body, expected) in [
+        (Body::from(vec![0; gnap_biscuit_files::MAX_BODY + 1]), 413),
+        (
+            Body::from_stream(stream::iter([Err::<Bytes, _>(std::io::Error::other(
+                "private body read detail",
+            ))])),
+            400,
+        ),
+        (
+            Body::from_stream(stream::pending::<Result<Bytes, std::io::Error>>()),
+            408,
+        ),
+    ] {
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            http::dispatch(
+                Request::builder().uri("/probe").body(body).unwrap(),
+                &origin,
+                workers.clone(),
+                |_| panic!("a failed body read must not dispatch work"),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), expected);
+        assert!(to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(workers.available_permits(), 1);
+    }
+    let response = http::dispatch(
+        Request::builder()
+            .uri("/probe")
+            .body(Body::from(vec![0; gnap_biscuit_files::MAX_BODY]))
+            .unwrap(),
+        &origin,
+        workers.clone(),
+        |request| {
+            assert_eq!(request.body.unwrap().len(), gnap_biscuit_files::MAX_BODY);
+            http::answer(200, serde_json::json!({"ok":true}))
+        },
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(workers.available_permits(), 1);
+}
+
+#[tokio::test]
 async fn canonical_authority_handles_real_http_versions_and_ignores_forwarded() {
     let router = http::guarded(
         Router::new()
