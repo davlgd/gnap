@@ -87,6 +87,7 @@
 //! This is not a claim to implement a configurable client timeout policy.
 
 pub mod error;
+pub mod rotation;
 pub mod session;
 pub mod signing;
 pub mod transport;
