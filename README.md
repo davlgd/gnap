@@ -427,9 +427,10 @@ no X.509 conversion or trust service is supplied. A valid key and proof do not
 establish a client's identity or entitlement. The example uses an in-process
 transport and a synthetic policy, not a network or production identity service.
 
-Subject assertions are represented, not authenticated:
-the `id_token` payload is decoded only for within-response consistency checks,
-and no ID-token or SAML validation service is provided. Push-finish callbacks
+Subject decoding alone does not authenticate an assertion. The opt-in
+[PS256 identity profile](docs/subject-assertions.md) adds pinned-key ID Token
+verification and a fictional, consented demo; it is not a production identity
+service. No SAML validator is supplied. Push-finish callbacks
 are constructed and validated in protocol tests; sending them over HTTP remains
 the adapter's responsibility.
 
