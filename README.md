@@ -42,6 +42,7 @@ These are project decisions, not claims that those features are already present.
 | [`gnap-core`](crates/gnap-core) | The grant state machine (§1.5): transitions, guards, response checking |
 | [`gnap-client`](crates/gnap-client) | The client instance role, over a pluggable HTTP transport |
 | [`gnap-as`](crates/gnap-as) | The authorization server role, free of any HTTP framework |
+| [`gnap-rs`](crates/gnap-rs) | Opaque-token resource authorization with trusted introspection and local request-proof verification |
 | [`gnap-biscuit`](crates/gnap-biscuit) | A bounded file-access token profile: issuance, attenuation and proof-bound authorization |
 
 The workspace forbids unsafe code in its own crates. The protocol roles leave
@@ -331,11 +332,16 @@ discovery helper is supplied yet.
 
 For resource servers, the AS also exposes RFC 9767 discovery at
 `/.well-known/gnap-as-rs` and an authenticated introspection API. The demo calls
-both endpoints for every protected read: two HTTP round trips, deliberately
+both through [`gnap-rs::Authorizer`](crates/gnap-rs) for every protected read:
+two HTTP round trips, deliberately
 without a metadata or token-result cache. It uses separate client and RS keys;
 the returned client key verifies the resource request, not the RS request to
 the AS. This path handles only opaque reference tokens; it does not introspect
 Biscuit chains.
+
+The [resource-server SDK guide](docs/resource-server-sdk.md) explains how to
+reuse this authorizer with an application's own transport, replay memory and
+access policy, without an AS implementation or token store in the RS.
 
 The [downstream delegation profile](docs/downstream-delegation.md) lets that RS
 request a distinct token for a second resource server. The metadata action

@@ -290,7 +290,7 @@ After migration, test both the canonical origin and the previous alias:
 python3 tools/smoke_ecosystem.py --demo https://demo.example --demo-alias https://previous.example
 ```
 
-One application contains the client, AS and two RS roles, not independent
+One application contains the client, AS and three RS roles, not independent
 security administrations. `gnap-client::Session` exchanges actual HTTP requests with
 `gnap-as::AuthorizationServer`. For each resource request, the RS fetches
 `/.well-known/gnap-as-rs` from that configured AS, then calls `/introspect` with
@@ -299,7 +299,11 @@ opaque-token introspection and resource-set registration. The metadata action
 adds token derivation, not RS self-enrolment or resource-set management.
 Neither RS has token-store lookup. The AS returns the key of the token's caller:
 the browser application's key for a parent, RS1's key for a child. The receiving
-RS verifies the exact incoming request with the shared SDK verifier.
+RS verifies the exact incoming request through `gnap-rs::Authorizer`. The
+application supplies its HTTP adapter, replay memory and document/metadata/report
+policies; it no longer implements the introspection-to-authorization sequence
+itself. The [RS SDK guide](../../docs/resource-server-sdk.md) explains how to
+reuse that boundary without depending on an AS implementation or its store.
 
 Only the configured origin and those two exact AS paths, `/register-resources`
 for startup registration, `/gnap`, `/resource/archive-metadata` and bounded

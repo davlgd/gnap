@@ -1,0 +1,24 @@
+[package]
+name = "gnap-rs"
+version = "0.1.0"
+description = "GNAP resource-request authorization using authenticated opaque-token introspection"
+keywords = ["gnap", "authorization", "rfc9767", "introspection"]
+categories = ["authentication", "web-programming"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/gnap-rs"
+
+[dependencies]
+gnap-client.workspace = true
+gnap-crypto.workspace = true
+gnap-registry.workspace = true
+gnap-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
