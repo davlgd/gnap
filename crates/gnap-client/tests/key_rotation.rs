@@ -354,11 +354,55 @@ fn keys_this_session_cannot_present_are_refused_before_anything_leaves() {
     ]);
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request(), 1_000).unwrap();
+    assert_eq!(s.signer_for(None).unwrap().key_id(), sk.key_id());
     let e = s
         .rotate_key(None, &new, &presented(&new), 1_050)
         .unwrap_err();
     assert!(e.to_string().contains("`manage`"), "{e}");
     assert_eq!(as_.sent(), 1);
+}
+
+#[test]
+fn resource_signer_selection_does_not_require_a_management_api() {
+    let sk = signer();
+    let new = replacement();
+    let key = presented(&new);
+    let lot = json!({"access_token": [
+        {"label": "documents", "value": ISSUED, "access": ["documents:read"],
+         "manage": {"uri": MANAGE_URI, "access_token": {"value": MANAGE_TOKEN}}},
+        {"label": "reports", "value": "reports-unmanaged", "access": ["reports:read"]}
+    ]});
+    let query: GrantRequest = serde_json::from_value(json!({
+        "client": "client-541-ab", "access_token": [
+            {"label": "documents", "access": ["documents:read"]},
+            {"label": "reports", "access": ["reports:read"]}
+        ]
+    }))
+    .unwrap();
+    let mut changed = rebound_token(REBOUND, Some(serde_json::to_value(&key).unwrap()), "D2");
+    changed["access"] = json!(["documents:read"]);
+    let as_ = FakeAs::with(vec![
+        &lot.to_string(),
+        &json!({"access_token": changed}).to_string(),
+    ]);
+    let mut s = Session::new(&as_, &sk, ENDPOINT);
+    s.start(&query, 1_000).unwrap();
+    assert!(s.signer_for(None).is_err());
+    assert!(s.signer_for(Some("missing")).is_err());
+    assert_eq!(s.signer_for(Some("reports")).unwrap().key_id(), sk.key_id());
+    s.rotate_key(Some("documents"), &new, &key, 1_010).unwrap();
+    assert_eq!(
+        s.signer_for(Some("documents")).unwrap().key_id(),
+        new.key_id()
+    );
+    assert_eq!(s.signer_for(Some("reports")).unwrap().key_id(), sk.key_id());
+    let before = as_.sent();
+    let refused = s
+        .rotate_key(Some("reports"), &new, &key, 1_020)
+        .unwrap_err();
+    assert!(matches!(refused, ClientError::Usage(_)));
+    assert!(refused.to_string().contains("`manage`"));
+    assert_eq!(as_.sent(), before);
 }
 
 /// GNAP-9635-§3.2.1 — `key` is "The key that the token is bound to, if
@@ -495,15 +539,95 @@ fn a_bearer_token_is_refused_before_anything_leaves() {
         "manage": {"uri": MANAGE_URI, "access_token": {"value": MANAGE_TOKEN}}
     }})
     .to_string();
-    let as_ = FakeAs::with(vec![&bearer]);
+    let mut rotated_bearer = rebound_token(REBOUND, None, "bearer2");
+    rotated_bearer["flags"] = json!(["bearer"]);
+    let as_ = FakeAs::with(vec![
+        &bearer,
+        &json!({"access_token": rotated_bearer}).to_string(),
+        "",
+    ]);
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request(), 1_000).unwrap();
+    assert!(matches!(s.signer_for(None), Err(ClientError::Usage(_))));
     let e = s
         .rotate_key(None, &new, &presented(&new), 1_050)
         .unwrap_err();
     assert!(matches!(e, ClientError::Usage(_)), "{e}");
     assert!(e.to_string().contains("bearer"), "{e}");
     assert_eq!(as_.sent(), 1);
+    // Resource presentation is bearer, but management proves the client key.
+    s.rotate_token(None, 1_050).unwrap();
+    assert!(signed_by(&as_.last(), &sk.verifier(), "gnap-demo", 1_050));
+    s.revoke_token(None, 1_051).unwrap();
+    assert!(signed_by(&as_.last(), &sk.verifier(), "gnap-demo", 1_051));
+}
+
+struct CountSignatures<'a> {
+    signer: &'a Ps256Signer,
+    calls: std::cell::Cell<usize>,
+}
+impl Signer for CountSignatures<'_> {
+    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, gnap_crypto::ProofError> {
+        self.calls.set(self.calls.get() + 1);
+        self.signer.sign(data)
+    }
+    fn key_id(&self) -> &str {
+        self.signer.key_id()
+    }
+    fn algorithm(&self) -> &'static str {
+        self.signer.algorithm()
+    }
+}
+
+#[test]
+fn unknown_explicit_bindings_are_not_signed_or_sent_by_guessing() {
+    let original = signer();
+    let other = Ps256Signer::generate(2048, original.key_id()).unwrap();
+    let new = replacement();
+    let sk = CountSignatures {
+        signer: &original,
+        calls: std::cell::Cell::new(0),
+    };
+    let replacement = CountSignatures {
+        signer: &new,
+        calls: std::cell::Cell::new(0),
+    };
+    for key in [
+        presented(&original),
+        presented(&other),
+        serde_json::from_value(json!("external-key")).unwrap(),
+    ] {
+        let body = json!({"access_token": {
+            "value": ISSUED, "access": ["dolphin-metadata"], "key": key,
+            "manage": {"uri": MANAGE_URI, "access_token": {"value": MANAGE_TOKEN}}
+        }})
+        .to_string();
+        let as_ = FakeAs::with(vec![&body]);
+        let mut s = Session::new(&as_, &sk, ENDPOINT);
+        s.start(&request(), 1_000).unwrap();
+        let signatures = sk.calls.get();
+        let before = serde_json::to_value(s.usable_tokens(1_000).unwrap()).unwrap();
+        assert!(matches!(s.signer_for(None), Err(ClientError::Usage(_))));
+        assert!(matches!(
+            s.rotate_key(None, &replacement, &presented(&new), 1_001),
+            Err(ClientError::Usage(_))
+        ));
+        assert!(matches!(
+            s.rotate_token(None, 1_001),
+            Err(ClientError::Usage(_))
+        ));
+        assert!(matches!(
+            s.revoke_token(None, 1_001),
+            Err(ClientError::Usage(_))
+        ));
+        assert_eq!(sk.calls.get(), signatures);
+        assert_eq!(replacement.calls.get(), 0);
+        assert_eq!(as_.sent(), 1);
+        assert_eq!(
+            serde_json::to_value(s.usable_tokens(1_001).unwrap()).unwrap(),
+            before
+        );
+    }
 }
 
 /// The session tells tokens, and their signers, apart by value. An answer

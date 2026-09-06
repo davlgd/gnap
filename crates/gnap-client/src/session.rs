@@ -802,7 +802,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// both answers omit it or both spell out the same key, since the session
     /// holds no key material to compare and a `kid` is a name, not a key
     /// (§3.2.1). Binding another key is a different operation (§6.1.1) that
-    /// this session does not perform.
+    /// this method does not perform; use [`Self::rotate_key`] instead.
     ///
     /// # Errors
     ///
@@ -817,7 +817,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     ) -> Result<AccessToken, ClientError> {
         let (index, manage) = self.managed(label)?;
         let previous_value = self.held_value(index)?;
-        let signer = self.signer_of(&previous_value);
+        let signer = self.management_signer(index)?;
         let response = self.call_management("POST", &manage, None, signer, now)?;
         let parsed = grant_response(&response)?;
 
@@ -876,15 +876,8 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     ) -> Result<AccessToken, ClientError> {
         let (object, verifier) = rotation::presentable(presented, replacement)?;
         let (index, manage) = self.managed(label)?;
-        // §6.1.1 — "an attempt to rotate the key of a bearer token (which has
-        // no key)" is an invalid rotation; there is nothing to ask the AS.
-        if self.held(index)?.1.flags.contains(&AccessTokenFlag::Bearer) {
-            return Err(ClientError::Usage(
-                "rotate_key: a bearer token has no key to rotate (RFC 9635 §6.1.1)".into(),
-            ));
-        }
         let previous_value = self.held_value(index)?;
-        let current = self.signer_of(&previous_value);
+        let current = self.presentation_signer(index)?;
         let body = serde_json::to_vec(&serde_json::json!({ "key": object }))
             .map_err(|e| ClientError::Usage(format!("serializing the new key: {e}")))?;
         let http = HttpRequest::new("POST", &manage.uri).json_body(body);
@@ -921,20 +914,50 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
 
     /// The signer that presents a held token: the key it was rotated to, or
     /// the session's key. The application signs its resource requests with it.
+    /// A token does not need a management API to be presented to a resource.
+    ///
+    /// This session knows its implicit grant key and keys adopted by its own
+    /// successful rotations. An initially issued explicit key is not resolved
+    /// here, even if it might be equivalent to the grant key: matching a `kid`
+    /// does not establish that equivalence. Such a token needs an application
+    /// adapter. A bearer token is presented without a key proof.
     ///
     /// # Errors
     ///
-    /// Fails when no such token is held; `None` is ambiguous with several held.
+    /// Fails when no such token is held, the token is bearer, or its explicit
+    /// binding is not known to this session. `None` is ambiguous with several
+    /// held tokens. No request is sent and no signature is made by this lookup.
     pub fn signer_for(&self, label: Option<&str>) -> Result<&'a dyn Signer, ClientError> {
-        let (index, _) = self.managed(label)?;
-        Ok(self.signer_of(&self.held_value(index)?))
+        self.presentation_signer(self.select(label)?)
     }
 
-    fn signer_of(&self, value: &TokenValue) -> &'a dyn Signer {
-        self.rotated
-            .get(value.as_str())
-            .copied()
-            .unwrap_or(self.signer)
+    fn presentation_signer(&self, index: usize) -> Result<&'a dyn Signer, ClientError> {
+        let token = &self.held(index)?.1;
+        if token.is_bearer() {
+            return Err(ClientError::Usage(
+                "a bearer token has no presentation key; present it without a key proof".into(),
+            ));
+        }
+        if let Some(signer) = self.rotated.get(token.value.as_str()) {
+            return Ok(*signer);
+        }
+        if token.key.is_some() {
+            return Err(ClientError::Usage(
+                "this session cannot establish the signer for an initially explicit token key; \
+                 an application key adapter is required"
+                    .into(),
+            ));
+        }
+        Ok(self.signer)
+    }
+
+    fn management_signer(&self, index: usize) -> Result<&'a dyn Signer, ClientError> {
+        // §7.3 binds bearer-token management to the client instance's key.
+        if self.held(index)?.1.is_bearer() {
+            Ok(self.signer)
+        } else {
+            self.presentation_signer(index)
+        }
     }
 
     fn held(&self, index: usize) -> Result<&(u64, AccessToken), ClientError> {
@@ -1003,7 +1026,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     pub fn revoke_token(&mut self, label: Option<&str>, now: u64) -> Result<(), ClientError> {
         let (index, manage) = self.managed(label)?;
         let value = self.held_value(index)?;
-        let signer = self.signer_of(&value);
+        let signer = self.management_signer(index)?;
         let response = self.call_management("DELETE", &manage, None, signer, now)?;
 
         if response.status != 204 {
@@ -1019,13 +1042,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         Ok(())
     }
 
-    /// Finds a held token by label, and the management API it offers (§3.2.1).
+    /// Finds a held token by label, independently of its management API.
     ///
     /// `None` names the only token held, whether or not it carries a label
     /// (§3.2.1 lets the AS label a single token); with several held, a caller
     /// has to say which one, since the labels are what tells them apart
     /// (§3.2.2).
-    fn managed(&self, label: Option<&str>) -> Result<(usize, TokenManage), ClientError> {
+    fn select(&self, label: Option<&str>) -> Result<usize, ClientError> {
         let tokens = self.protocol.issued.as_ref().ok_or_else(|| {
             ClientError::Usage("no access token has been issued to this session".into())
         })?;
@@ -1039,13 +1062,19 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             None if tokens.len() == 1 => 0,
             None => {
                 return Err(ClientError::Usage(format!(
-                    "{} access tokens are held; name the one to manage by its label \
+                    "{} access tokens are held; select one by its label \
                      (RFC 9635 §3.2.2)",
                     tokens.len()
                 )));
             }
         };
-        let manage = tokens[index].1.manage.clone().ok_or_else(|| {
+        Ok(index)
+    }
+
+    /// Finds the selected token's optional management API (§3.2.1).
+    fn managed(&self, label: Option<&str>) -> Result<(usize, TokenManage), ClientError> {
+        let index = self.select(label)?;
+        let manage = self.held(index)?.1.manage.clone().ok_or_else(|| {
             ClientError::Usage(
                 "this access token carries no `manage` field, so there is no management \
                  API to call (RFC 9635 §3.2.1, §6)"

@@ -26,6 +26,8 @@ mod bindings;
 mod concurrency;
 #[path = "key_rotation/consumers.rs"]
 mod consumers;
+#[path = "key_rotation/session.rs"]
+mod session;
 
 fn old_key() -> &'static Ps256Signer {
     static KEY: OnceLock<Ps256Signer> = OnceLock::new();
