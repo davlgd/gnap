@@ -14,10 +14,11 @@ steps, and key-bound requests and tokens as the default.
 > full grant between them — request, signature, interaction, callback,
 > continuation, token — with both roles implemented here, and the token it
 > issues can be rotated and revoked (§6). The application examples add a real
-> HTTP client/AS flow, a co-located protected resource, and a diagnostic
-> workbench. The resource server uses authenticated HTTP introspection rather
-> than reading the AS store. These are experimental consumers, not a complete
-> conformance suite or a complete implementation of RFC 9767.
+> HTTP client/AS flow, a co-located protected resource, a separate Biscuit file
+> application, and a diagnostic workbench. The co-located resource server uses
+> authenticated HTTP introspection rather than reading the AS store. These are
+> experimental consumers, not a complete conformance suite or a complete
+> implementation of RFC 9767.
 > See [what is implemented, and what is not](#what-is-implemented-and-what-is-not).
 
 The [support matrix](docs/support-matrix.md) records the selected scope and its
@@ -39,7 +40,7 @@ These are project decisions, not claims that those features are already present.
 | [`gnap-core`](crates/gnap-core) | The grant state machine (§1.5): transitions, guards, response checking |
 | [`gnap-client`](crates/gnap-client) | The client instance role, over a pluggable HTTP transport |
 | [`gnap-as`](crates/gnap-as) | The authorization server role, free of any HTTP framework |
-| [`gnap-biscuit`](crates/gnap-biscuit) | A bounded file-access token profile: issuance, attenuation and proof-bound authorization, currently exercised in process |
+| [`gnap-biscuit`](crates/gnap-biscuit) | A bounded file-access token profile: issuance, attenuation and proof-bound authorization |
 
 The workspace forbids unsafe code in its own crates. The protocol roles leave
 network and persistent storage I/O to the caller; clock and randomness helpers
@@ -116,6 +117,11 @@ their own dependency locks and toolchain requirements:
   against operator-approved endpoints.
   Reports distinguish passed, failed and untested checks, with no overall
   certification verdict.
+- [Biscuit files](apps/biscuit-files/README.md): run separate client, AS and RS
+  processes, restrict a token locally, and exercise proof-bound reads/writes,
+  rotation and parent revocation. A signed application-specific AS check binds
+  each resource request to live authority state and a shared nonce reservation.
+  It is not RFC 9767 introspection or delegation to a different client key.
 
 Try the hosted [delegation demo](https://gnap-delegation.cleverapps.io)
 and [diagnostic workbench](https://gnap-conformance.cleverapps.io).
@@ -356,9 +362,13 @@ crate issues and verifies a restricted file-access profile, including local
 attenuation, HTTP request proof and a mandatory live-decision callback for
 revocation and replay policy. Its
 [executable example](crates/gnap-biscuit/examples/file_access.rs) runs in process;
-it is not yet an integrated GNAP grant flow, a distributed deployment or an
-authenticated revocation transport. JWT, Macaroon and ZCAP implementations are
-not supplied. The AS issues neither bearer nor `durable` tokens.
+the [Biscuit files application](apps/biscuit-files/README.md) integrates the
+GNAP grant flow across three processes and supplies a signed live-decision
+channel. Process tests cover RS restart, two RS instances sharing one AS,
+AS outage and grant loss after AS restart. These are local HTTP observations,
+not a hosted TLS validation or a distributed transaction between revocation
+and file operations. JWT, Macaroon and ZCAP implementations are not supplied.
+The AS issues neither bearer nor `durable` tokens.
 
 Applications can select a different representation through
 [`TokenEncoder`](crates/gnap-as/src/encoding.rs) and
