@@ -106,11 +106,12 @@ their own dependency locks and toolchain requirements:
   retired tokens are rejected. The AS and RS share volatile storage; there is
   no RFC 9767 introspection endpoint or production user authentication.
 - [Web diagnostics](apps/conformance-web/README.md): inspect imported messages
-  and run bounded rejection probes against operator-approved AS/RS endpoints.
+  and AS discovery documents, or run bounded rejection and discovery probes
+  against operator-approved endpoints.
   Reports distinguish passed, failed and untested checks, with no overall
   certification verdict.
 
-Try the hosted [delegation demo](https://app-05b4e19a-d5da-408d-b524-2d9609e5cd01.cleverapps.io)
+Try the hosted [delegation demo](https://gnap-delegation.cleverapps.io)
 and [diagnostic workbench](https://gnap-conformance.cleverapps.io).
 These experimental deployments use synthetic data and volatile state. Do not
 submit personal data or production credentials. Active probes are restricted to
@@ -122,6 +123,8 @@ OAuth](docs/gnap-and-modern-oauth.md). Benefits are hypotheses to test through
 applications, not claims that OAuth lacks its modern security extensions.
 The [5 September 2026 validation record](docs/validation-2026-09-05.md) separates
 local tests, browser observations and deployed HTTPS checks.
+The [discovery network smoke](apps/conformance-web/LIVE_SMOKE.md) records a
+local workbench calling the hosted AS; it does not attest its source revision.
 
 Sign a grant request, then verify it:
 
