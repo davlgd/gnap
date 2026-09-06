@@ -717,12 +717,17 @@ fn concurrent_create_enforces_capacity_and_removal_keeps_resource_reservations()
         let mut record = candidate.tokens.drain().next().unwrap().1;
         record.token.value =
             gnap_types::token::TokenValue::new(format!("capacity-value-{n}")).unwrap();
+        // Separate grants must not share management credentials either.
+        record.management_token = format!("capacity-management-{n}");
+        let handle = format!("capacity-handle-{n}");
+        let manage = record.token.manage.as_mut().unwrap();
+        manage.access_token.value =
+            gnap_types::token::TokenValue::new(record.management_token.clone()).unwrap();
+        manage.uri = format!("https://as.example/token/{handle}");
         let mut id = vec![0; 64];
         id[..8].copy_from_slice(&n.to_be_bytes());
         record.identifier = Some(id);
-        candidate
-            .tokens
-            .insert(format!("capacity-handle-{n}"), record);
+        candidate.tokens.insert(handle, record);
         candidate
     };
     for n in 1..gnap_biscuit_files::MAX_RECORDS as u64 - 1 {
