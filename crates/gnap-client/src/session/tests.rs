@@ -136,7 +136,9 @@ fn unusable_responses_restore_every_protocol_field() {
                 vec![Ok(response(200, &initial)), bad.clone()]
             };
             let transport = Script::new(replies);
-            let mut session = Session::new(&transport, &key, ENDPOINT).supporting(&["redirect"]);
+            let mut session = Session::new(&transport, &key, ENDPOINT)
+                .supporting(&["redirect"])
+                .with_finish_timeout(NonZeroU64::new(10).unwrap());
             if mode != 0 {
                 session.start(&request(), 1_000).unwrap();
             }
@@ -153,6 +155,7 @@ fn unusable_responses_restore_every_protocol_field() {
             assert!(!matches!(result, Err(ClientError::Server(_))));
             assert_eq!(session.protocol, before, "mode {mode}: {bad:?}");
             assert_eq!(session.supported_modes, Some(vec!["redirect".into()]));
+            assert_eq!(session.finish_timeout, NonZeroU64::new(10));
             assert_eq!(session.endpoint, ENDPOINT);
             assert!(std::ptr::eq(session.transport, &raw const transport));
             assert!(std::ptr::eq(session.signer, &raw const key));

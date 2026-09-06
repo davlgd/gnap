@@ -17,6 +17,7 @@
 //! use gnap_client::{HttpRequest, HttpResponse, HttpTransport, Session, Step};
 //! use gnap_crypto::ps256::Ps256Signer;
 //! use gnap_types::message::GrantRequest;
+//! use std::num::NonZeroU64;
 //!
 //! struct Canned;
 //!
@@ -35,7 +36,8 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let signer = Ps256Signer::generate(2048, "my-key")?;
-//! let mut session = Session::new(&Canned, &signer, "https://as.example/gnap");
+//! let mut session = Session::new(&Canned, &signer, "https://as.example/gnap")
+//!     .with_finish_timeout(NonZeroU64::new(300).unwrap());
 //!
 //! let request: GrantRequest =
 //!     serde_json::from_str(r#"{"client":"my-client","access_token":{"access":["read"]}}"#)?;
@@ -96,11 +98,24 @@
 //! replaces the previous finish context. A response without `interact` does
 //! not renew the window.
 //!
-//! RFC 9635 §4 recommends suitable finish timeouts (SHOULD). This client uses
-//! an AS-advertised lifetime but does not impose its own maximum when
-//! `expires_in` is absent: §3.3 makes that field optional. Applications that
-//! require a maximum finish wait must bound their session lifetime as well.
-//! This is not a claim to implement a configurable client timeout policy.
+//! RFC 9635 §4 recommends suitable finish timeouts (SHOULD), without specifying
+//! a duration. [`Session::with_finish_timeout`] accepts a positive number of
+//! seconds and bounds callbacks even when the AS omits `expires_in`. When both
+//! limits exist, the shorter wins. For example, configure a five-minute local
+//! maximum with `.with_finish_timeout(NonZeroU64::new(300).unwrap())`, importing
+//! [`std::num::NonZeroU64`]. The default remains the AS-advertised lifetime only.
+//! Reconfiguring a live session may shorten its current window but cannot
+//! extend or restart it; a new interaction response uses the latest setting.
+//! Diagnostics distinguish the effective AS or client limit from a clock value
+//! preceding the interaction response. The caller remains responsible for a
+//! reliable clock; the session does not track every intervening clock change.
+//!
+//! This policy bounds finish callbacks, not polling without a finish method,
+//! transport calls, token expiry or the entire session. A validated reference
+//! can still be sent after the finish deadline. A negotiated finish continues
+//! to prohibit polling before a valid callback, so refusing a late callback
+//! does not authorize a polling fallback. Local expiry neither revokes a remote
+//! grant nor discards its continuation; session cleanup remains application work.
 
 pub mod error;
 pub mod rotation;
