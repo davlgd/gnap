@@ -289,6 +289,10 @@ fn rotating_one_token_of_a_lot_replaces_it_alone_and_keeps_its_label() {
         r#"{{"access_token":{}}}"#,
         issued(Some("reports"), REPORTS, "reports:read", Some("R3"))
     );
+    let previous_management_value = format!(
+        r#"{{"access_token":{}}}"#,
+        issued(Some("reports"), "manage-R", "reports:read", Some("R3"))
+    );
     let reflagged = format!(
         r#"{{"access_token":{{"label":"reports","value":"{ROTATED}","access":["reports:read"],
             "flags":["durable"],
@@ -303,6 +307,10 @@ fn rotating_one_token_of_a_lot_replaces_it_alone_and_keeps_its_label() {
         (mislabelled.as_str(), "changes the label"),
         (as_array.as_str(), "several access tokens"),
         (same_value.as_str(), "repeats the value"),
+        (
+            previous_management_value.as_str(),
+            "previous management credential",
+        ),
         (reflagged.as_str(), "changes the flags"),
         (rekeyed.as_str(), "key binding"),
     ] {

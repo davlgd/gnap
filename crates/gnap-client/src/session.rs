@@ -766,8 +766,9 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     ///
     /// §6.1 describes the rotated token as having "the same rights and
     /// properties as the original token, apart from an updated token value and
-    /// expiration time". Only the rights are a stated MUST; for the rest, this
-    /// session compares meaning rather than bytes and refuses what it cannot
+    /// expiration time". Of the properties compared here (rights, label, flags
+    /// and key), only the rights carry a stated MUST (§6.1-M05). For the rest,
+    /// this session compares meaning rather than bytes and refuses what it cannot
     /// keep presenting as the same token: a label the answer omits is kept, a
     /// changed label is refused since the label is how the session names the
     /// token; flags are compared as a set; a `key` field is unchanged only when
@@ -832,6 +833,15 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         let previous = &held[index].1;
         // §6.1 — "The value of the access token MUST NOT be the same as the
         // current value of the access token used to access the management API."
+        if rotated.value == manage.access_token.value {
+            return Err(ClientError::Protocol(
+                "the rotated token reuses the previous management credential (RFC 9635 §6.1)"
+                    .into(),
+            ));
+        }
+        // The same section describes replacing the resource token with an
+        // updated value. Its old value and the management credential above
+        // are distinct: neither may become the new resource token.
         if rotated.value == previous.value {
             return Err(ClientError::Protocol(
                 "the rotated token repeats the value it was meant to replace (RFC 9635 §6.1)"
