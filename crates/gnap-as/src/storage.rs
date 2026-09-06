@@ -69,6 +69,30 @@ pub struct TokenRecord {
 }
 
 impl TokenRecord {
+    /// A record with no derivation metadata or format-native identifier.
+    ///
+    /// Prefer this constructor to a struct literal when neither is needed.
+    /// Optional metadata can then receive defaults here as the
+    /// record evolves; existing struct literals still need every public field.
+    /// It stores what it is given; it does not validate the token, the client
+    /// or the credential, which is the issuing server's job.
+    #[must_use]
+    pub fn new(
+        token: AccessToken,
+        client: Client,
+        management_token: impl Into<String>,
+        issued_at: u64,
+    ) -> Self {
+        Self {
+            derivation: None,
+            identifier: None,
+            issued_at,
+            token,
+            client,
+            management_token: management_token.into(),
+        }
+    }
+
     /// Exclusive expiration deadline, or `None` when no lifetime was issued.
     ///
     /// The duration comes from `token.expires_in`. For externally constructed

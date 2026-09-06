@@ -1,7 +1,7 @@
 //! Deliberately small active test against operator-owned, exact allowlist URLs.
 //! No URL supplied in the public request is ever resolved or fetched.
 
-use crate::{check, observation, Check, Observation};
+use crate::{check, discovery, observation, Check, Observation};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -38,8 +38,8 @@ struct ConfiguredTarget {
 }
 
 impl Probes {
-    /// Configuration is operator consent to send the fixed malformed-grant
-    /// probe. It is not an assertion of third-party ownership verification.
+    /// Configuration is operator consent to send the fixed malformed-grant or
+    /// OPTIONS discovery probe. No third-party ownership verification is implied.
     pub fn from_json(configuration: &str) -> Result<Self, &'static str> {
         let targets: Vec<String> = serde_json::from_str(configuration).map_err(|_| {
             "GNAP_TEST_TARGETS must be a JSON array of exact HTTPS grant endpoint URLs"
@@ -107,6 +107,16 @@ pub async fn targets(State(probes): State<Probes>) -> Json<Vec<Target>> {
 pub struct ProbeRequest {
     target_id: usize,
     consent: bool,
+    #[serde(default)]
+    operation: Operation,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Operation {
+    #[default]
+    Rejection,
+    AsDiscovery,
 }
 
 #[derive(Serialize)]
@@ -117,8 +127,63 @@ pub struct ProbeReport {
     observation: Observation,
     target_id: usize,
     role: Role,
+    operation: Operation,
     checks: Vec<Check>,
     limitations: &'static str,
+}
+
+fn report(target_id: usize, role: Role, operation: Operation, checks: Vec<Check>) -> ProbeReport {
+    ProbeReport {
+        schema_version: 1,
+        profile: if operation == Operation::AsDiscovery {
+            "gnap-as-discovery-probe-v1"
+        } else {
+            match role {
+                Role::As => "gnap-malformed-initial-request-v1",
+                Role::Rs => "gnap-protected-resource-unauthenticated-v1",
+            }
+        },
+        certification: false,
+        observation: observation("live"),
+        target_id,
+        role,
+        operation,
+        checks,
+        limitations: if operation == Operation::AsDiscovery {
+            discovery::INDEPENDENCE
+        } else {
+            "One unsigned request only. AS: malformed initial request. RS: credential-free GET against an operator-declared protected resource (policy test, not a general RFC requirement for all resources). No successful grants, proof verification, replay defense, rights enforcement, introspection or overall conformance. Scenarios are separate from SDK tests; AS response parsing reuses gnap-types. Network failures are inconclusive."
+        },
+    }
+}
+
+/// Redact extractor errors, which can otherwise reflect caller-supplied values.
+pub async fn handler(
+    State(probes): State<Probes>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("application/json")
+        })
+    {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Expected application/json.",
+        )
+            .into_response();
+    }
+    let Ok(input) = serde_json::from_slice::<ProbeRequest>(&body) else {
+        return (StatusCode::BAD_REQUEST, "Invalid probe envelope; provide target_id, consent, and optional operation: rejection or as_discovery. Caller URLs and credentials are not accepted.").into_response();
+    };
+    run(State(probes), Json(input)).await
 }
 
 pub async fn run(State(probes): State<Probes>, Json(input): Json<ProbeRequest>) -> Response {
@@ -132,6 +197,13 @@ pub async fn run(State(probes): State<Probes>, Json(input): Json<ProbeRequest>) 
     let Some(target) = probes.targets.get(input.target_id) else {
         return (StatusCode::NOT_FOUND, "No such operator-approved target.").into_response();
     };
+    if input.operation == Operation::AsDiscovery && target.role != Role::As {
+        return (
+            StatusCode::BAD_REQUEST,
+            "AS discovery requires an operator-approved AS target, not an RS target.",
+        )
+            .into_response();
+    }
     {
         let Ok(mut last) = probes.last_started.lock() else {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -145,12 +217,8 @@ pub async fn run(State(probes): State<Probes>, Json(input): Json<ProbeRequest>) 
         }
         *last = Some(Instant::now());
     }
-    match tokio::time::timeout(Duration::from_secs(4), request(target)).await {
-        Ok(Ok(checks)) => Json(ProbeReport {
-            schema_version: 1, profile: match target.role { Role::As => "gnap-malformed-initial-request-v1", Role::Rs => "gnap-protected-resource-unauthenticated-v1" }, certification: false, observation: observation("live"),
-            target_id: input.target_id, role: target.role, checks,
-            limitations: "One unsigned request only. AS: malformed initial request. RS: credential-free GET against an operator-declared protected resource (policy test, not a general RFC requirement for all resources). No successful grants, proof verification, replay defense, rights enforcement, introspection or overall conformance. Scenarios are separate from SDK tests; AS response parsing reuses gnap-types. Network failures are inconclusive.",
-        }).into_response(),
+    match tokio::time::timeout(Duration::from_secs(4), request(target, input.operation)).await {
+        Ok(Ok(checks)) => Json(report(input.target_id, target.role, input.operation, checks)).into_response(),
         _ => (StatusCode::BAD_GATEWAY, "Probe inconclusive: target resolution, address policy, TLS, deadline, body limit or network failed. No response content is returned.").into_response(),
     }
 }
@@ -184,7 +252,7 @@ fn public_ip(ip: IpAddr) -> bool {
     }
 }
 
-async fn request(target: &ConfiguredTarget) -> Result<Vec<Check>, ()> {
+async fn request(target: &ConfiguredTarget, operation: Operation) -> Result<Vec<Check>, ()> {
     let host = target.url.host_str().ok_or(())?;
     let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, 443))
         .await
@@ -207,22 +275,37 @@ async fn request(target: &ConfiguredTarget) -> Result<Vec<Check>, ()> {
         .pool_max_idle_per_host(0)
         .build()
         .map_err(|_| ())?;
-    let request = match target.role {
-        Role::As => client
+    let request = outgoing_request(&client, target, operation);
+    let response = request.send().await.map_err(|_| ())?;
+    response_checks(response, target, operation).await
+}
+
+fn outgoing_request(
+    client: &reqwest::Client,
+    target: &ConfiguredTarget,
+    operation: Operation,
+) -> reqwest::RequestBuilder {
+    let request = match (target.role, operation) {
+        (Role::As, Operation::AsDiscovery) => {
+            client.request(reqwest::Method::OPTIONS, target.url.clone())
+        }
+        (Role::As, Operation::Rejection) => client
             .post(target.url.clone())
             .header("Content-Type", "application/json")
             .body("{"),
-        Role::Rs => client.get(target.url.clone()),
+        (Role::Rs, _) => client.get(target.url.clone()),
     };
-    let mut response = request
-        .header("Accept", "application/json")
-        .header(
-            "User-Agent",
-            "gnap-conformance-web/0.1 bounded-unsigned-probe",
-        )
-        .send()
-        .await
-        .map_err(|_| ())?;
+    request.header("Accept", "application/json").header(
+        "User-Agent",
+        "gnap-conformance-web/0.1 bounded-unsigned-probe",
+    )
+}
+
+async fn response_checks(
+    mut response: reqwest::Response,
+    target: &ConfiguredTarget,
+    operation: Operation,
+) -> Result<Vec<Check>, ()> {
     let status = response.status();
     let media = response
         .headers()
@@ -235,19 +318,14 @@ async fn request(target: &ConfiguredTarget) -> Result<Vec<Check>, ()> {
                 .trim()
                 .eq_ignore_ascii_case("application/json")
         });
-    let headers = response
+    let headers: Vec<(String, String)> = response
         .headers()
         .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|v| (name.to_string(), v.to_string()))
-        })
+        .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
         .collect();
     let no_store = gnap_types::http::HttpResponse {
         status: status.as_u16(),
-        headers,
+        headers: headers.clone(),
         body: vec![],
     }
     .has_no_store();
@@ -263,6 +341,14 @@ async fn request(target: &ConfiguredTarget) -> Result<Vec<Check>, ()> {
             return Err(());
         }
         body.extend_from_slice(&chunk);
+    }
+    if operation == Operation::AsDiscovery {
+        return Ok(discovery::checks(
+            &body,
+            Some(&headers),
+            Some(status.as_u16()),
+            Some(target.url.as_str()),
+        ));
     }
     if target.role == Role::Rs {
         return Ok(vec![
@@ -301,6 +387,125 @@ fn as_response_checks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn discovery_target() -> ConfiguredTarget {
+        ConfiguredTarget {
+            url: reqwest::Url::parse("https://as.example/gnap").unwrap(),
+            role: Role::As,
+        }
+    }
+
+    #[test]
+    fn discovery_sends_only_options_to_the_configured_url_without_credentials_or_body() {
+        let request = outgoing_request(
+            &reqwest::Client::new(),
+            &discovery_target(),
+            Operation::AsDiscovery,
+        )
+        .build()
+        .unwrap();
+        assert_eq!(request.method(), reqwest::Method::OPTIONS);
+        assert_eq!(request.url().as_str(), "https://as.example/gnap");
+        assert!(request.body().is_none());
+        assert_eq!(request.headers()["accept"], "application/json");
+        assert!(!request.headers().contains_key("authorization"));
+        assert!(!request.headers().contains_key("cookie"));
+        assert!(!request.headers().contains_key("signature"));
+        assert!(!request.headers().contains_key("origin"));
+    }
+
+    #[tokio::test]
+    async fn response_fixtures_exercise_live_discovery_assertions_and_bounds() {
+        let target = discovery_target();
+        for code in [200, 302, 401, 403, 405] {
+            let response: reqwest::Response = axum::http::Response::builder()
+                .status(code)
+                .header("content-type", "application/json")
+                .header("location", "http://169.254.169.254/TOP-SECRET")
+                .body(r#"{"grant_request_endpoint":"https://as.example/gnap"}"#)
+                .unwrap()
+                .into();
+            let checks = response_checks(response, &target, Operation::AsDiscovery)
+                .await
+                .unwrap();
+            let report = report(0, target.role, Operation::AsDiscovery, checks);
+            let wire = serde_json::to_value(&report).unwrap();
+            assert_eq!(wire["profile"], "gnap-as-discovery-probe-v1");
+            assert_eq!(wire["target_id"], 0);
+            assert_eq!(wire["role"], "as");
+            assert_eq!(wire["operation"], "as_discovery");
+            assert!(wire.get("kind").is_none(), "not the import Report envelope");
+            let http = report
+                .checks
+                .iter()
+                .find(|c| c.id == "discovery-http-200")
+                .unwrap();
+            assert_eq!(
+                http.status,
+                if code == 200 {
+                    crate::Status::Pass
+                } else {
+                    crate::Status::Fail
+                }
+            );
+            assert!(!serde_json::to_string(&report)
+                .unwrap()
+                .contains("TOP-SECRET"));
+        }
+        let response: reqwest::Response = axum::http::Response::builder()
+            .status(200)
+            .header("content-type", "text/html")
+            .body("<html>TOP-SECRET</html>")
+            .unwrap()
+            .into();
+        let checks = response_checks(response, &target, Operation::AsDiscovery)
+            .await
+            .unwrap();
+        assert_eq!(
+            checks
+                .iter()
+                .find(|c| c.id == "discovery-json-object")
+                .unwrap()
+                .status,
+            crate::Status::Fail
+        );
+        for known_length in [true, false] {
+            let mut response = axum::http::Response::builder().status(200);
+            if known_length {
+                response = response.header("content-length", (RESPONSE_LIMIT + 1).to_string());
+            }
+            let response: reqwest::Response = response
+                .body("x".repeat(RESPONSE_LIMIT + 1))
+                .unwrap()
+                .into();
+            assert!(response_checks(response, &target, Operation::AsDiscovery)
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn discovery_and_rejection_share_cooldown_and_old_envelopes_still_work() {
+        let probes = Probes::from_json(r#"["https://as.example/gnap"]"#).unwrap();
+        *probes.last_started.lock().unwrap() = Some(Instant::now());
+        for operation in [Operation::AsDiscovery, Operation::Rejection] {
+            assert_eq!(
+                run(
+                    State(probes.clone()),
+                    Json(ProbeRequest {
+                        target_id: 0,
+                        consent: true,
+                        operation
+                    })
+                )
+                .await
+                .status(),
+                StatusCode::TOO_MANY_REQUESTS
+            );
+        }
+        let old: ProbeRequest = serde_json::from_str(r#"{"target_id":0,"consent":true}"#).unwrap();
+        assert_eq!(old.operation, Operation::Rejection);
+    }
+
     #[test]
     fn http_status_policy_does_not_replace_gnap_error_checks() {
         let checks = as_response_checks(
@@ -384,7 +589,8 @@ mod tests {
                 State(probes.clone()),
                 Json(ProbeRequest {
                     target_id: 0,
-                    consent: true
+                    consent: true,
+                    operation: Operation::Rejection,
                 })
             )
             .await
@@ -396,7 +602,8 @@ mod tests {
                 State(probes),
                 Json(ProbeRequest {
                     target_id: 1,
-                    consent: true
+                    consent: true,
+                    operation: Operation::Rejection,
                 })
             )
             .await
@@ -450,7 +657,8 @@ mod tests {
                 State(Probes::disabled()),
                 Json(ProbeRequest {
                     target_id: 0,
-                    consent: false
+                    consent: false,
+                    operation: Operation::Rejection,
                 })
             )
             .await
@@ -462,7 +670,8 @@ mod tests {
                 State(Probes::disabled()),
                 Json(ProbeRequest {
                     target_id: 0,
-                    consent: true
+                    consent: true,
+                    operation: Operation::Rejection,
                 })
             )
             .await
