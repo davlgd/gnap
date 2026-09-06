@@ -29,6 +29,7 @@ allows a real protected resource to reuse exactly the AS's signature checks.
 | Call a downstream API as an RS | Reusing the incoming token would preserve the wrong key binding and audience | `GrantRequest::existing_access_token`, the signed derivation handler and `DerivationPolicy` now issue a distinct RS1-bound child for RS2. The app explicitly maps folder reading to metadata reading, limits one hop and checks the returned profile. It uses the public request/response types and `sign_request` directly, rather than a browser-interaction `Session`; fixed destinations, response validation and per-call cleanup remain application work |
 | Publish a child without racing parent retirement | An independent grant insertion cannot check the exact parent token atomically | `DerivedGrantStore::create_derived` verifies the parent revision/value/lifetime at commit. The retention adapter delegates under its external maintenance lock and records the child only after success. Parent retirement cascades in SDK storage; RS reads still have the documented network decision race |
 | Keep derivation optional for other consumers | Adding child creation to the base storage trait broke the separate Biscuit application's ordinary store, even though that application does not enable derivation | `DerivedGrantStore` now extends the base trait only for stores offering this capability. The derivation handler requires it at compile time; ordinary handlers do not. Paired documentation tests check activation with and without that bound |
+| Issue and manage several tokens under one consent | The consumer could only ask for one token, so labels, per-token rights and independent management (RFC 9635 §§2.1.2, 3.2.2) were never exercised end to end | `Decision::ApproveTokens` lets the policy approve requested slots independently, including only the second one; the client checks that returned labels are the requested ones and rotates or revokes by label. The application keeps the flow's mode explicit, selects tokens by label with no fallback, compares a modification with the live token of the same label rather than the grant's union, refuses a partial approval when the current request has no reports slot, and keeps a retired token together with its label |
 | Interpret an introspection refusal | `active:false` includes an AS unable to determine activity; it is not proof of intrinsic token invalidity | The RS refuses access without inventing a cause. Network failures and unusable responses are separate 503 errors; static storage-failure logs aid the AS operator without exposing credentials. No global failure counter rewrites concurrent responses |
 | Request reusable sets of rights | Literal rights in the first client hid the resource-registration boundary | The RS now registers two immutable sets over signed HTTP. The client receives their public references in process and uses them in initial requests and PATCH. The AS resolves references before consent/downscope and freezes approved leaves in tokens. A reference alone never grants access |
 | Start through a canonical URL during process replacement | The proxy can route bootstrap calls to an older instance with different ephemeral keys or incomplete capabilities | One bounded supervisor retries only explicit transient outcomes, signs every request afresh and checks returned sets against the local AS registry before publishing both references. Deduplication permits a retry after a committed registration whose response was lost. This co-location check is application coordination, not a portable GNAP discovery guarantee |
@@ -85,6 +86,19 @@ no false success. Separate AS/RS1/RS2 worker pools avoid a same-pool nested-call
 deadlock. These are co-located local tests, not a public deployment, a throughput
 result, or independently operated RS interoperability. AS-mediated derivation
 does not implement local Biscuit attenuation.
+
+The two-token flow adds a third RS key and one more synthetic right. Socket
+tests drive a real Session and the browser worker over HTTP through the full
+lot, a partial approval of the reports token, cross-RS refusals of each token,
+per-label rotation and revocation with the sibling and its derived child left
+in place, a narrowing PATCH approved without consent, a widening PATCH that
+returns to the owner and replaces the lot, a partial approval refused when the
+current request does not request reports, the retired-token check naming and
+targeting the right token after a rotation followed by a PATCH, and grant
+revocation. Policy tests cover slot resolution, refusals of other labels,
+rights, shapes and flags, and the per-label modification comparison. The two
+labels and their rights are this application's vocabulary, not a GNAP
+requirement; the AS still issues one lifetime for every token of a lot.
 
 Resource-registration tests use real local HTTP for startup, readiness gating
 and explicit-format refusal. Injected elapsed time and transport failures cover

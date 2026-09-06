@@ -17,6 +17,7 @@ use tokio::sync::Semaphore;
 pub mod discovery;
 pub mod probe;
 mod rs_import;
+mod token_exchange;
 pub use rs_import::{Binding as TokenBinding, Context as RsContext};
 
 pub const MAX_UPLOAD: usize = 65_536;
@@ -37,6 +38,7 @@ pub enum MessageKind {
     ResourceRegistrationResponse,
     DerivationRequest,
     DerivationResponse,
+    TokenExchange,
 }
 
 /// Headers are optional: absence means the trace did not capture them, not an
@@ -132,6 +134,7 @@ fn check(
         "discovery-endpoint-match" => "Advertise the exact URL queried by the client, including path and query. Do not normalize or substitute another endpoint.",
         "discovery-key-rotation-type" => "When supplied, key_rotation_supported must be a JSON boolean, not a string or null. Omission means unsupported.",
         "discovery-duplicate-members" => "Use unique top-level JSON member names. Ambiguous duplicate fields are rejected by this diagnostic profile; RFC 8259 recommends unique names.",
+        _ if id.starts_with("token-exchange-") => "Check the local request/response pair and the named shape or label relationship against the linked section. These independent JSON comparisons do not verify authority, token contents or an authenticated exchange.",
         _ => "Inspect the linked RFC section and the named SDK validation rule. No raw submitted values are included in this report.",
     });
     Check {
@@ -203,6 +206,7 @@ pub fn analyze(input: Import) -> Result<Report, &'static str> {
     let mut checks = Vec::new();
     rs_import::validate_context(&input)?;
     match input.kind {
+        MessageKind::TokenExchange => return token_exchange::analyze(&input),
         MessageKind::AsDiscovery => {
             return Ok(Report {
                 schema_version: 1,

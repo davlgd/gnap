@@ -129,9 +129,9 @@ const deferred = () => { let resolve, reject; const promise = new Promise((res, 
 async function loadApp() {
   const document = buildDocument();
   const pending = [];
-  const fetch = url => {
+  const fetch = (url, options) => {
     if (url === '/api/targets') return Promise.resolve(response(200, [{ id: 0, role: 'as', url: 'https://as.example/gnap' }]));
-    return new Promise((resolve, reject) => pending.push({ url, resolve, reject }));
+    return new Promise((resolve, reject) => pending.push({ url, options, resolve, reject }));
   };
   // app.js declares only top-level const/let/function; evaluating it inside a
   // Function body keeps every load isolated. globalThis is not mutated.
@@ -239,4 +239,59 @@ test('the stub select follows DOM value semantics', async () => {
   assert.deepEqual(el('kind').selectedOptions, []);
   el('kind').value = 'as_discovery';
   assert.equal(el('kind').selectedOptions[0].value, 'as_discovery');
+});
+
+test('discovery and token-pair fixtures keep their controls and request contexts separate', async () => {
+  const { el, take } = await loadApp();
+  await el('discovery-fixture').emit('click');
+  assert.equal(el('kind').value, 'as_discovery');
+  assert.equal(el('discovery-context').hidden, false);
+  assert.equal(el('digest-context').hidden, true);
+  assert.equal(el('headers').disabled, false);
+  let inFlight = el('analyze').emit('click');
+  let request = take('/api/analyze');
+  const discovery = JSON.parse(request.options.body);
+  assert.equal(discovery.queried_endpoint, 'https://test-as.example/gnap');
+  assert.equal(discovery.http_status, 200);
+  assert.deepEqual(discovery.headers, [['Content-Type', 'application/json']]);
+  assert.equal(discovery.content_digest, null);
+  assert.equal(Object.hasOwn(discovery, 'rs_context'), false);
+  request.resolve(response(200, report));
+  await inFlight;
+
+  await el('token-fixture').emit('click');
+  assert.equal(el('kind').value, 'token_exchange');
+  assertPanelCleared(el, 'analyze');
+  assert.equal(el('discovery-context').hidden, true);
+  assert.equal(el('context-section').hidden, true);
+  assert.equal(el('digest-context').hidden, true);
+  for (const id of ['headers', 'digest']) {
+    assert.equal(el(id).disabled, true);
+    assert.equal(el(id).value, '');
+  }
+  // Disabled or hidden controls do not belong to the pair's envelope, even
+  // when they retain unrelated values. These values must not be parsed.
+  for (const id of ['headers', 'digest', 'rs-context', 'queried-endpoint', 'http-status']) el(id).value = 'stale';
+  inFlight = el('analyze').emit('click');
+  request = take('/api/analyze');
+  const pair = JSON.parse(request.options.body);
+  assert.deepEqual(Object.keys(pair).sort(), ['body', 'content_digest', 'headers', 'kind']);
+  assert.equal(pair.kind, 'token_exchange');
+  assert.equal(pair.headers, null);
+  assert.equal(pair.content_digest, null);
+  assert.deepEqual(JSON.parse(pair.body).response.access_token.map(token => token.label), ['reports']);
+  request.resolve(response(200, report));
+  await inFlight;
+
+  await el('fixture').emit('click');
+  assert.equal(el('kind').value, 'continue_request');
+  assert.equal(el('digest-context').hidden, false);
+  assert.equal(el('discovery-context').hidden, true);
+  assert.equal(el('headers').disabled, false);
+  assert.equal(el('digest').disabled, false);
+  el('consent').checked = true;
+  await el('clear').emit('click');
+  for (const id of ['body', 'headers', 'digest', 'rs-context', 'queried-endpoint', 'http-status']) assert.equal(el(id).value, '');
+  assert.equal(el('consent').checked, false);
+  assertPanelCleared(el, 'analyze');
 });

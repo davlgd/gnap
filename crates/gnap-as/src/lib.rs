@@ -270,7 +270,7 @@ pub use encoding::{
 };
 pub use nonce::{Nonces, OsNonces};
 pub use policy::{
-    Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround,
+    Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround, TokenApproval,
 };
 pub use resource_sets::{
     MemoryResourceSetStore, ResourceSet, ResourceSetError, ResourceSetLimits, ResourceSetStore,

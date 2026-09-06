@@ -1,0 +1,4 @@
+{
+  "kind": "token_exchange",
+  "body": "{\"request\":{\"client\":\"synthetic-client\",\"access_token\":[{\"label\":\"documents\",\"access\":[\"documents:read\"]},{\"label\":\"reports\",\"access\":[\"reports:read\"]}]},\"response\":{\"access_token\":[{\"label\":\"reports\",\"value\":\"synthetic-token\",\"access\":[\"reports:read\"]}]}}"
+}

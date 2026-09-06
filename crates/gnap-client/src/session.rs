@@ -4,6 +4,9 @@
 //! response, the rules RFC 9635 places on the client:
 //!
 //! - the response shape must match what was requested (§3.2.1, §3.2.2);
+//! - the labels of a lot, or a label that was requested, must come back as
+//!   requested; an unrequested label on a single token is the AS's to add
+//!   (§3.2.1, §3.2.2);
 //! - a `bearer` token must never carry a `key` (§3.2.1);
 //! - the interaction hash must validate before the reference is sent on
 //!   (§4.2.1);
@@ -32,9 +35,11 @@ use crate::transport::{HttpRequest, HttpResponse, HttpTransport};
 use gnap_core::{check_response, Event, Grant, State};
 use gnap_crypto::hash::{verify_interaction_hash, HashMethod, InteractionHashInput};
 use gnap_crypto::proof::Signer;
+use gnap_registry::AccessTokenFlag;
 use gnap_types::interact::InteractCallback;
+use gnap_types::key::Key;
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
-use gnap_types::token::{AccessToken, Cardinality, TokenManage, TokenValue};
+use gnap_types::token::{AccessToken, AccessTokenRequest, Cardinality, TokenManage, TokenValue};
 use gnap_types::user::SubjectResponse;
 
 /// Where a grant stands after a round trip with the AS.
@@ -102,6 +107,12 @@ struct SessionState {
     /// to `sha-256` when the callback arrives.
     hash_method: Option<HashMethod>,
     requested: Option<Cardinality>,
+    /// The labels of the tokens last requested, one entry per token (§2.1).
+    ///
+    /// §3.2.1 makes `label` "REQUIRED for multiple access tokens or if a label
+    /// was included in the single access token request", echoing the request;
+    /// a response can only be checked against a request the session kept.
+    requested_labels: Vec<Option<String>>,
     /// The interaction start modes this client offered (§2.5.1).
     offered_modes: Vec<String>,
     /// An interaction reference whose hash validated, waiting to be sent.
@@ -153,6 +164,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                 as_nonce: None,
                 hash_method: None,
                 requested: None,
+                requested_labels: Vec::new(),
                 offered_modes: Vec::new(),
                 validated_ref: None,
                 subject: None,
@@ -288,6 +300,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         }
 
         self.protocol.requested = request.access_token.as_ref().map(|a| a.cardinality);
+        self.protocol.requested_labels = requested_labels(request.access_token.as_ref());
         self.prepare_interaction(request.interact.as_ref())?;
 
         let body = serde_json::to_vec(request)
@@ -628,6 +641,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         let context_before = self.protocol.clone();
         if let Some(access) = &changes.access_token {
             self.protocol.requested = Some(access.cardinality);
+            self.protocol.requested_labels = requested_labels(Some(access));
         }
         self.prepare_interaction(changes.interact.as_ref())?;
 
@@ -650,6 +664,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                 self.protocol.client_nonce = context_before.client_nonce;
                 self.protocol.hash_method = context_before.hash_method;
                 self.protocol.requested = context_before.requested;
+                self.protocol.requested_labels = context_before.requested_labels;
                 self.protocol.offered_modes = context_before.offered_modes;
                 return Err(ClientError::Server(error));
             }
@@ -741,15 +756,33 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// time." The rights cannot be changed here: §6.1 sends a client that wants
     /// different access to the continuation API (§5.3) or to a new grant.
     ///
-    /// `label` names the token when several were issued (§3.2.2); pass `None`
-    /// for a single one. The rotated token replaces it in the session, with the
-    /// new management URI §6.1-M04 requires the client to use from then on.
+    /// `label` names the token when several are held (§3.2.2); `None` selects
+    /// the token when exactly one is held, labelled or not. The rotated token
+    /// replaces it in the session, with the new management URI §6.1-M04
+    /// requires the client to use from then on.
+    ///
+    /// The rotation answers with one token in the form of §3.2.1, whatever
+    /// the shape of the grant that issued it; the session refuses an array.
+    ///
+    /// §6.1 describes the rotated token as having "the same rights and
+    /// properties as the original token, apart from an updated token value and
+    /// expiration time". Of the properties compared here (rights, label, flags
+    /// and key), only the rights carry a stated MUST (§6.1-M05). For the rest,
+    /// this session compares meaning rather than bytes and refuses what it cannot
+    /// keep presenting as the same token: a label the answer omits is kept, a
+    /// changed label is refused since the label is how the session names the
+    /// token; flags are compared as a set; a `key` field is unchanged only when
+    /// both answers omit it or both spell out the same key, since the session
+    /// holds no key material to compare and a `kid` is a name, not a key
+    /// (§3.2.1). Binding another key is a different operation (§6.1.1) that
+    /// this session does not perform.
     ///
     /// # Errors
     ///
     /// Fails when no such token is held, when it carries no `manage` field,
     /// when the AS refuses the rotation, or when the answer does not keep the
-    /// rights §6.1-M05 requires it to keep.
+    /// rights §6.1-M05 requires it to keep, repeats the value §6.1 forbids it to
+    /// repeat, or changes the label, flags or key binding as described above.
     pub fn rotate_token(
         &mut self,
         label: Option<&str>,
@@ -767,14 +800,27 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             return Err(ClientError::Server(e));
         }
 
-        let rotated = parsed
-            .access_token
-            .and_then(|t| t.tokens.into_iter().next())
-            .ok_or_else(|| {
-                ClientError::Protocol(
-                    "the rotation response carries no access token (RFC 9635 §6.1)".into(),
-                )
-            })?;
+        // §6.1 — the AS responds with "the rotated access token in the
+        // access_token field described in Section 3.2.1": one token object,
+        // even when the grant issued several (§3.2.2). Taking the first entry
+        // of an array would silently accept a different exchange.
+        let Some(tokens) = parsed.access_token else {
+            return Err(ClientError::Protocol(
+                "the rotation response carries no access token (RFC 9635 §6.1)".into(),
+            ));
+        };
+        if tokens.cardinality != Cardinality::Single || tokens.tokens.len() != 1 {
+            return Err(ClientError::Protocol(
+                "the rotation response carries several access tokens where §6.1 describes \
+                 one rotated token in the form of §3.2.1"
+                    .into(),
+            ));
+        }
+        let mut rotated = tokens
+            .tokens
+            .into_iter()
+            .next()
+            .ok_or_else(|| ClientError::Protocol("the rotation response is empty".into()))?;
         rotated
             .validate()
             .map_err(|e| ClientError::Protocol(e.to_string()))?;
@@ -784,13 +830,66 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                 "the session no longer holds the token that was rotated".into(),
             ));
         };
+        let previous = &held[index].1;
+        // §6.1 — "The value of the access token MUST NOT be the same as the
+        // current value of the access token used to access the management API."
+        if rotated.value == manage.access_token.value {
+            return Err(ClientError::Protocol(
+                "the rotated token reuses the previous management credential (RFC 9635 §6.1)"
+                    .into(),
+            ));
+        }
+        // The same section describes replacing the resource token with an
+        // updated value. Its old value and the management credential above
+        // are distinct: neither may become the new resource token.
+        if rotated.value == previous.value {
+            return Err(ClientError::Protocol(
+                "the rotated token repeats the value it was meant to replace (RFC 9635 §6.1)"
+                    .into(),
+            ));
+        }
         // §6.1-M05 — "The access rights in the access array for the rotated
         // access token MUST be included in the response and MUST be the same as
         // the token before rotation."
-        if rotated.access != held[index].1.access {
+        if rotated.access != previous.access {
             return Err(ClientError::Protocol(
                 "the rotated token does not carry the same access rights as the token it \
                  replaces (RFC 9635 §6.1)"
+                    .into(),
+            ));
+        }
+        // §6.1 — a rotation issues a token "with the same rights and properties
+        // as the original token, apart from an updated token value and
+        // expiration time". That sentence describes the operation; it states
+        // no MUST beyond the rights. What follows is this session's reading of
+        // it: the label is the name the session manages the token by (§3.2.2),
+        // and the flags and key decide how it is presented (§7.2), so a token
+        // that changes them is not one the session can go on using as the same.
+        match (&rotated.label, &previous.label) {
+            (None, kept) => rotated.label.clone_from(kept),
+            (Some(answered), Some(kept)) if answered == kept => {}
+            (Some(_), _) => {
+                return Err(ClientError::Protocol(
+                    "the rotated token changes the label the session manages the token by; \
+                     this session keeps a rotated token under its original label \
+                     (RFC 9635 §6.1 describes a rotation as keeping the token's properties)"
+                        .into(),
+                ));
+            }
+        }
+        if !same_flags(&rotated.flags, &previous.flags) {
+            return Err(ClientError::Protocol(
+                "the rotated token changes the flags of the token it replaces; this session \
+                 does not present a rotated token differently from the original \
+                 (RFC 9635 §6.1)"
+                    .into(),
+            ));
+        }
+        if !same_binding(rotated.key.as_ref(), previous.key.as_ref()) {
+            return Err(ClientError::Protocol(
+                "the session cannot establish that the rotated token keeps the original \
+                 token's key binding; binding a new key is a separate operation this \
+                 session does not perform (RFC 9635 §6.1, §6.1.1)"
                     .into(),
             ));
         }
@@ -834,14 +933,31 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     }
 
     /// Finds a held token by label, and the management API it offers (§3.2.1).
+    ///
+    /// `None` names the only token held, whether or not it carries a label
+    /// (§3.2.1 lets the AS label a single token); with several held, a caller
+    /// has to say which one, since the labels are what tells them apart
+    /// (§3.2.2).
     fn managed(&self, label: Option<&str>) -> Result<(usize, TokenManage), ClientError> {
         let tokens = self.protocol.issued.as_ref().ok_or_else(|| {
             ClientError::Usage("no access token has been issued to this session".into())
         })?;
-        let index = tokens
-            .iter()
-            .position(|(_, t)| t.label.as_deref() == label)
-            .ok_or_else(|| ClientError::Usage(format!("no access token is labelled {label:?}")))?;
+        let index = match label {
+            Some(wanted) => tokens
+                .iter()
+                .position(|(_, t)| t.label.as_deref() == Some(wanted))
+                .ok_or_else(|| {
+                    ClientError::Usage(format!("no access token is labelled {wanted:?}"))
+                })?,
+            None if tokens.len() == 1 => 0,
+            None => {
+                return Err(ClientError::Usage(format!(
+                    "{} access tokens are held; name the one to manage by its label \
+                     (RFC 9635 §3.2.2)",
+                    tokens.len()
+                )));
+            }
+        };
         let manage = tokens[index].1.manage.clone().ok_or_else(|| {
             ClientError::Usage(
                 "this access token carries no `manage` field, so there is no management \
@@ -907,10 +1023,55 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         tokens
             .validate()
             .map_err(|e| ClientError::Protocol(e.to_string()))?;
-        if let Some(requested) = self.protocol.requested {
-            tokens
-                .check_cardinality(requested)
-                .map_err(|e| ClientError::Protocol(e.to_string()))?;
+        let Some(requested) = self.protocol.requested else {
+            return Ok(());
+        };
+        tokens
+            .check_cardinality(requested)
+            .map_err(|e| ClientError::Protocol(e.to_string()))?;
+        match requested {
+            // §3.2.2 — "Each object MUST have a unique label field,
+            // corresponding to the token labels chosen by the client instance
+            // in the request for multiple access tokens". Presence and
+            // uniqueness are checked when the array is read; correspondence
+            // needs the request, which only the session has. A requested label
+            // that does not come back is a token the AS refused, which §3.2.2
+            // allows "for any reason"; a label that was never requested is not
+            // a token of this grant.
+            Cardinality::Multiple => {
+                for token in &tokens.tokens {
+                    let label = token.label.as_deref();
+                    if !self
+                        .protocol
+                        .requested_labels
+                        .iter()
+                        .any(|wanted| wanted.as_deref() == label)
+                    {
+                        return Err(ClientError::Protocol(format!(
+                            "the response carries an access token labelled {label:?}, which the \
+                             request did not ask for; labels correspond to the request \
+                             (RFC 9635 §3.2.2)"
+                        )));
+                    }
+                }
+            }
+            // §3.2.1 — `label` is "REQUIRED for multiple access tokens or if a
+            // label was included in the single access token request; OPTIONAL
+            // for a single access token where no label was included in the
+            // request". So a requested label has to come back as it was, and
+            // an unrequested one is the AS's to add.
+            Cardinality::Single => {
+                if let Some(Some(wanted)) = self.protocol.requested_labels.first() {
+                    let answered = tokens.tokens.first().and_then(|t| t.label.as_deref());
+                    if answered != Some(wanted.as_str()) {
+                        return Err(ClientError::Protocol(format!(
+                            "the single access token was requested with the label {wanted:?} \
+                             and came back labelled {answered:?}; the label is REQUIRED when \
+                             the request included one (RFC 9635 §3.2.1)"
+                        )));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1077,6 +1238,42 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             (None, State::Approved) => Step::Approved(Box::new(response)),
             (None, _) => Step::Pending(Box::new(response)),
         })
+    }
+}
+
+/// The labels a token request carries, in order, one per token (§2.1).
+///
+/// A request for several tokens labels each of them (§2.1.2); a single token
+/// may or may not be labelled (§2.1.1). No `access_token` field asks for no
+/// token.
+fn requested_labels(request: Option<&AccessTokenRequest>) -> Vec<Option<String>> {
+    request
+        .map(|tokens| tokens.tokens.iter().map(|t| t.label.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// Whether two flag lists say the same thing (§3.2.1).
+///
+/// Flags are a set: §3.2.1 forbids repeating one, and their order carries no
+/// meaning, so `["durable", "x"]` and `["x", "durable"]` are the same flags.
+fn same_flags(answered: &[AccessTokenFlag], previous: &[AccessTokenFlag]) -> bool {
+    answered.len() == previous.len() && answered.iter().all(|flag| previous.contains(flag))
+}
+
+/// Whether two `key` fields are known to name the same binding (§3.2.1).
+///
+/// An omitted `key` binds the token to the key the client presented, which is
+/// the session's signer. The session holds no copy of its public key, only
+/// the `kid` it signs with, and a `kid` is a name, not a key: two different
+/// keys can carry the same one. So an answer that spells a key out where the
+/// original omitted it, or the reverse, cannot be established as unchanged
+/// and is refused; two explicit fields have to match as written. A caller
+/// that can compare key material has to do so outside the session.
+fn same_binding(answered: Option<&Key>, previous: Option<&Key>) -> bool {
+    match (answered, previous) {
+        (None, None) => true,
+        (Some(a), Some(p)) => a == p,
+        (Some(_), None) | (None, Some(_)) => false,
     }
 }
 

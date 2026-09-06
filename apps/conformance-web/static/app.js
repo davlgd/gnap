@@ -11,7 +11,8 @@ const kindHelp = {
   resource_registration_request: 'Requires access and resource_server. Optional formats and introspection requirements are declarations: no AS compatibility or RS signature is verified, including for an empty format list. No comparison context is accepted.',
   resource_registration_response: 'Requires a resource_reference string, not an access token. Optional instance_id and introspection_endpoint are checked as strings only. No reference resolution, URL fetch or actual registration is verified. No comparison context is accepted.',
   derivation_request: 'Selected token request: existing_access_token, client and access_token are required. RS1 must sign with its own key; JSON cannot prove that or the parent token validity. Interaction and extensions are not forbidden. No comparison context is accepted.',
-  derivation_response: 'Selected grant-response fields only. A missing token, continuation, interaction or error does not prove issuance. Token value checks are string-shape only, not token68 encoding. No effective rights, audience or revocation linkage is verified. No comparison context is accepted.'
+  derivation_response: 'Selected grant-response fields only. A missing token, continuation, interaction or error does not prove issuance. Token value checks are string-shape only, not token68 encoding. No effective rights, audience or revocation linkage is verified. No comparison context is accepted.',
+  token_exchange: 'Local pair: {"request":{...},"response":{...}}. Compares token field shape and requested/issued labels, allowing partial approval. The pair is supplied by you, not authenticated. Rights, tokens and lifecycle are not verified. Headers and digest do not apply.'
 };
 const contextHelp = {
   rs_discovery: 'Allowed: grant_request_endpoint (expected exact client endpoint), discovery_url (declared publication URL). Example: {"grant_request_endpoint":"https://as.example/gnap","discovery_url":"https://as.example/.well-known/gnap-as-rs"}',
@@ -21,12 +22,17 @@ const contextHelp = {
 function updateKind() {
   const kind = byId('kind').value;
   const discovery = kind === 'as_discovery';
+  const pair = kind === 'token_exchange';
   byId('kind-help').textContent = kindHelp[kind] || 'Select the message actually captured. Request and response checks are distinct.';
   byId('discovery-context').hidden = !discovery;
-  byId('digest-context').hidden = discovery;
+  byId('digest-context').hidden = discovery || pair;
   byId('context-section').hidden = !contextHelp[kind];
   byId('context-help').textContent = contextHelp[kind] || '';
   byId('rs-context').value = '';
+  for (const id of ['headers', 'digest']) {
+    byId(id).disabled = pair;
+    if (pair) byId(id).value = '';
+  }
 }
 byId('kind').addEventListener('change', () => { clearReport(); updateKind(); });
 updateKind();
@@ -60,13 +66,14 @@ byId('analyze').addEventListener('click', async () => {
   try {
     const body = byId('body').value;
     if (new TextEncoder().encode(body).length > 32768) throw new Error('Body exceeds 32 KiB.');
-    let headers = null;
-    if (byId('headers').value.trim()) {
-      try { headers = JSON.parse(byId('headers').value); } catch { throw new Error('Headers must be valid JSON pairs.'); }
-    }
     const kind = byId('kind').value;
     const discovery = kind === 'as_discovery';
-    const envelope = { kind, body, headers, content_digest: discovery ? null : byId('digest').value || null };
+    const pair = kind === 'token_exchange';
+    let headers = null;
+    if (!pair && byId('headers').value.trim()) {
+      try { headers = JSON.parse(byId('headers').value); } catch { throw new Error('Headers must be valid JSON pairs.'); }
+    }
+    const envelope = { kind, body, headers, content_digest: discovery || pair ? null : byId('digest').value || null };
     if (contextHelp[kind] && byId('rs-context').value.trim()) {
       try { envelope.rs_context = JSON.parse(byId('rs-context').value); } catch { throw new Error('Context must be a JSON object with fields appropriate to this message type.'); }
     }
@@ -110,6 +117,20 @@ byId('probe').addEventListener('click', async () => {
 });
 loadTargets();
 byId('fixture').addEventListener('click', () => { clearReport(); byId('kind').value = 'continue_request'; updateKind(); byId('body').value = '{"client":"must-not-be-repeated"}'; byId('headers').value = ''; byId('digest').value = ''; });
+byId('token-fixture').addEventListener('click', () => {
+  clearReport();
+  byId('kind').value = 'token_exchange';
+  updateKind();
+  byId('body').value = JSON.stringify({
+    request: { client: 'synthetic-client', access_token: [
+      { label: 'documents', access: ['documents:read'] },
+      { label: 'reports', access: ['reports:read'] }
+    ] },
+    response: { access_token: [
+      { label: 'reports', value: 'synthetic-token', access: ['reports:read'] }
+    ] }
+  }, null, 2);
+});
 byId('discovery-fixture').addEventListener('click', () => { clearReport(); byId('kind').value = 'as_discovery'; updateKind(); byId('body').value = '{"grant_request_endpoint":"https://test-as.example/gnap","key_proofs_supported":["httpsig"],"key_rotation_supported":false}'; byId('headers').value = '[["Content-Type","application/json"]]'; byId('queried-endpoint').value = 'https://test-as.example/gnap'; byId('http-status').value = '200'; byId('digest').value = ''; });
 byId('clear').addEventListener('click', () => { clearReport(); for (const id of ['body', 'headers', 'digest', 'rs-context', 'queried-endpoint', 'http-status']) byId(id).value = ''; byId('consent').checked = false; });
 byId('download').addEventListener('click', () => {

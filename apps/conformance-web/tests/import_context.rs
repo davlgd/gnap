@@ -21,6 +21,7 @@ fn discovery_and_rs_comparison_contexts_are_not_interchangeable() {
         "resource_registration_response",
         "derivation_request",
         "derivation_response",
+        "token_exchange",
     ] {
         for context in [
             json!({"queried_endpoint":"https://private-context.example/gnap"}),
@@ -49,6 +50,7 @@ fn discovery_and_rs_comparison_contexts_are_not_interchangeable() {
         "resource_registration_response",
         "derivation_request",
         "derivation_response",
+        "token_exchange",
     ] {
         // Even an empty RS context must not silently acquire another meaning.
         for context in [json!({}), json!({"http_status":400})] {

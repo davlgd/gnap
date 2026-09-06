@@ -274,6 +274,14 @@ management API (§6), and the `httpsig` key proof both roles use (§7.3.1).
 The message model also represents resource access rights (§8); interpreting
 API-specific rights remains the authorization policy's responsibility.
 
+The AS can [issue several independently approved tokens](docs/multiple-access-tokens.md)
+in one atomic grant, including a labelled subset of those requested. The client
+checks the returned labels and manages each held token independently. These
+SDK paths have signed protocol tests, and the demo exercises document/report
+tokens through distinct RS roles over HTTP. The workbench can compare labels
+in a caller-declared request/response pair. These checks do not infer an audience
+from a label or establish interoperability with another implementation.
+
 These parts of the specification are **not** implemented, and nothing here
 should be read as covering them:
 

@@ -45,8 +45,8 @@ The stable import envelope is:
 ```
 
 Core kinds: `grant_request`, `grant_response`, `continue_request`. The
-`as_discovery` kind and the eight RFC 9767 kinds, with their optional context,
-are described below. Body is a string,
+`as_discovery` kind, the eight RFC 9767 kinds and the local `token_exchange`
+comparison are described below, with the context each accepts. Body is a string,
 not an object: digest checks need the original UTF-8 bytes, without JSON
 reformatting. Omit `headers` when they were not captured; `[]` explicitly means
 none were received. Duplicate header instances remain separate. The optional
@@ -322,6 +322,39 @@ and `fixtures/invalid-derivation-response.json`. Their names and tokens are test
 data, not captures of an authenticated downstream exchange. The offline table
 tests in `tests/derivation_imports.rs` include multi-token, interaction-only,
 continuation-only and error-only responses, malformed fields and ambiguity.
+
+## Comparing requested and issued token labels
+
+The `token_exchange` kind uses profile `gnap-token-exchange-import-v1`. Its
+`body` is a local diagnostic envelope containing `request` and `response`
+objects. This pair is **not a GNAP wire message**, and the tool cannot establish
+that the two objects came from the same exchange.
+
+The independent JSON comparison checks the shape of each `access_token` field,
+unique string labels in arrays, request/response cardinality and correspondence
+of issued labels to requested labels. Reordered responses and partial approval
+are allowed. A single token issued in response to an array request must still
+be in an array. A singleton request with a label requires that label in the
+response; without one, the AS may add a label. No labels or values are echoed
+in reports.
+
+Absent fields and empty arrays do not establish issuance. An empty array has
+an observable array shape but no token labels to compare. Ambiguous JSON members
+and parser limits remain inconclusive. Invalid labels are reported separately
+from correspondence, which cannot be checked against invalid input. Token
+values, rights, extensions, consent, signatures and lifecycle are outside this
+comparison. Its three always-untested checks name authenticity, authority and
+lifecycle; passing label checks is not a protocol verdict.
+
+Headers, a digest and `rs_context` are rejected for this kind: the pair is not
+one HTTP message whose bytes or headers could be verified. The existing 32 KiB
+body and 64 KiB upload limits apply. No network request is added. Use synthetic
+data, not production tokens or authenticated traces.
+
+The browser includes a partial-approval example. Offline fixtures are
+`fixtures/token-exchange.json` and `fixtures/invalid-token-exchange.json`;
+`tests/token_exchange_imports.rs` exercises the independent comparison and its
+HTTP import endpoint. These are synthetic examples, not live exchange evidence.
 
 ### Shared import limits
 

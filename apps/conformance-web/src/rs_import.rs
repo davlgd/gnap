@@ -79,6 +79,9 @@ fn add(
 // A separate recursive parse detects duplicate names before using Value's map.
 // Ambiguity is inconclusive, not a newly invented GNAP MUST for unique names.
 struct Unique;
+pub(crate) fn unambiguous(body: &str) -> bool {
+    serde_json::from_str::<Unique>(body).is_ok()
+}
 impl<'de> Deserialize<'de> for Unique {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct Any;
@@ -478,10 +481,7 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
     let mut checks = Vec::new();
     let parsed = serde_json::from_str::<Value>(&input.body);
     let object = parsed.as_ref().ok().and_then(Value::as_object);
-    let unique = parsed
-        .as_ref()
-        .ok()
-        .map(|_| serde_json::from_str::<Unique>(&input.body).is_ok());
+    let unique = parsed.as_ref().ok().map(|_| unambiguous(&input.body));
     let json_shape = match &parsed {
         Ok(value) => Some(value.is_object()),
         Err(error)

@@ -60,6 +60,29 @@ and a later network read atomic: a concurrent retirement can race a read already
 authorized by the AS. Every new read uses introspection; no positive result is
 cached. Local Biscuit attenuation is a different mechanism, not this flow.
 
+The two-token button starts a request for several access tokens
+([RFC 9635 §2.1.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-2.1.2))
+under one consent: a `documents` token for the registered document rights and a
+`reports` token for `synthetic-reports:read`, served at `/resource/reports` by a
+third RS with its own key. The resource owner may allow the whole request or
+only the reports token; in the latter case, the AS issues an array containing
+one token
+([§3.2.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.2.2)). The
+grant is approved or refused as a whole; there is no pending state per label.
+Each issued token carries its requested label, its own rights and its own
+management endpoint. The consent display keeps the requested label even when
+only one slot remains. Rotating or revoking one token leaves its sibling in
+place, and a token works only at its own RS: the reports token is refused by
+the documents RS, by the downstream metadata path and by the AS as a source
+for derivation. Every action names the token it targets; nothing falls back to
+"the other" token when the named one is missing, and the retired-token check
+says which token it presents. A later change is compared with the live token
+carrying the same label, never with the union of the grant's rights: narrowing
+the documents token needs no new consent, but asking for a label that has no
+live token sends the owner a new consent request, and approval replaces the
+lot as a whole. This is the application's policy for two fixed labels, not a
+general rule of GNAP.
+
 The separate token controls demonstrate rotation and token-only revocation.
 "Revoke the entire grant" instead sends DELETE to continuation and invalidates
 every token belonging to it. It can also cancel a pending request before consent
@@ -70,6 +93,7 @@ fresh valid signatures.
 
 ```sh
 cargo test --manifest-path apps/delegation-demo/Cargo.toml --locked
+node --test apps/delegation-demo/tests/ui/requested_rights.test.mjs
 python3 tools/smoke_ecosystem.py --demo http://127.0.0.1:8080
 ```
 
@@ -244,15 +268,18 @@ must work; there is no loopback proxy bypass for a public HTTPS deployment.
 
 - One ephemeral 2048-bit RSA key represents the client application; browser sessions
   are isolated client references, not independent cryptographic client owners.
-  Two further, distinct ephemeral RSA keys identify RS1 and RS2. RS1 also uses
-  its own key as the client of the downstream grant and resource request.
+  Three further, distinct ephemeral RSA keys identify RS1, RS2 and the reports
+  RS. RS1 also uses its own key as the client of the downstream grant and
+  resource request; the reports RS never acts as a client.
   Restart invalidates all keys, grants and tokens. No token values appear in
   the browser or application logs.
 - The visitor plays the resource owner; there is no real login, user directory,
-  private document upload or identity assurance. Only two parent read rights
+  private document upload or identity assurance. Only two document read rights
   exist: `synthetic-folder:read` at `/resource/folder` and
   `synthetic-archive:read` at `/resource/archive`. The separate derived
-  `archive-metadata:read` right exposes only a synthetic document count.
+  `archive-metadata:read` right exposes only a synthetic document count, and
+  the `reports` token's `synthetic-reports:read` right at `/resource/reports`
+  only a synthetic summary.
 - Consent is bound to the stable grant ID, exact current request and the
   interaction reference committed by the AS. Completing the interaction must
   succeed before that choice is recorded or its finish redirect is returned.
