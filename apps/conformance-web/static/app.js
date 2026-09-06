@@ -9,7 +9,8 @@ const kindHelp = {
   resource_registration_request: 'Requires access and resource_server. Optional formats and introspection requirements are declarations: no AS compatibility or RS signature is verified, including for an empty format list. No comparison context is accepted.',
   resource_registration_response: 'Requires a resource_reference string, not an access token. Optional instance_id and introspection_endpoint are checked as strings only. No reference resolution, URL fetch or actual registration is verified. No comparison context is accepted.',
   derivation_request: 'Selected token request: existing_access_token, client and access_token are required. RS1 must sign with its own key; JSON cannot prove that or the parent token validity. Interaction and extensions are not forbidden. No comparison context is accepted.',
-  derivation_response: 'Selected grant-response fields only. A missing token, continuation, interaction or error does not prove issuance. Token value checks are string-shape only, not token68 encoding. No effective rights, audience or revocation linkage is verified. No comparison context is accepted.'
+  derivation_response: 'Selected grant-response fields only. A missing token, continuation, interaction or error does not prove issuance. Token value checks are string-shape only, not token68 encoding. No effective rights, audience or revocation linkage is verified. No comparison context is accepted.',
+  token_exchange: 'Local pair: {"request":{...},"response":{...}}. Compares token field shape and requested/issued labels, allowing partial approval. The pair is supplied by you, not authenticated. Rights, tokens and lifecycle are not verified. Headers and digest do not apply.'
 };
 const contextHelp = {
   rs_discovery: 'Allowed: grant_request_endpoint (expected exact client endpoint), discovery_url (declared publication URL). Example: {"grant_request_endpoint":"https://as.example/gnap","discovery_url":"https://as.example/.well-known/gnap-as-rs"}',
@@ -22,6 +23,10 @@ function updateKind() {
   byId('context-section').hidden = !contextHelp[kind];
   byId('context-help').textContent = contextHelp[kind] || '';
   byId('rs-context').value = '';
+  for (const id of ['headers', 'digest']) {
+    byId(id).disabled = kind === 'token_exchange';
+    if (kind === 'token_exchange') byId(id).value = '';
+  }
 }
 byId('kind').addEventListener('change', () => { clearReport(); updateKind(); });
 const clearReport = () => { currentReport = null; byId('report').replaceChildren(); byId('summary').textContent = ''; byId('download').disabled = true; };
@@ -90,6 +95,20 @@ byId('probe').addEventListener('click', async () => {
 });
 loadTargets();
 byId('fixture').addEventListener('click', () => { clearReport(); byId('kind').value = 'continue_request'; updateKind(); byId('body').value = '{"client":"must-not-be-repeated"}'; byId('headers').value = ''; byId('digest').value = ''; });
+byId('token-fixture').addEventListener('click', () => {
+  clearReport();
+  byId('kind').value = 'token_exchange';
+  updateKind();
+  byId('body').value = JSON.stringify({
+    request: { client: 'synthetic-client', access_token: [
+      { label: 'documents', access: ['documents:read'] },
+      { label: 'reports', access: ['reports:read'] }
+    ] },
+    response: { access_token: [
+      { label: 'reports', value: 'synthetic-token', access: ['reports:read'] }
+    ] }
+  }, null, 2);
+});
 byId('clear').addEventListener('click', () => { clearReport(); for (const id of ['body', 'headers', 'digest', 'rs-context']) byId(id).value = ''; });
 byId('download').addEventListener('click', () => {
   if (!currentReport) return;

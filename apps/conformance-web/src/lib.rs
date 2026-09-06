@@ -16,6 +16,7 @@ use tokio::sync::Semaphore;
 
 pub mod probe;
 mod rs_import;
+mod token_exchange;
 pub use rs_import::{Binding as TokenBinding, Context as RsContext};
 
 pub const MAX_UPLOAD: usize = 65_536;
@@ -35,6 +36,7 @@ pub enum MessageKind {
     ResourceRegistrationResponse,
     DerivationRequest,
     DerivationResponse,
+    TokenExchange,
 }
 
 /// Headers are optional: absence means the trace did not capture them, not an
@@ -119,6 +121,7 @@ fn check(
         "known-error-code" => "Compare the code with the current IANA GNAP Error Codes registry; this build's vendored snapshot may lag a new registration.",
         "error-response-json" => "Return application/json and a GNAP error field for rejected grant requests. Check reverse-proxy errors separately from AS errors.",
         "protected-resource-rejects-unauthenticated" => "Verify that this exact endpoint is intended to require authentication. If it is, reject credential-free access. A public resource is not an appropriate target for this policy test.",
+        _ if id.starts_with("token-exchange-") => "Check the local request/response pair and the named shape or label relationship against the linked section. These independent JSON comparisons do not verify authority, token contents or an authenticated exchange.",
         _ => "Inspect the linked RFC section and the named SDK validation rule. No raw submitted values are included in this report.",
     });
     Check {
@@ -173,6 +176,7 @@ pub fn analyze(input: Import) -> Result<Report, &'static str> {
     let mut checks = Vec::new();
     rs_import::validate_context(&input)?;
     match input.kind {
+        MessageKind::TokenExchange => return token_exchange::analyze(&input),
         MessageKind::RsDiscovery
         | MessageKind::IntrospectionRequest
         | MessageKind::IntrospectionResponse
