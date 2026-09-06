@@ -65,7 +65,9 @@ this makes the application channel RFC 9767 introspection.
 
 The remaining limits are deliberate and visible: one configured grant-client
 identity, synthetic shared files, fixed immediate approval, authority-wide revocation,
-bounded in-memory state and no public deployment claim. Local attenuation
+bounded in-memory state. Local tests alone do not establish hosted behavior;
+the [delivery guide](../../docs/biscuit-public-delivery.md) separates those checks.
+Local attenuation
 preserves the client's key and is not RFC 9767 downstream token derivation.
 
 The SDK's former take/restore management sequence exposed another concurrency

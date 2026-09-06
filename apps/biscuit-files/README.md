@@ -205,6 +205,12 @@ validated before the listener starts, and errors never include PEM, JWK, hex
 values or parser details. The AS refuses reuse of the same RSA key for client
 and RS, regardless of their `kid` labels.
 
+Private platform variables are still accessible to authorized platform operators
+and the application process. They are not a hardware-backed key store. Keep a
+protected operator backup and use dedicated demonstration keys, never production
+credentials. The [public delivery guide](../../docs/biscuit-public-delivery.md)
+describes the three-role configuration and its acceptance checks.
+
 There is no fallback between sources. `KEY_SOURCE=directory` is the default
 when the selector is absent and still requires `KEY_DIRECTORY`. Environment
 mode rejects `KEY_DIRECTORY`; directory mode rejects recognized key environment
@@ -276,6 +282,30 @@ there is a residual race with a concurrent revocation. Authorization is used
 immediately for that one request, never retained as a reusable capability.
 
 ## Verify the example
+
+The acceptance driver exercises these three applications without loading keys
+or exposing tokens, cookies or response bodies in its report:
+
+```console
+python3 -B tools/smoke_biscuit.py --as http://127.0.0.1:18101 --rs http://127.0.0.1:18102 --client http://127.0.0.1:18103 --consent
+```
+
+It creates disposable grants, writes synthetic draft content, checks allowed and
+forbidden operations, restricts a token locally, rotates its value, changes the
+presentation key twice and revokes the parent. A second session verifies that
+new grants still work. Positive descendant reads precede retirement probes;
+timing limits prevent an expired descendant from being counted as evidence of
+parent retirement. CI runs the driver against three local processes with fresh
+ephemeral keys. Its Python tests check the driver itself, not protocol conformance.
+
+Only run it with permission to exercise all three services. It stops at the
+first failed check, does not retry mutations, and makes a best-effort revocation
+attempt for retained sessions. A transport or timing interruption is reported as
+`inconclusive`, not a protocol refusal. Network operations use a ten-second
+socket timeout, or forty seconds for key rotation; these are not hard end-to-end
+deadlines. Resource outcomes come from the client application's JSON envelope,
+not an independent capture of its exchange with the RS. See the delivery guide
+for optional, disruptive `--maintenance` checks and the remaining evidence limits.
 
 ```console
 cargo test --manifest-path apps/biscuit-files/Cargo.toml --locked
