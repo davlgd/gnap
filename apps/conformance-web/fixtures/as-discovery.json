@@ -1,0 +1,7 @@
+{
+  "kind": "as_discovery",
+  "body": "{\"grant_request_endpoint\":\"https://test-as.example/gnap\",\"key_proofs_supported\":[\"httpsig\"],\"key_rotation_supported\":false}",
+  "headers": [["Content-Type", "application/json"]],
+  "queried_endpoint": "https://test-as.example/gnap",
+  "http_status": 200
+}

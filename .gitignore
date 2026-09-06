@@ -9,3 +9,4 @@
 /.clever.json
 **/*.rs.bk
 *.pdb
+__pycache__/
