@@ -6,10 +6,7 @@ use gnap_as::{
     ResourceRegistrationPolicy, ResourceServerResolver, RsId, TokenRecord,
 };
 use gnap_registry::KeyProofingMethod;
-use gnap_types::{
-    key::KeyObject,
-    rs::ResourceServer,
-};
+use gnap_types::{key::KeyObject, rs::ResourceServer};
 
 pub(super) const RS_ID: &str = "delegation-demo-rs";
 pub(super) const RS2_ID: &str = "delegation-demo-metadata-rs";
@@ -345,7 +342,12 @@ impl ResourceClient {
             }
         };
         authorizer
-            .authorize(request, &[AccessItem::Reference(right.into())], &policy, clock)
+            .authorize(
+                request,
+                &[AccessItem::Reference(right.into())],
+                &policy,
+                clock,
+            )
             .map_err(|error| match error {
                 gnap_rs::AuthorizationError::Denied => ResourceError::Denied,
                 gnap_rs::AuthorizationError::Unavailable => ResourceError::Unavailable,
