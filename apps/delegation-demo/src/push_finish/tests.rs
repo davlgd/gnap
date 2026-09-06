@@ -148,7 +148,7 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
     let repeated = sign_request(repeated, app.signer.as_ref(), None, now()).unwrap();
     let refused = app.server.handle(&repeated, now());
     assert_eq!(
-        serde_json::from_slice::<Value>(&refused.body).unwrap()["error"],
+        serde_json::from_slice::<Value>(&refused.body).unwrap()["error"]["code"],
         "request_denied"
     );
     let mut other_context = snapshot.clone();
