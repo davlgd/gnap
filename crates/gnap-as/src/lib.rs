@@ -85,11 +85,36 @@
 //! remain deployment responsibilities; these helpers do not implement RFC 9767
 //! introspection or grant-to-token revocation cascades.
 
+//! # Access-token representation
+//!
+//! [`AuthorizationServer::with_token_encoder`] selects a trusted encoder for
+//! issuance and rotation. It receives approved rights and lifetime metadata,
+//! not management credentials or mutable authorization storage. The default
+//! [`OpaqueTokenEncoder`] keeps the reference-token representation unchanged.
+//! Selecting an encoder is deployment configuration, not format negotiation.
+//!
+//! A format-native identifier may be retained in [`TokenRecord::identifier`]
+//! for the deployment's live-token index. It is not a GNAP response field and
+//! does not publish revocation state to resource servers. Empty identifiers
+//! are rejected, as is reusing the current identifier on rotation. An encoding
+//! error or invalid replacement leaves the old record intact. The extension
+//! point alone is not support for any particular structured token format.
+//!
+//! Identifiers remain optional on rotation, including after a token with an
+//! identifier. Deployments that rely on them must enforce their presence in
+//! the encoder and resource-server adapter. Changing an encoder or its
+//! configuration does not guarantee continuity between token formats, and
+//! storage does not enforce identifier uniqueness across independent grants.
+
+pub mod encoding;
 pub mod nonce;
 pub mod policy;
 pub mod server;
 pub mod storage;
 
+pub use encoding::{
+    EncodedToken, OpaqueTokenEncoder, TokenEncoder, TokenEncodingContext, TokenEncodingError,
+};
 pub use nonce::{Nonces, OsNonces};
 pub use policy::{Decision, KeyResolver, Policy, ReleasedSubject, SubjectGround};
 pub use server::{

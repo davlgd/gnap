@@ -300,6 +300,16 @@ Access-token values are opaque references: the SDK does not yet issue or validat
 JWT, Biscuit, Macaroon or ZCAP access tokens. Registry entries alone are not
 implementations. The AS issues neither bearer nor `durable` tokens.
 
+Applications can select a different representation through
+[`TokenEncoder`](crates/gnap-as/src/encoding.rs) and
+`AuthorizationServer::with_token_encoder`. The default remains opaque. Issuance
+and rotation pass only the approved rights, client binding and lifetime to the
+encoder; management credentials stay separate. This is trusted deployment
+code: the AS cannot verify that a custom format preserves those claims. The
+matching RS verifier and any format-native revocation index remain necessary.
+An encoder failure during rotation leaves the existing record unchanged;
+the hook itself is not a structured-token implementation.
+
 Key objects reach the deployment's `KeyResolver`. For public RSA/PS256 JWKs,
 `Ps256Signer::public_jwk` exports a public key and
 `Ps256Verifier::from_public_jwk` builds a verifier without prior registration.

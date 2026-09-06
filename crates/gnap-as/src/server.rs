@@ -5,6 +5,9 @@
 //! caller's business. The same seam that lets `gnap-client` be tested without a
 //! network lets a client and a server be wired straight together.
 
+use crate::encoding::{
+    EncodedToken, OpaqueTokenEncoder, TokenEncoder, TokenEncodingContext, TokenEncodingError,
+};
 use crate::nonce::Nonces;
 use crate::policy::{Decision, KeyResolver, Policy, SubjectGround};
 use crate::storage::{GrantRecord, Storage, TokenRecord};
@@ -17,6 +20,7 @@ use gnap_types::interact::{InteractCallback, InteractFinish, InteractResponse};
 use gnap_types::message::{AsDiscovery, Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{AccessToken, AccessTokenResponse, BoundToken, TokenManage, TokenValue};
 use gnap_types::GnapError;
+use gnap_types::{access::AccessItem, client::Client};
 use std::fmt;
 
 /// How far a signature's `created` timestamp may sit from the current time.
@@ -141,13 +145,14 @@ impl fmt::Display for InteractionError {
 impl std::error::Error for InteractionError {}
 
 /// A GNAP authorization server.
-pub struct AuthorizationServer<P, K, S, N> {
+pub struct AuthorizationServer<P, K, S, N, E = OpaqueTokenEncoder> {
     policy: P,
     keys: K,
     storage: S,
     nonces: N,
     endpoints: Endpoints,
     development_http_discovery: bool,
+    encoder: E,
 }
 
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K, S, N> {
@@ -160,6 +165,30 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
             nonces,
             endpoints,
             development_http_discovery: false,
+            encoder: OpaqueTokenEncoder,
+        }
+    }
+}
+
+impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
+    AuthorizationServer<P, K, S, N, E>
+{
+    /// Replaces the access-token representation without changing authorization.
+    ///
+    /// The encoder is used for both issuance and rotation. The default is an
+    /// opaque reference; this builder alone does not implement a token format.
+    pub fn with_token_encoder<T: TokenEncoder>(
+        self,
+        encoder: T,
+    ) -> AuthorizationServer<P, K, S, N, T> {
+        AuthorizationServer {
+            policy: self.policy,
+            keys: self.keys,
+            storage: self.storage,
+            nonces: self.nonces,
+            endpoints: self.endpoints,
+            development_http_discovery: self.development_http_discovery,
+            encoder,
         }
     }
 
@@ -489,7 +518,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
             );
         }
 
-        let (Ok(value), Ok(management_token)) = (
+        let (Ok(candidate), Ok(management_token)) = (
             TokenValue::new(self.nonces.next()),
             TokenValue::new(self.nonces.next()),
         ) else {
@@ -507,11 +536,20 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
         // MUST be the same as the token before rotation", which is why only the
         // value and the management API are replaced here.
         let rotated_handle = self.nonces.next();
+        let encoded = self.encode_rotated_token(&record, now, &candidate, &management_token);
+        let Ok(encoded) = encoded else {
+            self.storage.put_token(handle, record);
+            return error(
+                ErrorCode::InvalidRotation,
+                "unable to encode a replacement access token",
+            );
+        };
         // Keep the original until the replacement is fully validated. A failed
         // rotation leaves the existing token unchanged (§6.1).
         let mut rotated = record.clone();
         rotated.issued_at = now;
-        rotated.token.value = value;
+        rotated.token.value = encoded.value;
+        rotated.identifier = encoded.identifier;
         // §6.1-M03 — the response includes a management URI, and it may differ
         // from the one just called; §6.1-M04 has the client use the new one.
         rotated.token.manage = Some(TokenManage {
@@ -528,7 +566,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
 
         // §6.1-MN02 refers to the CURRENT management token. Validating the new
         // token alone only compares with the replacement management token.
-        let invalid = if rotated.token.value == record.token.value
+        let invalid = if record.identifier.is_some() && rotated.identifier == record.identifier {
+            Some("the rotated token repeats its previous format identifier".into())
+        } else if rotated.token.value == record.token.value
             || rotated.token.value.as_str() == record.management_token
         {
             Some("the rotated value repeats an existing access or management token".into())
@@ -1028,6 +1068,77 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
         })
     }
 
+    fn encode_rotated_token(
+        &self,
+        record: &TokenRecord,
+        now: u64,
+        candidate: &TokenValue,
+        management: &TokenValue,
+    ) -> Result<EncodedToken, TokenEncodingError> {
+        // A broken nonce source must not expose a management credential as
+        // an encoder input, even by accidentally repeating its value.
+        if candidate.as_str() == record.management_token || candidate == management {
+            return Err(TokenEncodingError);
+        }
+        self.encode_access_token(
+            &record.client,
+            record.token.access.as_deref().unwrap_or_default(),
+            now,
+            record.token.expires_in,
+            candidate,
+        )
+    }
+
+    fn encode_issued_token(
+        &self,
+        request: &GrantRequest,
+        access: &[AccessItem],
+        now: u64,
+    ) -> Result<(EncodedToken, Option<u64>, String, TokenValue), HttpResponse> {
+        let expires_in = self.access_token_lifetime(request, now)?;
+        let candidate = TokenValue::new(self.nonces.next()).map_err(|_| {
+            misconfigured("Nonces returned an access value outside token68 (RFC 9635 §3.2.1)")
+        })?;
+        // Preserve the nominal candidate → handle → credential order, but
+        // reserve all three before encoding. A repeating source must not pass
+        // the management credential to the encoder as its candidate.
+        let management = self.nonces.next();
+        let management_token = TokenValue::new(self.nonces.next()).map_err(|_| {
+            misconfigured("Nonces returned a management value outside token68 (RFC 9635 §3.2.1)")
+        })?;
+        if candidate == management_token {
+            return Err(misconfigured(
+                "access candidate repeats the management credential",
+            ));
+        }
+        let encoded = self
+            .encode_access_token(&request.client, access, now, expires_in, &candidate)
+            .map_err(|_| misconfigured("unable to encode an access token"))?;
+        Ok((encoded, expires_in, management, management_token))
+    }
+
+    fn encode_access_token(
+        &self,
+        client: &Client,
+        access: &[AccessItem],
+        issued_at: u64,
+        expires_in: Option<u64>,
+        candidate: &TokenValue,
+    ) -> Result<EncodedToken, TokenEncodingError> {
+        let encoded = self.encoder.encode(&TokenEncodingContext {
+            issuer: &self.endpoints.grant,
+            client,
+            access,
+            issued_at,
+            expires_in,
+            candidate_nonce: candidate.as_str(),
+        })?;
+        if encoded.identifier.as_ref().is_some_and(Vec::is_empty) {
+            return Err(TokenEncodingError);
+        }
+        Ok(encoded)
+    }
+
     fn access_token_lifetime(
         &self,
         request: &GrantRequest,
@@ -1090,26 +1201,15 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
                         return misconfigured(&e.to_string());
                     }
                 }
-                let expires_in = match self.access_token_lifetime(&request, now) {
-                    Ok(seconds) => seconds,
-                    Err(response) => return response,
-                };
-                let Ok(value) = TokenValue::new(self.nonces.next()) else {
-                    return misconfigured(
-                        "Nonces returned an access value outside token68 (RFC 9635 §3.2.1)",
-                    );
-                };
+                let (encoded, expires_in, management, management_token) =
+                    match self.encode_issued_token(&request, &access, now) {
+                        Ok(encoded) => encoded,
+                        Err(response) => return response,
+                    };
 
                 // §3.2.1 — the management API the client may call to rotate or
-                // revoke this token (§6). Both halves are minted here: the
-                // handle that names the token in the URI, and the token that
-                // protects the calls to it.
-                let management = self.nonces.next();
-                let Ok(management_token) = TokenValue::new(self.nonces.next()) else {
-                    return misconfigured(
-                        "Nonces returned a management value outside token68 (RFC 9635 §3.2.1)",
-                    );
-                };
+                // revoke this token (§6). Both halves were reserved before
+                // encoding: the URI handle and the credential protecting it.
                 let manage = TokenManage {
                     uri: format!(
                         "{}/{}",
@@ -1120,7 +1220,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
                 };
 
                 let token = AccessToken {
-                    value,
+                    value: encoded.value,
                     label: request
                         .access_token
                         .as_ref()
@@ -1133,6 +1233,8 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
                     flags: Vec::new(),
                     extra: serde_json::Map::default(),
                 };
+                // TokenManage validation also rejects an encoded access value
+                // equal to its management credential before anything is stored.
                 if let Err(e) = token.validate() {
                     return misconfigured(&e.to_string());
                 }
@@ -1141,6 +1243,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
                 self.storage.put_token(
                     &management,
                     TokenRecord {
+                        identifier: encoded.identifier,
                         issued_at: now,
                         token: token.clone(),
                         client: request.client.clone(),

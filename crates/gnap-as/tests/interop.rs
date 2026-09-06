@@ -155,6 +155,33 @@ fn options_discovery_returns_only_known_engine_capabilities_without_grant_state(
 }
 
 #[test]
+fn encoder_builder_preserves_discovery_configuration_in_either_order() {
+    let endpoint = "http://127.0.0.1:18081/gnap";
+    for as_ in [
+        server_at(endpoint)
+            .with_development_http_discovery()
+            .with_token_encoder(gnap_as::OpaqueTokenEncoder),
+        server_at(endpoint)
+            .with_token_encoder(gnap_as::OpaqueTokenEncoder)
+            .with_development_http_discovery(),
+    ] {
+        let response = as_.handle(&HttpRequest::new("OPTIONS", endpoint), 1_000);
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            response.header_value("gnap-development-only"),
+            Some("insecure-loopback-discovery")
+        );
+        assert!(as_.storage().is_empty());
+    }
+    let as_ = server_at(endpoint).with_token_encoder(gnap_as::OpaqueTokenEncoder);
+    assert_eq!(
+        as_.handle(&HttpRequest::new("OPTIONS", endpoint), 1_000)
+            .status,
+        500
+    );
+}
+
+#[test]
 fn discovery_keeps_endpoint_query_and_rejects_other_urls_or_methods() {
     let endpoint = "https://as.example:8443/gnap?tenant=one%2Ftwo";
     let as_ = server_at(endpoint);
@@ -3005,6 +3032,7 @@ fn management_server<N: Nonces>(
     storage.put_token(
         "oldhandle",
         TokenRecord {
+            identifier: None,
             issued_at: 1_000,
             token,
             client: serde_json::from_str(r#""known-client""#).unwrap(),
@@ -3580,6 +3608,7 @@ fn rotation_refusal_preserves_value_rights_lifetime_and_timestamp() {
             "manage":{"uri":"https://as.example/token/oldhandle", "access_token":{"value":"oldmanagement"}}
         })).unwrap();
         let original = TokenRecord {
+            identifier: None,
             issued_at,
             token,
             client: request().client,
