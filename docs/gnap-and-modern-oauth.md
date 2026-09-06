@@ -63,18 +63,20 @@ a claim that work on other branches has been merged.
   combines the roles in one process; protected reads use HTTP introspection,
   not the AS token store. This does not demonstrate independent-vendor operation.
 - The Biscuit crate supplies a restricted file profile and an in-process
-  attenuation example, not an integrated AS grant flow. AS-mediated downstream
-  derivation is absent. The AS issues one token per approval; multiple-token
+  attenuation example, not an integrated AS grant flow. At that revision,
+  AS-mediated downstream derivation was absent. The AS issued one token per approval; multiple-token
   issuance, changing its bound key, mTLS adapters and JWT token implementations
-  remain missing, as do complete secondary-device interaction flows.
+  remained missing, as did complete secondary-device interaction flows.
 - The web workbench provides selected diagnostics, not complete conformance
   certification. The examples remain synthetic and volatile; durable storage,
   real user authentication and production readiness are not supplied.
 
 ## Application experiments, not marketing demos
 
-These are proposed acceptance scenarios. Their presence here does not mean
-they already run. Use synthetic data and isolated test credentials throughout.
+These experiments record the proposals at the source snapshot above, not the
+current delivery status. Consult the [support matrix](support-matrix.md) for
+subsequent implementations, including multi-token issuance and downstream
+derivation. Use synthetic data and isolated test credentials throughout.
 
 | Experiment | Observable success and negative cases | Further work and checks |
 |---|---|---|
