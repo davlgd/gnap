@@ -13,6 +13,16 @@ independent implementation has passed GNAP interoperability tests.
 - Pure digest validation fits imported diagnostic use without a cryptographic
   key store or network access.
 
+## Result-panel freshness
+
+Combining the discovery and introspection imports exposed an existing UI race:
+an in-flight response could restore a report after Clear or a message-type
+change. The same problem affected probe results and late errors. Each new panel
+generation now invalidates older results, including responses still being
+decoded. This does not cancel network requests or undo a probe already sent.
+A dependency-free JavaScript regression runs in CI with a strict DOM test
+double; it verifies this behavior, not browser rendering or GNAP conformance.
+
 ## Friction demonstrated while implementing this consumer
 
 1. Deserialization is not validation. Each nested type exposes its own selected

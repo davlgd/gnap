@@ -1,6 +1,7 @@
 'use strict';
 const byId = id => document.getElementById(id);
 let currentReport = null;
+let reportGeneration = 0;
 const kindHelp = {
   as_discovery: 'Captured RFC 9635 section 9 discovery document. Declared endpoint and HTTP status are compared, never fetched. Announced capabilities are not tested in operation.',
   rs_discovery: 'AS metadata for resource servers at /.well-known/gnap-as-rs, not metadata about an RS itself. Announced capabilities are not tested in operation.',
@@ -25,7 +26,8 @@ function updateKind() {
 }
 byId('kind').addEventListener('change', () => { clearReport(); updateKind(); });
 updateKind();
-const clearReport = () => { currentReport = null; byId('report').replaceChildren(); byId('summary').textContent = ''; byId('download').disabled = true; };
+// Clearing invalidates late results, not requests already sent to the server.
+const clearReport = () => { reportGeneration += 1; currentReport = null; byId('report').replaceChildren(); byId('summary').textContent = ''; byId('download').disabled = true; };
 function renderReport(report) {
   currentReport = report;
   const counts = { pass: 0, fail: 0, not_tested: 0 };
@@ -49,6 +51,7 @@ function renderReport(report) {
 }
 byId('analyze').addEventListener('click', async () => {
   clearReport();
+  const generation = reportGeneration;
   byId('analyze').disabled = true;
   try {
     const body = byId('body').value;
@@ -71,8 +74,9 @@ byId('analyze').addEventListener('click', async () => {
     }
     const response = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', credentials: 'omit', body: JSON.stringify(envelope), signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error(`Import rejected (HTTP ${response.status}). Check JSON, field and size limits.`);
-    renderReport(await response.json());
-  } catch (error) { byId('summary').textContent = error.name === 'TimeoutError' ? 'Request timed out.' : error.message; }
+    const report = await response.json();
+    if (generation === reportGeneration) renderReport(report);
+  } catch (error) { if (generation === reportGeneration) byId('summary').textContent = error.name === 'TimeoutError' ? 'Request timed out.' : error.message; }
   finally { byId('analyze').disabled = false; }
 });
 async function loadTargets() {
@@ -88,14 +92,16 @@ async function loadTargets() {
 }
 byId('probe').addEventListener('click', async () => {
   clearReport();
+  const generation = reportGeneration;
   if (!byId('consent').checked) { byId('summary').textContent = 'Explicit consent is required.'; return; }
   if (byId('operation').value === 'as_discovery' && byId('target').selectedOptions[0]?.dataset.role !== 'as') { byId('summary').textContent = 'Choose an AS target for discovery; RS discovery is not tested.'; return; }
   byId('probe').disabled = true;
   try {
     const response = await fetch('/api/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', credentials: 'omit', body: JSON.stringify({ target_id: Number(byId('target').value), consent: true, operation: byId('operation').value }), signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error(response.status === 429 ? 'Global cooldown: wait 60 seconds before retrying.' : 'Probe inconclusive or unavailable. No protocol verdict; check target configuration, public DNS, TLS, deadline and size limits.');
-    renderReport(await response.json());
-  } catch (error) { byId('summary').textContent = error.name === 'TimeoutError' ? 'Probe timed out; result inconclusive.' : error.message; }
+    const report = await response.json();
+    if (generation === reportGeneration) renderReport(report);
+  } catch (error) { if (generation === reportGeneration) byId('summary').textContent = error.name === 'TimeoutError' ? 'Probe timed out; result inconclusive.' : error.message; }
   finally { byId('probe').disabled = false; byId('consent').checked = false; }
 });
 loadTargets();

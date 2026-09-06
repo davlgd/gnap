@@ -13,8 +13,15 @@ the SDK's MSRV is not a promise for this independently locked HTTP application.
 
 ```sh
 cargo test --manifest-path apps/conformance-web/Cargo.toml --locked
+node --test apps/conformance-web/tests/ui/panel_generation.test.mjs
 cargo run --manifest-path apps/conformance-web/Cargo.toml --locked
 ```
+
+The UI regression test uses Node.js (22 in CI), with no npm dependencies.
+It exercises the real script with a small DOM test double, not a browser
+rendering test. Clearing the report or changing message type prevents a late
+response or error from restoring an obsolete result; it does not cancel a
+request already sent to the server.
 
 Open `http://localhost:8080`. The process listens on `0.0.0.0:$PORT` (default
 8080); `/health` returns `ok`. Do not expose a development instance without a TLS
