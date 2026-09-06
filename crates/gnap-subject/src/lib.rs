@@ -292,7 +292,7 @@ pub fn verify(
         return Err(AssertionError::Format);
     }
     let header_fields = object(header)?;
-    if string(&header_fields, "alg")? != "PS256"
+    if header_fields.get("alg").and_then(Value::as_str) != Some("PS256")
         || ["crit", "b64", "jwk", "jku", "x5u", "x5c"]
             .iter()
             .any(|name| header_fields.contains_key(*name))

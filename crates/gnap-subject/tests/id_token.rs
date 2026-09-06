@@ -184,6 +184,25 @@ fn optional_headers_and_unknown_claims_do_not_become_trusted_key_input() {
 }
 
 #[test]
+fn malformed_algorithm_members_are_header_errors_not_claim_errors() {
+    let key = signer().verifier();
+    for value in [Value::Null, json!(false), json!(256), json!([]), json!({})] {
+        let mut header = header();
+        header["alg"] = value;
+        assert_eq!(
+            verify(&token(&header, &payload()), &key, &expected()),
+            Err(AssertionError::Header)
+        );
+    }
+    let mut header = header();
+    header.as_object_mut().unwrap().remove("alg");
+    assert_eq!(
+        verify(&token(&header, &payload()), &key, &expected()),
+        Err(AssertionError::Header)
+    );
+}
+
+#[test]
 fn issuer_audience_nonce_and_authorized_party_are_bound_independently() {
     let key = signer().verifier();
     for (field, value) in [
