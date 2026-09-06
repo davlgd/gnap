@@ -522,3 +522,71 @@ fn a_finalized_core_state_cannot_be_reopened() {
         original.revision
     );
 }
+
+/// `TokenRecord::new` builds a record without a native identifier; the store
+/// indexes and reads it back like any other record.
+#[test]
+fn a_constructed_token_record_is_stored_and_read_back() {
+    let token: gnap_types::token::AccessToken =
+        serde_json::from_str(r#"{"value":"BBB","access":["read"],"expires_in":60}"#).unwrap();
+    let client: gnap_types::client::Client = serde_json::from_str(r#""client-541-ab""#).unwrap();
+    let record = TokenRecord::new(token.clone(), client.clone(), "MMM-2", 2_000);
+    assert!(record.identifier.is_none());
+    assert_eq!(record.issued_at, 2_000);
+    assert_eq!(record.token, token);
+    assert_eq!(record.client, client);
+    assert_eq!(record.management_token, "MMM-2");
+    assert_eq!(record.expires_at(), Some(2_060));
+    assert!(record.is_valid_at(2_059));
+    assert!(!record.is_valid_at(2_060));
+
+    let store = MemoryStorage::new();
+    let mut aggregate = pending("continue-c", "interact-c");
+    aggregate.record.request.client = client.clone();
+    aggregate.tokens.insert("handle-c".into(), record);
+    let created = store.create(aggregate).unwrap();
+    let mut snapshot = store
+        .lookup(GrantSelector::Management("handle-c"))
+        .unwrap()
+        .expect("the constructed record is indexed");
+    let stored = &snapshot.aggregate.tokens["handle-c"];
+    assert!(stored.identifier.is_none());
+    assert_eq!(stored.token, token);
+    assert_eq!(stored.client, client);
+    assert_eq!(stored.issued_at, 2_000);
+    assert_eq!(stored.management_token, "MMM-2");
+    assert_eq!(stored.expires_at(), Some(2_060));
+    assert_eq!(
+        store
+            .lookup(GrantSelector::AccessToken("BBB"))
+            .unwrap()
+            .unwrap()
+            .id,
+        created.id
+    );
+    assert!(snapshot.aggregate.tokens.remove("handle-c").is_some());
+    assert!(store
+        .lookup(GrantSelector::Management("handle-c"))
+        .unwrap()
+        .is_some());
+    store
+        .compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate)
+        .unwrap();
+    assert!(store
+        .lookup(GrantSelector::Management("handle-c"))
+        .unwrap()
+        .is_none());
+    assert!(store
+        .lookup(GrantSelector::AccessToken("BBB"))
+        .unwrap()
+        .is_none());
+    let remaining = store
+        .lookup(GrantSelector::Id(created.id))
+        .unwrap()
+        .unwrap();
+    assert!(remaining.aggregate.tokens.is_empty());
+    assert_eq!(
+        remaining.aggregate.record.continuation_token.as_deref(),
+        Some("continue-c")
+    );
+}

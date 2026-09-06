@@ -61,6 +61,11 @@ test or recorded execution supports a claim that a behavior was exercised.
 There is no overall conformance score. This is a capability-level inventory, not
 yet an exhaustive ledger of every MUST, SHOULD and MAY in both RFCs.
 
+The [public normative ledger](../conformance/README.md) supplies a reproducible
+source inventory for that next level of review. It preserves each BCP14 marker,
+its context and the profile capability lists, without treating an extracted
+block or a passing test of the ledger itself as a completed protocol obligation.
+
 ## Token formats and behavior
 
 Formats are agreed between the AS and RS. The registered names and announcement
@@ -126,8 +131,8 @@ interoperability is currently claimed.
 | Authenticated token introspection | Optional API component; [RFC 9767 §§3.2–3.3](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.2) define authentication and response rules | Planned distributed application | **Missing**. Demo store lookup is not this protocol. A structured token does not make this API mandatory or prohibited. |
 | Resource-set registration | Optional API component; [RFC 9767 §3.4](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.4) | Planned resource registration scenario | **Missing**, including format requirements communicated by the RS. |
 | Downstream token derivation | Conditional on the RS/AS supporting the mechanism; [RFC 9767 §4](https://www.rfc-editor.org/rfc/rfc9767.html#section-4) | Planned delegation scenario | **Missing**: AS-mediated derivation and local Biscuit attenuation are distinct paths to exercise, not interchangeable implementations. |
-| Imported-message diagnostics | Project tooling, not an RFC certification scheme | Required tool | **Partial**: [workbench tests](../apps/conformance-web/src/lib.rs) and HTTP acceptance cover selected checks; parsers are shared with the SDK. |
-| Active AS/RS probes | Project tooling; endpoint-owner authorization required | Required tool, initially operator-approved targets only | **Partial**: [probe tests](../apps/conformance-web/src/probe.rs) and [dated live observations](validation-2026-09-05.md). Rejection probes do not test a full authenticated flow. |
+| Imported-message diagnostics | Project tooling, not an RFC certification scheme | Required tool | **Partial**: original message checks share SDK parsers. [AS discovery checks](../apps/conformance-web/tests/discovery.rs) inspect HTTP context, JSON and exact endpoint identity without the SDK validator; registry data remain shared. Missing optional fields and unsupported URL interpretations are explicitly untested. Profile rules such as HTTP 200 and userinfo refusal are distinguished from GNAP requirements. |
+| Active AS/RS probes | Project tooling; endpoint-owner authorization required | Required tool, initially operator-approved targets only | **Partial**: bounded rejection probes and AS OPTIONS discovery, with [probe tests](../apps/conformance-web/src/probe.rs), [earlier live observations](validation-2026-09-05.md) and a [real discovery network smoke](../apps/conformance-web/LIVE_SMOKE.md). Neither rejection nor discovery probes exercise a full authenticated flow or prove that announced capabilities work. |
 | Arbitrary third-party self-service tests | Project tooling and deployment security | Deferred until ownership, quotas and egress safeguards exist | **Missing**. Adding an endpoint to a public form must not create an unrestricted scanner. |
 | Durable storage, real RO authentication and restart recovery | Deployment responsibilities; requirements depend on the advertised deployment guarantees | Required before claiming production readiness | **Missing** as supplied services. The current examples remain synthetic, single-instance and volatile. |
 

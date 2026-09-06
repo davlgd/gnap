@@ -1,0 +1,26 @@
+{
+  "body_base64": "eyJncmFudF9yZXF1ZXN0X2VuZHBvaW50IjoiaHR0cHM6Ly9hcy5leGFtcGxlL2duYXAiLCJrZXlfcHJvb2ZzX3N1cHBvcnRlZCI6WyJodHRwc2lnIl0sImtleV9yb3RhdGlvbl9zdXBwb3J0ZWQiOmZhbHNlfQ==",
+  "body_sha256": "fbf1bbff3a8da865234f60e47fde63c84dc233734311b8dd2be10fe0a6605d75",
+  "capture_origin": "synthetic",
+  "captured_at_unix_utc": null,
+  "collector_config": {
+    "address_policy": "public-ipv4-pinned-v1",
+    "credentials": false,
+    "max_body_bytes": 32768,
+    "method": "OPTIONS",
+    "proxy": false,
+    "redirects": false,
+    "timeout_seconds": 5
+  },
+  "collector_config_sha256": "5da70f5b3062631cae0441aa79a36d762b605eba434bc7e3b09ccc6e054121e9",
+  "endpoint": "https://as.example/gnap",
+  "headers": [
+    [
+      "content-type",
+      "application/json"
+    ]
+  ],
+  "http_status": 200,
+  "remote_revision": "unknown",
+  "schema_version": 1
+}
