@@ -791,7 +791,7 @@ fn client_worker(
                 } else {
                     None
                 };
-                // The HTTP front door creates a fresh identity for every start.
+                // The HTTP front door creates a fresh browser session ID for every start.
                 // Reject an internal duplicate before changing consent or AS state.
                 if sessions.contains_key(&command.session) {
                     return Err("Session already started; use a new browser identity".into());
