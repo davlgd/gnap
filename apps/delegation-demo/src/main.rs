@@ -42,10 +42,12 @@ mod derivation;
 mod identity;
 mod introspection;
 mod multiple;
+mod push_finish;
 mod resource_registration;
 mod secondary_device;
 #[derive(Default)]
 struct ConsentRegistry {
+    push: push_finish::Registry,
     identity: Option<Arc<identity::Identity>>,
     clients: HashSet<String>,
     grants: HashMap<GrantId, Consent>,
@@ -430,9 +432,12 @@ impl Policy for ConsentPolicy {
         NonZeroU64::new(1200)
     }
     fn keep_grant_open(&self, request: &GrantRequest) -> bool {
-        request.subject.is_none()
+        request.subject.is_none() && !push_finish::is_push(request)
     }
     fn evaluate(&self, request: &GrantRequest) -> Decision {
+        if !push_finish::acceptable_request(request, &self.0.lock().unwrap().push, None) {
+            return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
+        }
         if !identity::acceptable_request(request, self.0.lock().unwrap().identity.as_deref()) {
             return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
         }
@@ -443,6 +448,14 @@ impl Policy for ConsentPolicy {
         }
     }
     fn evaluate_context(&self, request: &GrantRequest, context: EvaluationContext<'_>) -> Decision {
+        let grant = match context {
+            EvaluationContext::Initial => None,
+            EvaluationContext::Modification(snapshot)
+            | EvaluationContext::AfterInteraction(snapshot) => Some(snapshot.id),
+        };
+        if !push_finish::acceptable_request(request, &self.0.lock().unwrap().push, grant) {
+            return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
+        }
         if !identity::acceptable_request(request, self.0.lock().unwrap().identity.as_deref()) {
             return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
         }
@@ -460,7 +473,7 @@ impl Policy for ConsentPolicy {
             // Within what is live for the same label: approved directly, as one
             // replacement lot. Anything else goes back to the resource owner.
             EvaluationContext::Modification(snapshot) => {
-                if request.subject.is_some() {
+                if request.subject.is_some() || push_finish::is_push(request) {
                     Decision::Deny(gnap_registry::ErrorCode::RequestDenied)
                 } else {
                     multiple::modification(shape, &slots, snapshot)
@@ -580,7 +593,8 @@ struct App {
     #[cfg(test)]
     signer: Arc<Ps256Signer>,
     decisions: Decisions,
-    commands: mpsc::SyncSender<Command>,
+    commands: mpsc::SyncSender<WorkerCommand>,
+    push_outbound: Arc<tokio::sync::Semaphore>,
     starts: Arc<Mutex<VecDeque<Instant>>>,
     code_entries: Arc<Mutex<secondary_device::Entries>>,
     #[cfg(test)]
@@ -600,7 +614,12 @@ struct Command {
     action: String,
     reply: tokio::sync::oneshot::Sender<Result<Value, String>>,
 }
+enum WorkerCommand {
+    Browser(Command),
+    Push(push_finish::Incoming),
+}
 struct BrowserSession<'a> {
+    push: Option<push_finish::Registration>,
     identity: Option<Arc<identity::Identity>>,
     client: Session<'a, Network, Ps256Signer>,
     grant_id: GrantId,
@@ -693,6 +712,21 @@ fn consent_finish_choice(
     handle: &str,
     allowed: multiple::Choice,
 ) -> Result<String, String> {
+    match consent_complete_choice(server, storage, decisions, client, grant, handle, allowed)? {
+        Finish::Redirect { uri } => Ok(uri),
+        _ => Err("Unexpected completion method".into()),
+    }
+}
+
+fn consent_complete_choice(
+    server: &As,
+    storage: &IndexedStorage,
+    decisions: &Decisions,
+    client: &str,
+    grant: GrantId,
+    handle: &str,
+    allowed: multiple::Choice,
+) -> Result<Finish, String> {
     let snapshot = storage
         .lookup(GrantSelector::Interaction(handle))
         .map_err(|_| "Consent storage unavailable")?
@@ -703,14 +737,15 @@ fn consent_finish_choice(
     // Lock order: decisions, then storage. Storage never calls into decisions.
     // A concurrent post-completion poll must wait until its choice is visible.
     let mut choices = decisions.lock().map_err(|_| "Consent state unavailable")?;
-    let Finish::Redirect { uri } = server
+    let finish = server
         .complete_interaction(handle, now())
-        .map_err(|_| "Interaction completion refused")?
-    else {
-        return Err("Unexpected completion method".into());
-    };
-    let callback =
-        InteractCallback::from_redirect(&uri).map_err(|_| "Invalid completion reference")?;
+        .map_err(|_| "Interaction completion refused")?;
+    let callback = match &finish {
+        Finish::Redirect { uri } => InteractCallback::from_redirect(uri),
+        Finish::Push { body, .. } => InteractCallback::from_push(body),
+        _ => return Err("Unexpected completion method".into()),
+    }
+    .map_err(|_| "Invalid completion reference")?;
     // Completion's CAS must succeed first. The decision is read, not popped,
     // during policy evaluation: a later CAS conflict cannot consume consent.
     choices.grants.insert(
@@ -723,7 +758,7 @@ fn consent_finish_choice(
             allowed,
         },
     );
-    Ok(uri)
+    Ok(finish)
 }
 
 fn now() -> u64 {
@@ -731,13 +766,35 @@ fn now() -> u64 {
 }
 
 fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
+    let push_finish = push_finish::view(session.push.as_ref());
     let tokens = session.client.usable_tokens(now());
     let rights: Vec<_> = tokens
         .iter()
         .flatten()
         .flat_map(|t| t.access.iter().flatten())
         .collect();
-    json!({"identity_requested":session.identity.is_some(), "identity":identity::view(session, now()), "state":session.state, "mode":session.mode.name(), "events":session.events, "rights":rights, "tokens":multiple::view(tokens.as_ref()), "requested_rights":session.requested_rights, "requested_tokens":multiple::slots_view(&session.requested), "token_present":tokens.is_some(), "resource_available":true, "retired_token_present":session.retired.is_some(), "retired_token_label":session.retired.as_ref().and_then(|retired| retired.label.clone()), "folder":session.folder, "last_resource_status":session.last_resource_status, "user_code_uri":session.code, "interaction_uri":session.code.is_none().then(|| format!("{origin}/interact/{}",session.handle)), "continuation_open":session.continuation_open, "continuation_wait_seconds":session.next_continuation.saturating_sub(now())})
+    json!({
+        "push_finish": push_finish,
+        "identity_requested": session.identity.is_some(),
+        "identity": identity::view(session, now()),
+        "state": session.state,
+        "mode": session.mode.name(),
+        "events": session.events,
+        "rights": rights,
+        "tokens": multiple::view(tokens.as_ref()),
+        "requested_rights": session.requested_rights,
+        "requested_tokens": multiple::slots_view(&session.requested),
+        "token_present": tokens.is_some(),
+        "resource_available": true,
+        "retired_token_present": session.retired.is_some(),
+        "retired_token_label": session.retired.as_ref().and_then(|retired| retired.label.clone()),
+        "folder": session.folder,
+        "last_resource_status": session.last_resource_status,
+        "user_code_uri": session.code,
+        "interaction_uri": session.code.is_none().then(|| format!("{origin}/interact/{}", session.handle)),
+        "continuation_open": session.continuation_open,
+        "continuation_wait_seconds": session.next_continuation.saturating_sub(now()),
+    })
 }
 
 fn client_session<'a>(
@@ -756,7 +813,7 @@ fn client_worker(
     server: Arc<As>,
     storage: Arc<IndexedStorage>,
     decisions: Decisions,
-    receiver: mpsc::Receiver<Command>,
+    receiver: mpsc::Receiver<WorkerCommand>,
     references: resource_registration::References,
 ) {
     let transport = Network {
@@ -775,12 +832,17 @@ fn client_worker(
             if !live {
                 let mut decisions = decisions.lock().unwrap();
                 decisions.clients.remove(id);
+                decisions.push.remove_client(id);
                 decisions.grants.remove(&session.grant_id);
             }
             live
         });
         let command = match receiver.recv_timeout(Duration::from_secs(30)) {
-            Ok(c) => c,
+            Ok(WorkerCommand::Browser(c)) => c,
+            Ok(WorkerCommand::Push(incoming)) => {
+                push_finish::process(&mut sessions, &decisions, incoming);
+                continue;
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(_) => break,
         };
@@ -805,6 +867,17 @@ fn client_worker(
                     .clients
                     .insert(command.session.clone());
                 let codes = command.action == "start-code";
+                let push = if command.action == "start-push" {
+                    Some(
+                        decisions
+                            .lock()
+                            .unwrap()
+                            .push
+                            .register(&command.session, &origin)?,
+                    )
+                } else {
+                    None
+                };
                 let mut client = if codes {
                     Session::new(&transport, signer.as_ref(), format!("{origin}/gnap"))
                         .supporting(&["user_code_uri"])
@@ -822,6 +895,8 @@ fn client_worker(
                 };
                 let interact = if codes {
                     json!({"start":["user_code_uri"]})
+                } else if let Some(push) = &push {
+                    json!({"start":["redirect"], "finish":{"method":"push", "uri":push.uri, "nonce":fresh_nonce().map_err(|_| "Interaction randomness unavailable")?}})
                 } else {
                     json!({"start": ["redirect"], "finish": {"method":"redirect", "uri":format!("{origin}/callback"), "nonce":fresh_nonce().map_err(|e| e.to_string())?}})
                 };
@@ -863,9 +938,13 @@ fn client_worker(
                     .map_err(|_| "Grant storage unavailable")?
                     .ok_or("Unknown new grant")?
                     .id;
+                if let Some(push) = &push {
+                    decisions.lock().unwrap().push.bind(push, grant_id)?;
+                }
                 sessions.insert(
                     command.session.clone(),
                     BrowserSession {
+                        push,
                         identity,
                         client,
                         grant_id,
@@ -931,6 +1010,19 @@ fn client_worker(
                         {
                             return Err("The current request does not ask for a reports token; approve or deny it as a whole".into());
                         }
+                    }
+                    if session.push.is_some() {
+                        push_finish::complete(
+                            &server,
+                            &storage,
+                            &decisions,
+                            &command.session,
+                            session,
+                            choice,
+                        )?;
+                        session.state = "awaiting_push";
+                        session.events.push("Resource owner completed consent. The AS will attempt one HTTP push; its delivery does not change the recorded decision.".into());
+                        return Ok(browser_view(session, &origin));
                     }
                     let uri = consent_finish_choice(
                         &server,
@@ -1161,7 +1253,9 @@ fn client_worker(
             && multiple::is_start(&command.action)
             && !sessions.contains_key(&command.session)
         {
-            decisions.lock().unwrap().clients.remove(&command.session);
+            let mut choices = decisions.lock().unwrap();
+            choices.clients.remove(&command.session);
+            choices.push.remove_client(&command.session);
         }
         let _ = command.reply.send(result);
     }
@@ -1310,15 +1404,24 @@ async fn resource(
 async fn dispatch(app: &App, session: String, action: String) -> Result<Value, String> {
     let (reply, receiver) = tokio::sync::oneshot::channel();
     app.commands
-        .try_send(Command {
-            session,
+        .try_send(WorkerCommand::Browser(Command {
+            session: session.clone(),
             action,
             reply,
-        })
+        }))
         .map_err(|_| "Demo queue full; retry shortly".to_owned())?;
-    receiver
-        .await
-        .map_err(|_| "Client worker unavailable".to_owned())?
+    // A browser disconnect must not discard an already committed push. The
+    // reply observer stays alive independently of this HTTP request future.
+    let app = app.clone();
+    tokio::spawn(async move {
+        let result = receiver
+            .await
+            .map_err(|_| "Client worker unavailable".to_owned())?;
+        push_finish::kick(&app, &session);
+        result
+    })
+    .await
+    .map_err(|_| "Client reply unavailable".to_owned())?
 }
 async fn action(
     State(app): State<App>,
@@ -1350,6 +1453,7 @@ async fn action(
         "revoke-grant",
         "start-multiple",
         "start-identity",
+        "start-push",
         "approve-reports",
         "read-reports",
         "rotate-reports",
@@ -1628,6 +1732,7 @@ async fn main() {
         signer: signer.clone(),
         decisions: decisions.clone(),
         commands: sender,
+        push_outbound: Arc::new(tokio::sync::Semaphore::new(4)),
         starts: Arc::default(),
         code_entries: Arc::default(),
         #[cfg(test)]
@@ -1702,6 +1807,7 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/code.js", get(|| async { ([("content-type", "text/javascript")], include_str!("../static/code.js")) }))
         .route("/api/{action}", post(action))
         .route("/callback", get(callback))
+        .route("/push-callback/{id}", post(push_finish::receive).layer(DefaultBodyLimit::max(1024)))
         .route("/interact/{handle}", get(interaction))
         .route("/gnap", post(protocol).options(protocol))
         .route("/.well-known/gnap-as-rs", get(protocol))
@@ -2185,6 +2291,7 @@ mod tests {
             signer,
             decisions,
             commands,
+            push_outbound: Arc::new(tokio::sync::Semaphore::new(4)),
             starts: Arc::default(),
             code_entries: Arc::default(),
             code_completion_hook: None,

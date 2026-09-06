@@ -30,7 +30,7 @@ impl Mode {
 pub(super) fn is_start(action: &str) -> bool {
     matches!(
         action,
-        "start" | "start-multiple" | "start-code" | "start-identity"
+        "start" | "start-multiple" | "start-code" | "start-identity" | "start-push"
     )
 }
 

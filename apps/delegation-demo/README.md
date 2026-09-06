@@ -11,6 +11,18 @@ with new consent, or revoke the entire grant through its continuation endpoint.
 This is a public teaching sandbox, not an authenticated document service or a
 claim of full GNAP conformance. No personal data or private key fixtures are used.
 
+## HTTP push finish
+
+**Start with a server-to-client callback** opens consent in the browser, then
+sends the finish notification directly from the AS to the client over HTTP.
+The [push guide](../../docs/push-finish.md) explains callback ownership, DNS
+pinning, bounded delivery and the distinction between consent and receipt.
+Only this deployment's pre-registered callback paths are eligible. There is
+one attempt, no automatic retry and no AS polling fallback if it is lost.
+This flow closes continuation after issuance; the resource token keeps its
+individual lifecycle. It is not a general callback relay or a complete C2
+implementation.
+
 ## Optional subject disclosure
 
 On an HTTPS deployment, "Start with identity disclosure" requests document

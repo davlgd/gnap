@@ -524,6 +524,7 @@ dependencies = [
  "gnap-as",
  "gnap-client",
  "gnap-crypto",
+ "gnap-net",
  "gnap-registry",
  "gnap-subject",
  "gnap-types",
@@ -533,6 +534,10 @@ dependencies = [
  "tokio",
  "tower",
 ]
+
+[[package]]
+name = "gnap-net"
+version = "0.1.0"
 
 [[package]]
 name = "gnap-registry"

@@ -5,7 +5,7 @@ import importlib.util
 import io
 from pathlib import Path
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location(
     "smoke_ecosystem", Path(__file__).resolve().parents[1] / "smoke_ecosystem.py"
@@ -20,6 +20,56 @@ class Response(io.BytesIO):
     def __init__(self, body):
         super().__init__(body)
         self.headers = Message()
+
+
+class PushSmokeTests(unittest.TestCase):
+    def run_scenario(self, *, receipt=True, exposed=False):
+        choice = None
+
+        def response(_browser, _base, path, *_args):
+            nonlocal choice
+            action = path.rsplit("/", 1)[-1]
+            if action == "start-push":
+                body = {"state": "pending"}
+            elif action in ("approve", "deny"):
+                choice = action
+                body = {"state": "awaiting_push"}
+                if exposed:
+                    body["redirect"] = "private-callback"
+            elif action == "status":
+                body = {"state": "ready", "push_finish": {
+                    "received": receipt, "expired": False, "delivery": "delivered"}}
+            elif action == "continue":
+                body = {"state": "approved" if choice == "approve" else "denied",
+                        "token_present": choice == "approve", "continuation_open": False}
+            elif action in ("read", "check-retired"):
+                body = {"last_resource_status": 200 if action == "read" else 401}
+            elif action == "revoke":
+                body = {"token_present": False}
+            else:
+                self.fail("Unexpected smoke action")
+            return 200, Message(), body, 0
+
+        outcomes = []
+        with patch.object(smoke, "request", side_effect=response), \
+                patch.object(smoke, "wait_for_continuation"), \
+                patch.object(smoke.time, "monotonic", side_effect=range(0, 1000, 20)):
+            smoke.push_demo("https://demo.example", outcomes)
+        return outcomes
+
+    def test_both_decisions_and_token_lifecycle_are_checked(self):
+        self.assertEqual(self.run_scenario(), [
+            {"check": "push-approve", "status": "pass"},
+            {"check": "push-deny", "status": "pass"},
+        ])
+
+    def test_sender_acknowledgement_does_not_substitute_for_client_receipt(self):
+        with self.assertRaisesRegex(AssertionError, "not received and acknowledged"):
+            self.run_scenario(receipt=False)
+
+    def test_callback_leaks_fail_with_a_fixed_redacted_error(self):
+        with self.assertRaisesRegex(AssertionError, "^Push action exposed a callback destination$"):
+            self.run_scenario(exposed=True)
 
 
 class SmokeHttpTests(unittest.TestCase):
