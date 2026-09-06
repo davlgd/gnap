@@ -17,6 +17,7 @@ gnap-types = { workspace = true }
 gnap-registry = { workspace = true }
 gnap-crypto = { workspace = true }
 gnap-core = { workspace = true }
+gnap-subject = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

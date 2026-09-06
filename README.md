@@ -37,6 +37,7 @@ These are project decisions, not claims that those features are already present.
 | [`gnap-registry`](crates/gnap-registry) | GNAP's 23 IANA registries, generated from the official CSV files |
 | [`gnap-types`](crates/gnap-types) | The message data model: serialization, polymorphism, shape validation |
 | [`gnap-crypto`](crates/gnap-crypto) | Signing and shared GNAP request verification (`httpsig`, `PS256`), interaction hash, `Content-Digest` |
+| [`gnap-subject`](crates/gnap-subject) | Pinned PS256 identity assertions, with explicit issuer, audience and session binding |
 | [`gnap-core`](crates/gnap-core) | The grant state machine (§1.5): transitions, guards, response checking |
 | [`gnap-client`](crates/gnap-client) | The client instance role, over a pluggable HTTP transport |
 | [`gnap-as`](crates/gnap-as) | The authorization server role, free of any HTTP framework |
@@ -219,6 +220,12 @@ its ground, and the one ground the RFC itself names, interaction, is checked
 against what actually happened on that grant. On the other side, subject
 information reaches a caller paired with the AS that stated it, because an email
 address identifies someone *at one AS* and nowhere else (§3.4).
+
+The [subject assertion profile](docs/subject-assertions.md) adds cryptographic
+verification through `Session::verify_subject`: the assertion must match a
+pinned issuer key, this AS endpoint, the client proof-key audience and the
+retained finish nonce. Raw subject decoding remains separate from verification.
+This is identity information, not a JWT access-token implementation.
 
 **Unknown values survive.** GNAP is designed to be extended (Appendix D).
 Unregistered registry values are carried in an `Unregistered(String)` variant

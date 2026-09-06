@@ -28,7 +28,10 @@ impl Mode {
 }
 
 pub(super) fn is_start(action: &str) -> bool {
-    matches!(action, "start" | "start-multiple" | "start-code")
+    matches!(
+        action,
+        "start" | "start-multiple" | "start-code" | "start-identity"
+    )
 }
 
 /// What the resource owner chose for a pending request.

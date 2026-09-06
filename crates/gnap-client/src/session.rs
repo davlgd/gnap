@@ -130,6 +130,56 @@ pub struct Session<'a, T, S> {
     rotated: HashMap<String, TokenSigner<'a>>,
 }
 
+/// A cryptographically verified identity attributed to the responding GNAP AS.
+/// Account keys must include the AS endpoint as well as the issuer and subject.
+pub struct VerifiedSubject<'a> {
+    /// Actual grant endpoint used by this session.
+    pub as_endpoint: &'a str,
+    /// Only claims checked against the pinned assertion key and session context.
+    pub identity: gnap_subject::VerifiedIdentity,
+}
+
+impl<T> Session<'_, T, gnap_crypto::Ps256Signer> {
+    /// Verify a PS256 ID Token with this session's retained finish nonce.
+    ///
+    /// The audience convention here is the RFC 7638 thumbprint of the client's
+    /// original PS256 proof key. Agree on it with the AS; GNAP does not define
+    /// an OAuth client ID or this audience mapping. Token key rotation does
+    /// not change the grant's proof key or identity recipient. The exact AS
+    /// endpoint must match the configured trust. Raw `subject()` remains
+    /// available for other formats and does not verify signatures.
+    ///
+    /// # Errors
+    /// Refuses missing subject/finish nonce and any failed trust or claim check.
+    pub fn verify_subject(
+        &self,
+        trust: &gnap_subject::Trust<'_>,
+        now: u64,
+    ) -> Result<VerifiedSubject<'_>, gnap_subject::AssertionError> {
+        let response = self
+            .protocol
+            .subject
+            .as_deref()
+            .ok_or(gnap_subject::AssertionError::Context)?;
+        let nonce = self
+            .protocol
+            .client_nonce
+            .as_deref()
+            .ok_or(gnap_subject::AssertionError::Context)?;
+        let identity = trust.verify_subject(
+            response,
+            &self.endpoint,
+            &self.signer.thumbprint(),
+            nonce,
+            now,
+        )?;
+        Ok(VerifiedSubject {
+            as_endpoint: &self.endpoint,
+            identity,
+        })
+    }
+}
+
 /// A rotation can borrow an existing key or retain one created at runtime.
 enum TokenSigner<'a> {
     Borrowed(&'a dyn Signer),

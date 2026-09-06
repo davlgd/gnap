@@ -17,6 +17,7 @@ gnap-client = { path = "../../crates/gnap-client" }
 gnap-crypto = { path = "../../crates/gnap-crypto" }
 gnap-types = { path = "../../crates/gnap-types" }
 gnap-registry = { path = "../../crates/gnap-registry" }
+gnap-subject = { path = "../../crates/gnap-subject" }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
