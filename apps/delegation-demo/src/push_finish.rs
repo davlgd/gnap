@@ -117,7 +117,11 @@ pub(super) fn is_push(request: &GrantRequest) -> bool {
         .is_some_and(|f| f.method == gnap_registry::InteractionFinishMethod::Push)
 }
 
-pub(super) fn acceptable_request(request: &GrantRequest, registry: &Registry) -> bool {
+pub(super) fn acceptable_request(
+    request: &GrantRequest,
+    registry: &Registry,
+    grant: Option<GrantId>,
+) -> bool {
     if !is_push(request) {
         return true;
     }
@@ -136,6 +140,7 @@ pub(super) fn acceptable_request(request: &GrantRequest, registry: &Registry) ->
         && interact.start[0].method().as_str() == "redirect"
         && registry.slots.values().any(|slot| {
             slot.client == client
+                && slot.grant == grant
                 && interact.finish.as_ref().and_then(|f| f.uri.as_deref())
                     == Some(slot.registration.uri.as_str())
         })

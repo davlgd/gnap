@@ -21,7 +21,7 @@ fn push_policy_requires_the_registered_client_and_exact_selected_shape() {
     let value = json!({"client":"first", "access_token":{"access":[FOLDER_READ]},
         "interact":{"start":["redirect"], "finish":{"method":"push", "uri":registration.uri, "nonce":"nonce"}}});
     let request: GrantRequest = serde_json::from_value(value.clone()).unwrap();
-    assert!(acceptable_request(&request, &registry));
+    assert!(acceptable_request(&request, &registry, None));
     for (pointer, replacement) in [
         ("/client", json!("other")),
         (
@@ -37,12 +37,18 @@ fn push_policy_requires_the_registered_client_and_exact_selected_shape() {
         let mut altered = value.clone();
         *altered.pointer_mut(pointer).unwrap() = replacement;
         let request = serde_json::from_value(altered).unwrap();
-        assert!(!acceptable_request(&request, &registry), "{pointer}");
+        assert!(!acceptable_request(&request, &registry, None), "{pointer}");
     }
     let mut subject = request.clone();
     subject.subject = Some(serde_json::from_value(identity::request()).unwrap());
-    assert!(!acceptable_request(&subject, &registry));
-    assert!(!acceptable_request(&request, &Registry::default()));
+    assert!(!acceptable_request(&subject, &registry, None));
+    assert!(!acceptable_request(&request, &Registry::default(), None));
+    assert!(!acceptable_request(&request, &registry, Some(GrantId(1))));
+    registry.bind(&registration, GrantId(1)).unwrap();
+    assert!(!acceptable_request(&request, &registry, None));
+    assert!(acceptable_request(&request, &registry, Some(GrantId(1))));
+    assert!(!acceptable_request(&request, &registry, Some(GrantId(2))));
+    assert!(registry.bind(&registration, GrantId(2)).is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -127,6 +133,33 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
             .unwrap();
         (slot.registration.uri.clone(), slot.grant.unwrap())
     };
+    let snapshot = app
+        .storage
+        .lookup(GrantSelector::Id(grant))
+        .unwrap()
+        .unwrap();
+    let policy = ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone());
+    assert!(matches!(
+        policy.evaluate(&snapshot.aggregate.record.request),
+        Decision::Deny(gnap_registry::ErrorCode::RequestDenied)
+    ));
+    let repeated = HttpRequest::new("POST", format!("{origin}/gnap"))
+        .json_body(serde_json::to_vec(&snapshot.aggregate.record.request).unwrap());
+    let repeated = sign_request(repeated, app.signer.as_ref(), None, now()).unwrap();
+    let refused = app.server.handle(&repeated, now());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&refused.body).unwrap()["error"],
+        "request_denied"
+    );
+    let mut other_context = snapshot.clone();
+    other_context.id = GrantId(grant.0 + 100);
+    assert!(matches!(
+        policy.evaluate_context(
+            &snapshot.aggregate.record.request,
+            EvaluationContext::AfterInteraction(&other_context)
+        ),
+        Decision::Deny(gnap_registry::ErrorCode::RequestDenied)
+    ));
     let approved = dispatch(&app, "allow".into(), "approve".into())
         .await
         .unwrap();

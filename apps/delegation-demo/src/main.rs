@@ -435,7 +435,7 @@ impl Policy for ConsentPolicy {
         request.subject.is_none() && !push_finish::is_push(request)
     }
     fn evaluate(&self, request: &GrantRequest) -> Decision {
-        if !push_finish::acceptable_request(request, &self.0.lock().unwrap().push) {
+        if !push_finish::acceptable_request(request, &self.0.lock().unwrap().push, None) {
             return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
         }
         if !identity::acceptable_request(request, self.0.lock().unwrap().identity.as_deref()) {
@@ -448,7 +448,12 @@ impl Policy for ConsentPolicy {
         }
     }
     fn evaluate_context(&self, request: &GrantRequest, context: EvaluationContext<'_>) -> Decision {
-        if !push_finish::acceptable_request(request, &self.0.lock().unwrap().push) {
+        let grant = match context {
+            EvaluationContext::Initial => None,
+            EvaluationContext::Modification(snapshot)
+            | EvaluationContext::AfterInteraction(snapshot) => Some(snapshot.id),
+        };
+        if !push_finish::acceptable_request(request, &self.0.lock().unwrap().push, grant) {
             return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
         }
         if !identity::acceptable_request(request, self.0.lock().unwrap().identity.as_deref()) {

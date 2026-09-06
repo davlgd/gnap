@@ -21,7 +21,8 @@ with this application. Each URI belongs to one client reference and is bound
 to its resulting grant. It is not the browser cookie. Neither the URI nor the
 callback body appears in the browser status or event list. Both initial and
 continuation policy evaluation reject an unregistered destination or a URI
-belonging to another client. This is a deliberately closed registration policy,
+belonging to another client. An already bound URI cannot start a new grant,
+and continuation must match its registered grant ID. This is a deliberately closed registration policy,
 not an authenticated registration API for external clients.
 
 The sender additionally requires the exact configured origin and callback path,
@@ -78,7 +79,8 @@ denial, malformed and replayed callbacks, expiry and destination ownership.
 The UI tests execute the actual rendering code with a DOM double, not a browser
 engine. Local loopback evidence does not establish hosted TLS delivery.
 
-For an explicitly authorized deployment, run:
+The normal `--demo` smoke does not include this outbound callback path.
+For an explicitly authorized deployment, run the separate push scenario:
 
 ```console
 python3 -B tools/smoke_ecosystem.py --demo https://gnap-delegation.cleverapps.io --push-only
