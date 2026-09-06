@@ -5,6 +5,8 @@
 //! caller's business. The same seam that lets `gnap-client` be tested without a
 //! network lets a client and a server be wired straight together.
 
+mod issuance;
+
 use crate::encoding::{
     EncodedToken, OpaqueTokenEncoder, TokenEncoder, TokenEncodingContext, TokenEncodingError,
 };
@@ -1628,7 +1630,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         let record = &mut aggregate.record;
         let grant = &mut record.grant;
         let event = match &decision {
-            Decision::Approve { .. } => Event::AsNeedsNoInteraction,
+            Decision::Approve { .. } | Decision::ApproveTokens { .. } => {
+                Event::AsNeedsNoInteraction
+            }
             Decision::RequireInteraction => Event::AsRequiresInteraction,
             Decision::Deny(_) => Event::AsCannotProceed,
         };
@@ -1644,6 +1648,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         match decision {
             Decision::Approve { access, subject } => {
                 self.approve(aggregate, access, subject, now, authenticated)
+            }
+            Decision::ApproveTokens { tokens, subject } => {
+                self.approve_selected(aggregate, tokens, subject, now, authenticated)
             }
             Decision::Deny(code) => error(code, "the request was denied"),
             Decision::RequireInteraction => {
@@ -1670,7 +1677,6 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         let record = &mut aggregate.record;
         let request = &record.request;
         let interacted = record.interaction_completed;
-        let grant = &mut record.grant;
         let mut response = GrantResponse::default();
         if let Some(released) = &subject {
             if released.ground == SubjectGround::RoInteractedHere && !interacted {
@@ -1763,24 +1769,14 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // been through no interaction cannot claim it. The check is on
         // the deployment's claim, not on the client's request, so it
         // reports a server fault rather than blaming the caller.
-        if let Some(released) = subject {
-            response.subject = Some(*released.subject);
-        }
-        record.interact_handle = None;
-        record.interact_ref = None;
-        record.interact_expires_at = None;
-        if let Some(continuation) = continuation {
-            record.continuation_token = Some(continuation.as_str().to_owned());
-            grant.offer_continuation(now, Some(gnap_core::DEFAULT_WAIT));
-            response.r#continue = Some(Continue {
-                uri: self.endpoints.continuation.clone(),
-                access_token: BoundToken::new(continuation),
-                wait: Some(gnap_core::DEFAULT_WAIT),
-                extra: serde_json::Map::new(),
-            });
-        } else {
-            grant.withhold_continuation();
-        }
+        issuance::complete_approval(
+            record,
+            &mut response,
+            subject,
+            continuation,
+            now,
+            &self.endpoints.continuation,
+        );
 
         ok(&response)
     }

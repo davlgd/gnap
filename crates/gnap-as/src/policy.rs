@@ -38,6 +38,9 @@ pub enum Decision {
     ///
     /// The access granted may differ from the access requested; §3.2.1 requires
     /// the response to reflect what was actually granted.
+    /// This compatibility variant issues one token, using the first requested
+    /// slot when the request contains several. Use `ApproveTokens` to select
+    /// slots explicitly and keep their rights separate.
     Approve {
         /// The rights attached to the issued token.
         access: Vec<AccessItem>,
@@ -46,11 +49,36 @@ pub enum Decision {
         subject: Option<ReleasedSubject>,
     },
 
+    /// Approves an explicit selection of requested tokens (§§2.1.2, 3.2.2).
+    ///
+    /// Omitted labels are not issued; there is no separate pending state per
+    /// label. The selection must contain between 1 and 64 tokens, be unique,
+    /// and be drawn from the request. The upper bound limits SDK work; it is
+    /// not a protocol limit on the number of tokens a client may request.
+    /// Invalid policy output is a server configuration failure, not a client
+    /// error. All selected tokens are prepared and committed together.
+    ApproveTokens {
+        /// Requested token slots and their independently approved rights.
+        tokens: Vec<TokenApproval>,
+        /// Subject information, under the same release conditions as `Approve`.
+        subject: Option<ReleasedSubject>,
+    },
+
     /// Interaction with an RO is required before anything is released (§4).
     RequireInteraction,
 
     /// Refuse, with the error code to return (§3.6).
     Deny(ErrorCode),
+}
+
+/// One requested token slot selected by policy for issuance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenApproval {
+    /// The exact requested label, or `None` for an unlabelled singleton.
+    /// A labelled singleton retains its label too; labels are not normalized.
+    pub requested_label: Option<String>,
+    /// Approved rights for this token alone, not the union of sibling rights.
+    pub access: Vec<AccessItem>,
 }
 
 /// Subject information, and why the AS may release it (§3.4).

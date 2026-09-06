@@ -48,6 +48,20 @@ fn right(name: &str) -> AccessItem {
 struct GrantPolicy;
 impl Policy for GrantPolicy {
     fn evaluate(&self, request: &GrantRequest) -> Decision {
+        let requested = request.access_token.as_ref().unwrap();
+        if requested.cardinality == gnap_types::token::Cardinality::Multiple {
+            return Decision::ApproveTokens {
+                tokens: requested
+                    .tokens
+                    .iter()
+                    .map(|token| gnap_as::TokenApproval {
+                        requested_label: token.label.clone(),
+                        access: token.access.clone(),
+                    })
+                    .collect(),
+                subject: None,
+            };
+        }
         Decision::Approve {
             access: request.access_token.as_ref().unwrap().tokens[0]
                 .access
@@ -417,6 +431,93 @@ fn child_management_delete_does_not_touch_parent_and_rotation_is_refused() {
         snapshot(&server, &parent.value).revision,
         gnap_as::Revision(0)
     );
+}
+
+#[test]
+fn a_sibling_lifecycle_does_not_revoke_another_tokens_child() {
+    for method in ["POST", "DELETE"] {
+        let server = server();
+        let issued = decoded(&server.handle(
+            &signed(
+                &json!({"client":"client", "access_token":[
+                    {"label":"documents", "access":["folder"]},
+                    {"label":"reports", "access":["reports"]}
+                ]}),
+                client(),
+                1000,
+            ),
+            1000,
+        ));
+        let tokens = issued.access_token.unwrap().tokens;
+        let documents = &tokens[0];
+        let reports = &tokens[1];
+        let child = token(&derive(&server, &MemoryStorage::new(), documents, 1000));
+        let child_before = snapshot(&server, &child.value);
+        assert_eq!(
+            manage(&server, reports, method, client(), 1001).status,
+            if method == "POST" { 200 } else { 204 }
+        );
+        absent(&server, reports);
+        snapshot(&server, &documents.value);
+        assert_eq!(
+            snapshot(&server, &child.value).revision,
+            child_before.revision
+        );
+        assert_eq!(
+            manage(&server, documents, "DELETE", client(), 1002).status,
+            204
+        );
+        absent(&server, documents);
+        absent(&server, &child);
+        assert!(matches!(
+            server.storage().compare_exchange(
+                child_before.id,
+                child_before.revision,
+                child_before.aggregate
+            ),
+            Err(StoreError::Conflict)
+        ));
+    }
+}
+
+#[test]
+fn reapproving_a_batch_cascades_old_children_but_keeps_new_parents_live() {
+    let server = server();
+    let wanted = json!([
+        {"label":"documents", "access":["folder"]},
+        {"label":"reports", "access":["reports"]}
+    ]);
+    let issued = decoded(&server.handle(
+        &signed(
+            &json!({"client":"client", "access_token":wanted}),
+            client(),
+            1000,
+        ),
+        1000,
+    ));
+    let old = issued.access_token.unwrap().tokens;
+    let child = token(&derive(&server, &MemoryStorage::new(), &old[0], 1000));
+    let continuation = issued.r#continue.unwrap();
+    let patch = sign_request(
+        HttpRequest::new("PATCH", &continuation.uri)
+            .json_body(serde_json::to_vec(&json!({"access_token":wanted})).unwrap()),
+        client(),
+        Some(&continuation.access_token.value),
+        1005,
+    )
+    .unwrap();
+    let approved = decoded(&server.handle(&patch, 1005));
+    absent(&server, &child);
+    for previous in old {
+        absent(&server, &previous);
+    }
+    let new = approved.access_token.unwrap().tokens;
+    assert_eq!(new.len(), 2);
+    for current in &new {
+        snapshot(&server, &current.value);
+    }
+    let next_child = token(&derive(&server, &MemoryStorage::new(), &new[0], 1006));
+    snapshot(&server, &next_child.value);
 }
 
 #[test]
