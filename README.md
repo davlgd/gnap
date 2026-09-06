@@ -128,6 +128,8 @@ their own dependency locks and toolchain requirements:
   rotation and parent revocation. A signed application-specific AS check binds
   each resource request to live authority state and a shared nonce reservation.
   It is not RFC 9767 introspection or delegation to a different client key.
+  The [public delivery guide](docs/biscuit-public-delivery.md) documents its
+  three HTTPS origins, scoped key configuration and opt-in acceptance driver.
 
 Try the hosted [delegation demo](https://gnap-delegation.cleverapps.io)
 and [diagnostic workbench](https://gnap-conformance.cleverapps.io).

@@ -163,6 +163,36 @@ jobs:
           sleep 60
           python3 -B tools/smoke_lifecycle.py --demo http://127.0.0.1:18083 --workbench http://127.0.0.1:18084 --choice deny
 
+      - name: Exercise the public Biscuit acceptance driver locally
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          biscuit_test_directory=$(mktemp -d)
+          export KEY_SOURCE=directory KEY_DIRECTORY="$biscuit_test_directory/keys"
+          export AS_ORIGIN=http://127.0.0.1:18085 RS_ORIGIN=http://127.0.0.1:18086 CLIENT_ORIGIN=http://127.0.0.1:18087
+          apps/biscuit-files/target/debug/as --init-config "$KEY_DIRECTORY"
+          as_pid='' rs_pid='' client_pid=''
+          trap 'for service_pid in "$as_pid" "$rs_pid" "$client_pid"; do if [[ -n "$service_pid" ]]; then kill "$service_pid" 2>/dev/null || true; fi; done' EXIT
+          PORT=18085 apps/biscuit-files/target/debug/as > "$RUNNER_TEMP/biscuit-as.log" 2>&1 &
+          as_pid=$!
+          PORT=18086 apps/biscuit-files/target/debug/rs > "$RUNNER_TEMP/biscuit-rs.log" 2>&1 &
+          rs_pid=$!
+          PORT=18087 apps/biscuit-files/target/debug/client > "$RUNNER_TEMP/biscuit-client.log" 2>&1 &
+          client_pid=$!
+          wait_for_role() {
+            local endpoint="$1" service_pid="$2"
+            for attempt in {1..45}; do
+              kill -0 "$service_pid" 2>/dev/null || return 1
+              if curl --fail --silent --noproxy '*' --max-time 1 --output /dev/null "$endpoint/health"; then return 0; fi
+              sleep 1
+            done
+            return 1
+          }
+          wait_for_role "$AS_ORIGIN" "$as_pid"
+          wait_for_role "$RS_ORIGIN" "$rs_pid"
+          wait_for_role "$CLIENT_ORIGIN" "$client_pid"
+          python3 -B tools/smoke_biscuit.py --as "$AS_ORIGIN" --rs "$RS_ORIGIN" --client "$CLIENT_ORIGIN" --consent
+
   registries:
     name: Registry generation and upstream drift
     runs-on: ubuntu-latest
