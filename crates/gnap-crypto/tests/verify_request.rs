@@ -5,7 +5,9 @@ use gnap_crypto::digest::{content_digest, DigestAlgorithm};
 use gnap_crypto::httpsig::{sign, signature_base, Component, Message, SignatureInput, Tag};
 use gnap_crypto::proof::{ProofError, Signer, Verifier};
 use gnap_crypto::ps256::{Ps256Signer, Ps256Verifier};
-use gnap_crypto::verify::{verify_request, Accepted, Expectations, SignedRequest, VerifyError};
+use gnap_crypto::verify::{
+    verify_request, verify_request_with_policy, Accepted, Expectations, SignedRequest, VerifyError,
+};
 use std::cell::RefCell;
 use std::collections::HashSet;
 
@@ -413,4 +415,206 @@ fn the_verifiers_own_key_identity_is_checked() {
     )
     .unwrap_err();
     assert!(e.to_string().contains("registered-key"), "{e}");
+}
+
+/// A profile's nonce requirement belongs inside candidate selection, not after it.
+#[test]
+fn additional_policy_continues_to_a_signature_with_a_nonce() {
+    let message = Message {
+        method: "POST",
+        target_uri: URL,
+        content_digest: None,
+        authorization: None,
+        other: vec![],
+    };
+    let mut headers = forge(
+        &input(vec![Component::Method, Component::TargetUri], None),
+        &message,
+        "without",
+    );
+    headers.extend(forge(
+        &input(vec![Component::Method, Component::TargetUri], Some("fresh")),
+        &message,
+        "with",
+    ));
+    let request = SignedRequest {
+        method: "POST",
+        target_uri: URL,
+        headers: &headers,
+        body: None,
+    };
+    let seen = memory();
+    let nonces = |nonce: &str, _: u64| seen.borrow_mut().insert(nonce.to_owned());
+    let accepted = verify_request_with_policy(
+        &request,
+        &signer().verifier(),
+        &expectations(),
+        &nonces,
+        &|params| params.nonce.is_some(),
+    )
+    .unwrap();
+    assert_eq!(accepted.label, "with");
+    assert_eq!(*seen.borrow(), HashSet::from(["fresh".into()]));
+    let accepted =
+        verify_request(&request, &signer().verifier(), &expectations(), &nonces).unwrap();
+    assert_eq!(
+        accepted.label, "without",
+        "default GNAP policy keeps nonce optional"
+    );
+}
+
+#[test]
+fn policy_failure_describes_nonce_absence_without_guessing_the_policy_reason() {
+    let message = Message {
+        method: "POST",
+        target_uri: URL,
+        content_digest: None,
+        authorization: None,
+        other: vec![],
+    };
+    for (nonce, requires_nonce) in [(None, true), (None, false), (Some("do-not-echo"), false)] {
+        let headers = forge(
+            &input(vec![Component::Method, Component::TargetUri], nonce),
+            &message,
+            "candidate",
+        );
+        let request = SignedRequest {
+            method: "POST",
+            target_uri: URL,
+            headers: &headers,
+            body: None,
+        };
+        let error = verify_request_with_policy(
+            &request,
+            &signer().verifier(),
+            &expectations(),
+            &|_: &str, _: u64| panic!("policy rejection cannot consume a nonce"),
+            &|params| requires_nonce && params.nonce.is_some(),
+        )
+        .unwrap_err();
+        let expected = if nonce.is_none() {
+            "signature parameters do not meet the verifier's additional policy (no nonce parameter was presented)"
+        } else {
+            "signature parameters do not meet the verifier's additional policy"
+        };
+        assert_eq!(error, VerifyError::Rejected(expected.into()));
+        assert!(!error.to_string().contains("do-not-echo"));
+    }
+}
+
+#[test]
+fn policy_rejections_do_not_spend_nonces_or_verify_signatures() {
+    struct NeverVerify;
+    impl Verifier for NeverVerify {
+        fn verify(&self, _: &[u8], _: &[u8]) -> Result<(), ProofError> {
+            panic!("policy should reject before crypto")
+        }
+        fn algorithm(&self) -> &'static str {
+            "PS256"
+        }
+    }
+    let message = Message {
+        method: "POST",
+        target_uri: URL,
+        content_digest: None,
+        authorization: None,
+        other: vec![],
+    };
+    let mut headers = forge(
+        &input(vec![Component::Method, Component::TargetUri], Some("one")),
+        &message,
+        "one",
+    );
+    headers.extend(forge(
+        &input(vec![Component::Method, Component::TargetUri], Some("two")),
+        &message,
+        "two",
+    ));
+    let request = SignedRequest {
+        method: "POST",
+        target_uri: URL,
+        headers: &headers,
+        body: None,
+    };
+    assert!(verify_request_with_policy(
+        &request,
+        &NeverVerify,
+        &expectations(),
+        &|_: &str, _: u64| panic!("policy rejection cannot consume a nonce"),
+        &|_| false
+    )
+    .is_err());
+}
+
+#[test]
+fn policy_acceptance_does_not_trust_an_unproven_candidate() {
+    let message = Message {
+        method: "POST",
+        target_uri: URL,
+        content_digest: None,
+        authorization: None,
+        other: vec![],
+    };
+    let mut headers = forge(
+        &input(
+            vec![Component::Method, Component::TargetUri],
+            Some("same-nonce"),
+        ),
+        &message,
+        "forged",
+    );
+    headers[1].1 = "forged=:AAAA:".into();
+    headers.extend(forge(
+        &input(
+            vec![Component::Method, Component::TargetUri],
+            Some("same-nonce"),
+        ),
+        &message,
+        "genuine",
+    ));
+    let request = SignedRequest {
+        method: "POST",
+        target_uri: URL,
+        headers: &headers,
+        body: None,
+    };
+    let seen = memory();
+    let accepted = verify_request_with_policy(
+        &request,
+        &signer().verifier(),
+        &expectations(),
+        &|nonce: &str, _: u64| seen.borrow_mut().insert(nonce.to_owned()),
+        &|params| params.nonce.is_some(),
+    )
+    .unwrap();
+    assert_eq!(accepted.label, "genuine");
+    assert_eq!(*seen.borrow(), HashSet::from(["same-nonce".into()]));
+}
+
+#[test]
+fn mandatory_parameters_are_checked_before_the_additional_policy() {
+    let message = Message {
+        method: "POST",
+        target_uri: URL,
+        content_digest: None,
+        authorization: None,
+        other: vec![],
+    };
+    let mut wrong_tag = input(vec![Component::Method, Component::TargetUri], Some("fresh"));
+    wrong_tag.tag = Tag::GnapRotate;
+    let headers = forge(&wrong_tag, &message, "rotate");
+    let request = SignedRequest {
+        method: "POST",
+        target_uri: URL,
+        headers: &headers,
+        body: None,
+    };
+    assert!(verify_request_with_policy(
+        &request,
+        &signer().verifier(),
+        &expectations(),
+        &|_: &str, _: u64| panic!("invalid tag cannot consume nonce"),
+        &|_| panic!("mandatory parameter checks precede the profile policy")
+    )
+    .is_err());
 }

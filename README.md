@@ -37,6 +37,7 @@ These are project decisions, not claims that those features are already present.
 | [`gnap-core`](crates/gnap-core) | The grant state machine (§1.5): transitions, guards, response checking |
 | [`gnap-client`](crates/gnap-client) | The client instance role, over a pluggable HTTP transport |
 | [`gnap-as`](crates/gnap-as) | The authorization server role, free of any HTTP framework |
+| [`gnap-biscuit`](crates/gnap-biscuit) | A bounded file-access token profile: issuance, attenuation and proof-bound authorization, currently exercised in process |
 
 The workspace forbids unsafe code in its own crates. The protocol roles leave
 network and persistent storage I/O to the caller; clock and randomness helpers
@@ -296,9 +297,14 @@ Revoked-token records are removed. A later call to the old management URI is
 rejected because its key binding can no longer be verified; the idempotent
 revocation recommended in §6.2 would require retaining authentication metadata.
 
-Access-token values are opaque references: the SDK does not yet issue or validate
-JWT, Biscuit, Macaroon or ZCAP access tokens. Registry entries alone are not
-implementations. The AS issues neither bearer nor `durable` tokens.
+The AS's existing token path uses opaque references. The separate `gnap-biscuit`
+crate issues and verifies a restricted file-access profile, including local
+attenuation, HTTP request proof and a mandatory live-decision callback for
+revocation and replay policy. Its
+[executable example](crates/gnap-biscuit/examples/file_access.rs) runs in process;
+it is not yet an integrated GNAP grant flow, a distributed deployment or an
+authenticated revocation transport. JWT, Macaroon and ZCAP implementations are
+not supplied. The AS issues neither bearer nor `durable` tokens.
 
 Applications can select a different representation through
 [`TokenEncoder`](crates/gnap-as/src/encoding.rs) and
@@ -401,8 +407,7 @@ sections or prove that every description in this file matches the code.
 The layout:
 
 ```
-crates/          the six crates, lowest dependency first: registry, types,
-                 crypto, core, client, as
+crates/          protocol SDK crates and the Biscuit file-profile adapter
 registries/      the 23 IANA CSV files, vendored
 vectors/         test vectors and the state machine specification
 tools/           fetch the registries, and check what the code claims

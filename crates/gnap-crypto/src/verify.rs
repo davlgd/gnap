@@ -198,6 +198,33 @@ pub fn verify_request(
     expectations: &Expectations<'_>,
     nonces: &dyn NonceMemory,
 ) -> Result<Accepted, VerifyError> {
+    verify_request_with_policy(request, verifier, expectations, nonces, &|_| true)
+}
+
+/// Verifies a GNAP request with additional per-signature parameter requirements.
+///
+/// The predicate can only narrow acceptance: all mandatory GNAP checks remain.
+/// It runs after mandatory parameter checks but before cryptographic verification
+/// and nonce consumption. Its input is therefore **not authenticated**. Keep the
+/// predicate deterministic and free of side effects; it must not authorize an
+/// operation, record a nonce or trust a claim merely because it sees it here.
+///
+/// A rejected candidate does not stop examination of later signatures. For a
+/// profile requiring a nonce, pass `&|params| params.nonce.is_some()` instead of
+/// checking the first accepted signature after [`verify_request`] returns.
+///
+/// # Errors
+/// Returns the same errors as [`verify_request`], also rejecting candidates
+/// whose parameters do not meet the additional policy.
+/// A policy-refusal diagnostic notes nonce absence without inferring why the
+/// predicate rejected the candidate or authenticating its parameters.
+pub fn verify_request_with_policy(
+    request: &SignedRequest<'_>,
+    verifier: &dyn Verifier,
+    expectations: &Expectations<'_>,
+    nonces: &dyn NonceMemory,
+    policy: &dyn Fn(&ReceivedParams) -> bool,
+) -> Result<Accepted, VerifyError> {
     let (Some(input_field), Some(signature_field)) = (
         request.combined_header_value("signature-input"),
         request.combined_header_value("signature"),
@@ -219,7 +246,7 @@ pub fn verify_request(
         match candidate {
             Err(e) => last = Some(e.to_string()),
             Ok(candidate) => {
-                match accept_signature(request, verifier, expectations, nonces, candidate) {
+                match accept_signature(request, verifier, expectations, nonces, candidate, policy) {
                     Ok(accepted) => return Ok(accepted),
                     Err(reason) => last = Some(reason),
                 }
@@ -238,10 +265,21 @@ fn accept_signature(
     expectations: &Expectations<'_>,
     nonces: &dyn NonceMemory,
     candidate: &LabelledSignature,
+    policy: &dyn Fn(&ReceivedParams) -> bool,
 ) -> Result<Accepted, String> {
     let raw = &candidate.raw_params;
     let params = parse_signature_params(raw).map_err(|e| e.to_string())?;
     check_parameters(&params, verifier, expectations)?;
+    if !policy(&params) {
+        let hint = if params.nonce.is_none() {
+            " (no nonce parameter was presented)"
+        } else {
+            ""
+        };
+        return Err(format!(
+            "signature parameters do not meet the verifier's additional policy{hint}"
+        ));
+    }
 
     let components = parse_covered_components(raw).map_err(|e| e.to_string())?;
 

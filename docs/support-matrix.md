@@ -74,7 +74,7 @@ GNAP does not require every implementation to support every registered format.
 
 | Capability | RFC condition | Project decision | Current state and evidence |
 | --- | --- | --- | --- |
-| Biscuit access tokens | Conditional on selecting the format; RFC 9767 §2.2 | Required target | **Model only**: `TokenFormat::Biscuit` in [registry data](../crates/gnap-registry/src/generated.rs). No issuer, policy evaluator or attenuation scenario. |
+| Biscuit access tokens | Conditional on selecting the format; RFC 9767 §2.2 | Required target | **Partial**: [gnap-biscuit](../crates/gnap-biscuit/README.md) supplies a restricted file profile with issuance, structural checks, chain verification, local attenuation and proof-bound resource authorization. [Tests](../crates/gnap-biscuit/tests/file_profile.rs) and an [in-process example](../crates/gnap-biscuit/examples/file_access.rs) exercise the implementation. No integrated GNAP AS flow, deployed separate RS or authenticated revocation channel is supplied yet. This is an application profile, not support for every Biscuit feature. |
 | Signed JWT access tokens (`jwt-signed`) | Conditional on selecting the format; RFC 9767 §2.2 | Allowed alternative | **Model only**: registry name. No JWT issuer or validator supplied. |
 | Encrypted JWT access tokens (`jwt-encrypted`) | Conditional on selecting the format; RFC 9767 §2.2 | Allowed alternative | **Model only**: registry name. No JWE issuer or decryptor supplied. |
 | Macaroon and ZCAP access tokens | Conditional on selecting the format; RFC 9767 §2.2 | Outside current scope | **Model only**: names remain in the registry; no executable implementation is advertised. |

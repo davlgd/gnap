@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gnap-registry", "crates/gnap-types", "crates/gnap-crypto", "crates/gnap-core", "crates/gnap-client", "crates/gnap-as"]
+members = ["crates/gnap-registry", "crates/gnap-types", "crates/gnap-crypto", "crates/gnap-core", "crates/gnap-client", "crates/gnap-as", "crates/gnap-biscuit"]
 
 # Investigation spikes are kept out of the workspace so their dependencies do
 # not constrain how it resolves. These directories are not part of the
