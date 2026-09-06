@@ -4,9 +4,9 @@
 //! HTTP transport is a trait, so this crate forces no runtime on its users and
 //! can be driven with no network at all.
 //!
-//! What makes this more than a wrapper around an HTTP call is what it refuses:
-//! the client-side MUSTs of the RFC are enforced on every response, so an AS
-//! that breaks them is caught rather than followed.
+//! The session checks response shape, requested token labels and interaction
+//! data before adopting them. Its implemented checks and adapter limits do not
+//! amount to a claim of complete RFC conformance.
 //!
 //! # Supplying a transport
 //!
@@ -62,6 +62,22 @@
 //! continuation; losing the continuation does not itself revoke held tokens.
 //! Applications needing remote live-state guarantees must enforce them at the RS.
 //!
+//! # Token presentation keys
+//!
+//! [`Session::rotate_key`] proves the old and new keys together and adopts the
+//! new signer only after a valid response. Each token keeps its own signer;
+//! the grant continuation keeps the original client key. [`Session::signer_for`]
+//! selects a resource-request signer without requiring a token management API.
+//! It refuses bearer tokens and initially explicit bindings the session cannot
+//! resolve. Management also refuses unknown explicit bindings before signing.
+//! These are adapter limits, not GNAP prohibitions on those token forms.
+//! A new session does not recover another session's rotated-key registry.
+//! Use [`Session::rotate_key_owned`] to let a session retain a runtime-generated
+//! signer's `Arc`; [`Session::rotate_key`] still accepts a borrowed signer.
+//! `signer_for` now borrows the session, so its result cannot be held across a
+//! mutation that might release the owned key. This is a lifetime migration for
+//! callers that previously kept the returned reference independently.
+//!
 //! # Callback clocks and API migration
 //!
 //! `accept_callback`, `accept_redirect` and `accept_push` now require a `now`
@@ -87,6 +103,7 @@
 //! This is not a claim to implement a configurable client timeout policy.
 
 pub mod error;
+pub mod rotation;
 pub mod session;
 pub mod signing;
 pub mod transport;

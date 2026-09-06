@@ -15,13 +15,14 @@ use axum::{
 use biscuit_auth::PublicKey;
 use gnap_biscuit::VerifiedToken;
 use gnap_client::{HttpRequest, HttpTransport, Session};
-use gnap_crypto::{httpsig::fresh_nonce, Ps256Signer};
+use gnap_crypto::{httpsig::fresh_nonce, Ps256Signer, Signer};
 use gnap_types::{message::GrantRequest, token::TokenValue};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     sync::mpsc::{self, SyncSender},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -41,8 +42,27 @@ struct Browser<'a> {
     session: Session<'a, Network, Ps256Signer>,
     selected: Option<TokenValue>,
     retired: Option<TokenValue>,
+    current_key: Option<Arc<Ps256Signer>>,
+    retired_key: Option<Arc<Ps256Signer>>,
+    previous_key: Option<Arc<Ps256Signer>>,
+    key_rotations: u32,
+    key_attempts: u32,
     born: Instant,
     operations: u32,
+}
+
+#[derive(Default)]
+struct KeyGenerationBudget(VecDeque<Instant>);
+impl KeyGenerationBudget {
+    fn reserve(&mut self, now: Instant) -> bool {
+        self.0
+            .retain(|at| now.duration_since(*at) < Duration::from_secs(60));
+        if self.0.len() >= 4 {
+            return false;
+        }
+        self.0.push_back(now);
+        true
+    }
 }
 pub fn grant(signer: &Ps256Signer, rs: &str) -> Result<GrantRequest, String> {
     let key = signer
@@ -71,6 +91,7 @@ fn worker(
         return;
     };
     let mut sessions: HashMap<String, Browser<'_>> = HashMap::new();
+    let mut key_budget = KeyGenerationBudget::default();
     loop {
         sessions.retain(|_, s| s.born.elapsed() < Duration::from_secs(TTL));
         let command = match commands.recv_timeout(Duration::from_secs(10)) {
@@ -98,6 +119,11 @@ fn worker(
                         session,
                         selected: None,
                         retired: None,
+                        current_key: None,
+                        retired_key: None,
+                        previous_key: None,
+                        key_rotations: 0,
+                        key_attempts: 0,
                         born: Instant::now(),
                         operations: 0,
                     },
@@ -115,7 +141,7 @@ fn worker(
             }
             if command.action == "status" {
                 return Ok(
-                    json!({"event":"Private session present.","attenuated":s.selected.is_some(),"retired_available":s.retired.is_some()}),
+                    json!({"event":"Private session present.","attenuated":s.selected.is_some(),"retired_available":s.retired.is_some(),"key_rotations":s.key_rotations}),
                 );
             }
             let current = || {
@@ -152,16 +178,48 @@ fn worker(
                         json!({"event":"Local restrictive block added; client key unchanged.","file":file,"seconds":seconds}),
                     )
                 }
-                "rotate" => {
+                action @ ("rotate" | "rotate-key") => {
                     let retiring = s.selected.clone().or_else(current);
-                    s.session
-                        .rotate_token(None, now)
-                        .map_err(|_| "rotation refused or AS unavailable")?;
+                    let retiring_key = s.current_key.clone();
+                    if action == "rotate-key" {
+                        if s.key_attempts >= 3 {
+                            return Err(
+                                "this example allows three key-generation attempts per session"
+                                    .into(),
+                            );
+                        }
+                        if !key_budget.reserve(Instant::now()) {
+                            return Err("key generation is busy; this process allows four attempts per minute".into());
+                        }
+                        s.key_attempts += 1;
+                        let id = fresh_nonce().map_err(|_| "key randomness unavailable")?;
+                        let replacement = Arc::new(
+                            Ps256Signer::generate(2048, format!("rotation-{id}"))
+                                .map_err(|_| "key generation failed")?,
+                        );
+                        let key = serde_json::from_value(json!({
+                            "proof": "httpsig",
+                            "jwk": replacement.public_jwk().map_err(|_| "public key unavailable")?
+                        }))
+                        .map_err(|_| "public key encoding failed")?;
+                        s.session
+                            .rotate_key_owned(None, replacement.clone(), &key, now)
+                            .map_err(|_| "key rotation refused or AS unavailable")?;
+                        s.previous_key = retiring_key.clone();
+                        s.current_key = Some(replacement);
+                        s.key_rotations += 1;
+                    } else {
+                        s.session
+                            .rotate_token(None, now)
+                            .map_err(|_| "rotation refused or AS unavailable")?;
+                    }
                     s.retired = retiring;
+                    s.retired_key = retiring_key;
                     s.selected = None;
-                    Ok(
-                        json!({"event":"Authority rotated. Old tokens and their descendants should now be denied."}),
-                    )
+                    Ok(json!({"event": if action == "rotate-key" {
+                        "Presentation key and authority replaced. Test the previous key and retired token."
+                    } else { "Authority rotated. Old tokens and their descendants should now be denied." },
+                    "key_rotations": s.key_rotations}))
                 }
                 "revoke" => {
                     let retiring = s.selected.clone().or_else(current);
@@ -169,12 +227,17 @@ fn worker(
                         .revoke_token(None, now)
                         .map_err(|_| "revocation refused or AS unavailable")?;
                     s.retired = retiring;
+                    s.retired_key = s.current_key.take();
                     s.selected = None;
                     Ok(
                         json!({"event":"Authority revoked. All its descendants should now be denied."}),
                     )
                 }
-                action @ ("read" | "write" | "read-draft" | "write-notes" | "check-retired") => {
+                action @ ("read" | "write" | "read-draft" | "write-notes" | "check-retired"
+                | "check-old-key") => {
+                    if action == "check-old-key" && s.key_rotations == 0 {
+                        return Err("no previous presentation key is available".into());
+                    }
                     let value = if action == "check-retired" {
                         s.retired.clone()
                     } else {
@@ -196,8 +259,23 @@ fn worker(
                         request.body =
                             Some(b"A synthetic draft updated by a proof-bound request.\n".to_vec());
                     }
-                    let request = gnap_client::sign_request(request, &signer, Some(&value), now)
-                        .map_err(|_| "resource signing failed")?;
+                    let presentation: &dyn Signer = match action {
+                        "check-retired" => match s.retired_key.as_ref() {
+                            Some(key) => key.as_ref(),
+                            None => &signer,
+                        },
+                        "check-old-key" => match s.previous_key.as_ref() {
+                            Some(key) => key.as_ref(),
+                            None => &signer,
+                        },
+                        _ => s
+                            .session
+                            .signer_for(None)
+                            .map_err(|_| "presentation key unavailable")?,
+                    };
+                    let request =
+                        gnap_client::sign_request(request, presentation, Some(&value), now)
+                            .map_err(|_| "resource signing failed")?;
                     let response = rs_network.send(request).map_err(|_| "RS unavailable")?;
                     let body = serde_json::from_slice::<Value>(&response.body)
                         .map_err(|_| "unexpected RS response")?;
@@ -262,6 +340,8 @@ async fn action(
         Err(error) => return http::reply(http::denied(error.status().as_u16())),
     };
     let start = action == "start";
+    // RSA generation is bounded in count, but can outlast an ordinary request.
+    let response_wait = if action == "rotate-key" { 30 } else { 5 };
     let id = if start {
         match fresh_nonce() {
             Ok(n) => n,
@@ -286,7 +366,7 @@ async fn action(
     {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    let response = match tokio::time::timeout(Duration::from_secs(5), receive).await {
+    let response = match tokio::time::timeout(Duration::from_secs(response_wait), receive).await {
         Ok(Ok(Ok(result))) => http::answer(200, result),
         Ok(Ok(Err(error))) => http::answer(400, json!({"error":error})),
         _ => http::denied(503),
@@ -344,6 +424,20 @@ mod tests {
         http::Request,
     };
     use tower::ServiceExt;
+
+    #[test]
+    fn key_generation_budget_is_shared_bounded_and_uses_a_sliding_window() {
+        let mut budget = KeyGenerationBudget::default();
+        let origin = Instant::now();
+        for seconds in 0..4 {
+            assert!(budget.reserve(origin + Duration::from_secs(seconds)));
+        }
+        assert!(!budget.reserve(origin + Duration::from_secs(59)));
+        assert!(budget.reserve(origin + Duration::from_secs(60)));
+        assert!(!budget.reserve(origin + Duration::from_secs(60)));
+        assert!(budget.reserve(origin + Duration::from_secs(61)));
+        assert_eq!(budget.0.len(), 4);
+    }
 
     #[tokio::test]
     async fn malformed_json_never_reflects_field_names_or_values() {

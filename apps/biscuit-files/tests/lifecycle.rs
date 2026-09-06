@@ -18,6 +18,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "lifecycle/key_rotation.rs"]
+mod key_rotation;
+
 fn client() -> &'static Ps256Signer {
     static KEY: OnceLock<Ps256Signer> = OnceLock::new();
     KEY.get_or_init(|| {
@@ -404,7 +407,53 @@ fn exact_attenuation_deadline_and_post_lookup_clock_are_enforced() {
 }
 
 #[test]
-fn encoder_refuses_unresolved_clients_wrong_issuer_or_missing_deadlines() {
+fn disabled_key_rotation_preserves_the_native_token_and_resource_access() {
+    let mut f = fixture();
+    f.engine = f.engine.with_key_rotation(false);
+    let direct = Direct(&f.engine, Cell::new(f.now));
+    let replacement = Ps256Signer::generate(2048, "unused-replacement").unwrap();
+    let mut session = Session::new(&direct, client(), "https://as.example/gnap");
+    let issued = session
+        .start(&grant(client(), "https://rs.example").unwrap(), f.now)
+        .unwrap();
+    let token = issued.response().access_token.as_ref().unwrap().tokens[0].clone();
+    let before = f
+        .store
+        .lookup(GrantSelector::AccessToken(token.value.as_str()))
+        .unwrap()
+        .unwrap();
+    let key = serde_json::from_value(serde_json::json!({
+        "proof": "httpsig", "jwk": replacement.public_jwk().unwrap()
+    }))
+    .unwrap();
+    let error = session
+        .rotate_key(None, &replacement, &key, f.now)
+        .unwrap_err();
+    let gnap_client::ClientError::Server(error) = error else {
+        panic!("expected AS refusal");
+    };
+    assert_eq!(error.code.as_str(), "key_rotation_not_supported");
+    assert_eq!(session.usable_tokens(f.now).unwrap(), vec![&token]);
+    let after = f
+        .store
+        .lookup(GrantSelector::AccessToken(token.value.as_str()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.id, after.id);
+    assert_eq!(before.revision, after.revision);
+    assert_eq!(
+        f.rs.handle_with_clock(
+            &proof(&token.value, "GET", "notes", f.now),
+            &mut || Some(f.now),
+            &mut |ids, accepted| lookup(&f, ids, accepted, f.now),
+        )
+        .status,
+        200
+    );
+}
+
+#[test]
+fn encoder_preserves_supported_bindings_and_refuses_unrepresentable_contexts() {
     use gnap_as::{TokenEncoder, TokenEncodingContext};
     let encoder = authorization::Encoder::new(
         KeyPair::new(),
@@ -417,6 +466,7 @@ fn encoder_refuses_unresolved_clients_wrong_issuer_or_missing_deadlines() {
     let mut context = TokenEncodingContext {
         issuer: "https://other.example/gnap",
         client: &request.client,
+        binding: None,
         access: rights,
         issued_at: 1_000,
         expires_in: Some(1200),
@@ -433,6 +483,22 @@ fn encoder_refuses_unresolved_clients_wrong_issuer_or_missing_deadlines() {
     context.client = &request.client;
     let encoded = encoder.encode(&context).unwrap();
     assert_eq!(encoded.identifier.unwrap().len(), 64);
+    let key = &request.client.as_value().unwrap().key;
+    context.binding = Some(key);
+    assert!(encoder.encode(&context).is_ok());
+    for invalid in [
+        serde_json::json!("unresolved-key"),
+        serde_json::json!({"proof": "mtls", "jwk": client().public_jwk().unwrap()}),
+        serde_json::json!({"proof": {"method": "httpsig", "unknown": true}, "jwk": client().public_jwk().unwrap()}),
+        serde_json::json!({"proof": "httpsig", "jwk": {"kty":"RSA","alg":"PS256","kid":"incomplete"}}),
+    ] {
+        let invalid = serde_json::from_value(invalid).unwrap();
+        let invalid_context = TokenEncodingContext {
+            binding: Some(&invalid),
+            ..context
+        };
+        assert!(encoder.encode(&invalid_context).is_err());
+    }
 }
 
 #[test]

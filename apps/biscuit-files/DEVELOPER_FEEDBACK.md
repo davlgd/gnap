@@ -11,6 +11,24 @@ The adapter rejects unresolved client references, unsupported proof methods,
 missing lifetimes and issuer mismatches. It does not infer authorization from
 the encoded token or mutate the AS store from inside the encoder.
 
+The SDK's optional token-key rotation adds an explicit binding to the encoder
+context. Ignoring it would mint claims for the original grant key even after
+the AS had accepted a new presentation key. The encoder now mints with that
+binding, and the authoritative resource-nonce store selects the same key. The
+bounded proof memory reserves both nonces atomically in its ordinary namespace.
+The fixed demonstration policy permits this operation only after the SDK has
+validated both linked proofs; the original grant identity does not change.
+
+Generating replacement keys in the browser worker exposed an ownership gap:
+the borrowed SDK API required storage outside the session. `rotate_key_owned`
+lets the session retain an `Arc` without a leak or a global replacement key.
+Resource requests use `signer_for`; explicit rejection probes retain only a
+bounded set of old handles. Tests cover two key changes through the three
+processes and distinguish an invalid old-key proof from a valid proof of a
+retired native authority. A key-cycle test also prevents silently resetting
+the old key's authoritative nonce history. Key generation is capped per session
+and per process; the shared serial worker remains a demonstration limitation.
+
 The first missing client capability was a public request-signing operation for
 an explicitly supplied token. An attenuated descendant is not the original
 token held by `Session`, and file writes are not JSON. The new SDK
@@ -45,8 +63,8 @@ instances. Retention uses a monotonic clock, global and per-key quotas, an
 explicit clock-offset budget and refusal on detected clock failure. None of
 this makes the application channel RFC 9767 introspection.
 
-The remaining limits are deliberate and visible: one configured client key,
-synthetic shared files, fixed immediate approval, authority-wide revocation,
+The remaining limits are deliberate and visible: one configured grant-client
+identity, synthetic shared files, fixed immediate approval, authority-wide revocation,
 bounded in-memory state and no public deployment claim. Local attenuation
 preserves the client's key and is not RFC 9767 downstream token derivation.
 

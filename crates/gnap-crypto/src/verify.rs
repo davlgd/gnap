@@ -51,7 +51,7 @@ impl SignedRequest<'_> {
 
     /// The instances combined as RFC 9421 §2.1 has them: each trimmed of SP
     /// and HTAB, joined by a single comma and a single space.
-    fn combined_header_value(&self, name: &str) -> Option<String> {
+    pub(crate) fn combined_header_value(&self, name: &str) -> Option<String> {
         let values: Vec<&str> = self
             .header_values(name)
             .map(|v| v.trim_matches([' ', '\t']))
@@ -267,9 +267,30 @@ fn accept_signature(
     candidate: &LabelledSignature,
     policy: &dyn Fn(&ReceivedParams) -> bool,
 ) -> Result<Accepted, String> {
+    let accepted = authenticate_signature(
+        request,
+        verifier,
+        expectations,
+        candidate,
+        policy,
+        Tag::Gnap,
+    )?;
+    remember_signature_nonce(&accepted.params, expectations.now, nonces)?;
+    Ok(accepted)
+}
+
+/// Authentication without nonce consumption, shared by ordinary and paired proofs.
+pub(crate) fn authenticate_signature(
+    request: &SignedRequest<'_>,
+    verifier: &dyn Verifier,
+    expectations: &Expectations<'_>,
+    candidate: &LabelledSignature,
+    policy: &dyn Fn(&ReceivedParams) -> bool,
+    tag: Tag,
+) -> Result<Accepted, String> {
     let raw = &candidate.raw_params;
     let params = parse_signature_params(raw).map_err(|e| e.to_string())?;
-    check_parameters(&params, verifier, expectations)?;
+    check_parameters(&params, verifier, expectations, tag)?;
     if !policy(&params) {
         let hint = if params.nonce.is_none() {
             " (no nonce parameter was presented)"
@@ -335,12 +356,28 @@ fn accept_signature(
     }
     .with_fields(&components, |name| {
         request.header_values(name).collect::<Vec<_>>()
-    });
+    })
+    .with_dictionary_fields(&components, |name| {
+        request.header_values(name).collect::<Vec<_>>()
+    })
+    .map_err(|error| error.to_string())?;
     let base = signature_base(&message, &components, raw).map_err(|e| e.to_string())?;
     verifier
         .verify(base.as_bytes(), &candidate.signature)
         .map_err(|e| e.to_string())?;
 
+    Ok(Accepted {
+        label: candidate.label.clone(),
+        params,
+        components,
+    })
+}
+
+fn remember_signature_nonce(
+    params: &ReceivedParams,
+    now: u64,
+    nonces: &dyn NonceMemory,
+) -> Result<(), String> {
     // §7.3.1 — "When included, the verifier MUST determine that the nonce
     // value is unique within a reasonably short time period".
     //
@@ -350,7 +387,7 @@ fn accept_signature(
     // signature, and a second candidate in the same message would then be
     // refused as a replay of the first.
     if let Some(nonce) = &params.nonce {
-        if !nonces.remember_nonce(nonce, expectations.now) {
+        if !nonces.remember_nonce(nonce, now) {
             return Err(format!(
                 "the signature nonce `{nonce}` has already been seen; it MUST be \
                  unique (RFC 9635 §7.3.1)"
@@ -358,11 +395,7 @@ fn accept_signature(
         }
     }
 
-    Ok(Accepted {
-        label: candidate.label.clone(),
-        params,
-        components,
-    })
+    Ok(())
 }
 
 /// The checks that need only the signature parameters (§7.3.1): the tag, the
@@ -374,6 +407,7 @@ fn check_parameters(
     params: &ReceivedParams,
     verifier: &dyn Verifier,
     expectations: &Expectations<'_>,
+    tag: Tag,
 ) -> Result<(), String> {
     // §7.3.1 — "The explicit alg signature parameter MUST NOT be included",
     // since the algorithm comes from the key.
@@ -387,13 +421,13 @@ fn check_parameters(
 
     // §7.3.1 — "The signer MUST include the tag signature parameter with the
     // value gnap, and the verifier MUST verify that the parameter exists with
-    // this value." `gnap-rotate` belongs to the key rotation of §7.3.1.1,
-    // which no role here implements; accepting it would accept a signature
-    // made for another purpose.
-    if params.tag.as_deref() != Some(Tag::Gnap.as_str()) {
+    // this value." Only the paired verifier requests the alternative tag
+    // `gnap-rotate` for the new key's proof (§7.3.1.1). Ordinary verification
+    // remains restricted to `gnap`.
+    if params.tag.as_deref() != Some(tag.as_str()) {
         return Err(format!(
             "the signature carries tag={:?}; the verifier MUST verify that the tag \
-             exists with the value `gnap` (RFC 9635 §7.3.1)",
+             exists with the value `{tag}` (RFC 9635 §7.3.1/§7.3.1.1)",
             params.tag
         ));
     }

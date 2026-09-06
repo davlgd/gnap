@@ -2818,9 +2818,8 @@ fn a_token_is_revoked_through_its_management_api() {
 /// for this client instance or lack of capability by the AS, the AS MUST return
 /// a `key_rotation_not_supported` error code."
 ///
-/// Binding a new key needs the two simultaneous proofs of §7.3.1.1, which this
-/// server does not implement. §6.1.1-M08 is written for exactly that, so the
-/// answer is the one it names rather than a silent rotation of the value alone.
+/// This server instance has not opted into key rotation. It refuses a request
+/// carrying a usable public key rather than silently rotating only the value.
 #[test]
 fn binding_a_new_key_is_refused_by_the_code_the_rfc_names() {
     let as_ = server();
@@ -2831,15 +2830,17 @@ fn binding_a_new_key_is_refused_by_the_code_the_rfc_names() {
         .manage
         .unwrap();
 
+    let replacement = Ps256Signer::generate(2048, "rotation-candidate").unwrap();
     let with_a_key = signed_continuation(
         &signer,
         "POST",
         &manage.uri,
         manage.access_token.value.as_str(),
         Some(
-            br#"{"key":{"proof":"httpsig",
-                        "jwk":{"kty":"RSA","kid":"xyz-2","alg":"PS256"}}}"#
-                .to_vec(),
+            serde_json::to_vec(&serde_json::json!({
+                "key": {"proof": "httpsig", "jwk": replacement.public_jwk().unwrap()}
+            }))
+            .unwrap(),
         ),
         1_020,
     );

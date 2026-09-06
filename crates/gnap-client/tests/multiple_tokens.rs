@@ -486,7 +486,8 @@ fn a_rotation_is_compared_by_meaning_not_by_bytes() {
         );
     }
 
-    // Two explicit keys have to match as written.
+    // An initially explicit binding is not known to this session. Even an
+    // equivalent key needs an adapter; no management proof is sent by guessing.
     let bound = format!(
         r#"{{"access_token":{{"value":"{DOCUMENTS}","access":["documents:read"],
             "key":{{"proof":"httpsig","jwk":{}}},{}}}}}"#,
@@ -496,10 +497,13 @@ fn a_rotation_is_compared_by_meaning_not_by_bytes() {
     let as_ = FakeAs::with(vec![&bound, &spelled_out(&sk.public_jwk().unwrap())]);
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&single(None), 1_000).unwrap();
-    assert_eq!(s.rotate_token(None, 1_050).unwrap().value.as_str(), ROTATED);
+    let e = s.rotate_token(None, 1_050).unwrap_err();
+    assert!(matches!(e, ClientError::Usage(_)), "{e}");
+    assert_eq!(as_.sent(), 1);
     let as_ = FakeAs::with(vec![&bound, &spelled_out(&impostor.public_jwk().unwrap())]);
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&single(None), 1_000).unwrap();
     let e = s.rotate_token(None, 1_050).unwrap_err();
-    assert!(e.to_string().contains("key binding"), "{e}");
+    assert!(matches!(e, ClientError::Usage(_)), "{e}");
+    assert_eq!(as_.sent(), 1);
 }

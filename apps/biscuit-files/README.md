@@ -7,8 +7,8 @@ one locally, then prove possession of its key while presenting that exact
 descendant to the RS.
 
 The files are synthetic. The fixed AS policy immediately grants **read notes**
-and **write draft** for 1200 seconds to one configured client key. It does not
-request resource-owner consent or identify a human user. The two rights remain
+and **write draft** for 1200 seconds, initially bound to one configured client
+key. It does not request resource-owner consent or identify a human user. The two rights remain
 separate: read notes does not grant read draft, and write draft does not grant
 write notes.
 
@@ -60,13 +60,29 @@ replaces the authority and restores the original approved rights on the new
 token. Test the retired descendant: it is denied. Revocation likewise retires
 the authority and all its descendants.
 
+**Rotate token value** keeps the current presentation key. **Rotate presentation
+key** generates a new PS256 key in the client process, stored in this browser
+session's state, and proves the old and new keys together to the AS. Read again, then use
+**Test the previous key** and **Test the retired token**: both must be refused.
+The retired-token probe signs with that token's correct old key, so its refusal
+tests live authority removal, not merely a mismatched signature.
+
+Grant requests still authenticate the configured client identity. A key change
+can bind its token to another proven public PS256 key without changing that
+identity, the registered RS key or the Biscuit signing root. Both forms of
+rotation replace the managed parent authority and restore its originally
+approved rights; they do not carry a selected descendant's local restrictions
+onto the new parent.
+
 Attenuation adds only the profile's typed exact-resource and deadline checks.
 Restrictions accumulate, so a later block cannot undo an earlier one. This
 preserves the client key; it is not delegation to a new key or RFC 9767
 downstream token derivation. Token values, management credentials and private
 keys stay in the client process, not in browser storage or API results.
-Browser sessions have separate tokens but share the configured client key and
-synthetic files; this is not a multi-user identity model.
+Browser sessions have separate tokens and runtime-generated replacement keys,
+but share the initial configured client key and synthetic files. This is not a
+multi-user identity model. A bounded set of old key handles remains in session
+memory for the explicit rejection probes; it is released with that session.
 
 ## A live, one-use resource decision
 
@@ -98,11 +114,15 @@ correlation headers are not signatures and do not replace TLS.
 
 A unique, live token record must match the authority identifier. Under the same
 lock that protects issuance, rotation and removal, the AS checks its lifetime,
-derives the client identity from its RSA public modulus/exponent, and reserves
-the resource nonce for that key. The reservation is not scoped to `kid`, an
-authority or an RS instance: changing any of these must not reopen that nonce.
+derives the token's current presentation-key identity from its RSA public
+modulus/exponent, and reserves the resource nonce for that key. The reservation
+is not scoped to `kid`, an authority or an RS instance: changing any of these
+must not reopen that nonce.
 The AS trusts its configured RS to supply parameters from a successfully proved,
 locally authorized request; it does not reverify a resource signature here.
+Changing to different RSA material gives the AS a different nonce scope;
+returning to an earlier key does not erase its retained history. The RS also
+keeps a stricter process-local global nonce filter as an early rejection step.
 
 The SDK owns the native-identifier and credential indexes. Its atomic grant
 store publishes replacements only against the revision that was read; a stale
@@ -161,7 +181,8 @@ directory identified by `KEY_DIRECTORY`:
 The shared initialization directory is a local convenience, not a recommendation
 to mount every key into every deployed process. No role loads another role's
 private key. Certificate validation remains enabled. Production key custody,
-rotation and durable storage are outside this example.
+registered-client/root/RS key reconfiguration and durable storage remain outside
+this example; per-token presentation-key rotation is demonstrated here.
 
 For Clever Cloud, select `KEY_SOURCE=environment` and omit `KEY_DIRECTORY`.
 Configure the three public origin variables as above, using the deployed HTTPS
@@ -218,6 +239,13 @@ revocation do not erase that key's reservations. The proxy must also bound
 connections, headers and ingress rates; these limits are not a general
 distributed rate-limiting service.
 
+Runtime key generation allows three attempts per browser session and four
+attempts per process over a rolling minute, counting failures too. The worker
+executes commands serially, so generation can delay other sessions. The HTTP
+wait for a key change is 30 seconds rather than the usual five; a timeout does
+not establish that the AS rejected the change. Check session state before
+deciding what to do next. These are demonstration limits, not GNAP requirements.
+
 Resource `created` must be within 300 seconds of AS time, with a stricter
 future bound of 90 seconds. This is application policy, not a GNAP requirement.
 The deployment budgets at most 60 seconds of AS/RS clock offset; the RS accepts
@@ -262,6 +290,11 @@ AS outage after a successful read. It also replays an exact request after an
 RS restart, races it against two RS instances at the same public authority,
 and verifies that AS restart requires a new grant. Retired-token tests generate a new
 signature, so nonce replay is not mistaken for successful revocation.
+That process flow also changes the presentation key twice, checks reads and
+writes with each adopted key, and refuses previous-key and retired-token probes.
+Targeted lifecycle tests distinguish wrong-key refusal before the live callback
+from retired-authority refusal after it, and preserve nonce history across a
+key cycle even when both keys use the same `kid`.
 
 Additional tests exercise canonical authorities and worker admission after an
 HTTP waiter is canceled, configuration through injected lookups, and redacted

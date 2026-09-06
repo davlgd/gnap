@@ -2,7 +2,7 @@
 
 use gnap_as::{
     DerivedGrantStore, GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantStore,
-    MemoryStorage, NonceStore, Revision, Storage, StoreError, TokenRecord,
+    MemoryStorage, NonceStore, Revision, RotationNonceStore, Storage, StoreError, TokenRecord,
 };
 use gnap_core::Grant;
 use std::sync::Arc;
@@ -217,6 +217,7 @@ fn abandoned_and_stale_candidates_write_nothing() {
 fn a_shared_store_is_the_store_itself() {
     fn accepts<S: Storage>(_: &S) {}
     fn derives<S: DerivedGrantStore>(_: &S) {}
+    fn rotates<S: RotationNonceStore>(_: &S) {}
     let shared = Arc::new(MemoryStorage::new());
     let borrowed: &MemoryStorage = &shared;
     accepts(&shared);
@@ -224,6 +225,8 @@ fn a_shared_store_is_the_store_itself() {
     // The shared forms keep the optional derivation capability as well.
     derives(&shared);
     derives(&borrowed);
+    rotates(&shared);
+    rotates(&borrowed);
     let original = shared.create(populated("one")).unwrap();
     let mut candidate = borrowed
         .lookup(GrantSelector::Management("handle-one"))

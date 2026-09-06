@@ -15,6 +15,13 @@ pub struct TokenEncodingContext<'a> {
     /// This may be a reference. An encoder needing public key material must
     /// resolve it from trusted configuration or fail; an identifier is not a key.
     pub client: &'a Client,
+    /// Explicit token presentation key, if different from the implicit client
+    /// binding. `None` means the key of `client`; `Some` takes precedence over
+    /// that key, but does not change the original client's identity.
+    ///
+    /// Key-aware encoders must preserve this binding or return an error. They
+    /// must not continue encoding only `client` after a token's key is rotated.
+    pub binding: Option<&'a gnap_types::key::Key>,
     /// The rights approved by policy, not the unfiltered client request.
     pub access: &'a [AccessItem],
     /// Issuance time supplied to the server, in Unix seconds.

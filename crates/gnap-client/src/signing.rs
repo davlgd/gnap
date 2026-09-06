@@ -26,10 +26,28 @@ use gnap_types::token::TokenValue;
 /// Content-Digest headers, regardless of case. Also fails if secure randomness
 /// or signing fails. It never silently replaces a supplied security header.
 pub fn sign_request(
-    mut request: HttpRequest,
-    signer: &impl Signer,
+    request: HttpRequest,
+    signer: &(impl Signer + ?Sized),
     token: Option<&TokenValue>,
     now: u64,
+) -> Result<HttpRequest, ClientError> {
+    sign_request_labelled(request, signer, token, now, "sig1")
+}
+
+/// [`sign_request`] with a chosen signature label.
+///
+/// The label names the signature within `Signature-Input` and `Signature`
+/// (RFC 9421 §4.1); a key rotation covers the first signature by that name.
+///
+/// # Errors
+///
+/// As [`sign_request`].
+pub(crate) fn sign_request_labelled(
+    mut request: HttpRequest,
+    signer: &(impl Signer + ?Sized),
+    token: Option<&TokenValue>,
+    now: u64,
+    label: &str,
 ) -> Result<HttpRequest, ClientError> {
     const RESERVED: [&str; 4] = [
         "Authorization",
@@ -75,7 +93,7 @@ pub fn sign_request(
         nonce: Some(fresh_nonce()?),
         tag: Tag::Gnap,
     };
-    let (signature_input, signature) = sign(&message, &input, signer, "sig1")?;
+    let (signature_input, signature) = sign(&message, &input, &Borrowed(signer), label)?;
     if let Some(value) = authorization {
         request = request.header("Authorization", value);
     }
@@ -85,4 +103,20 @@ pub fn sign_request(
     Ok(request
         .header("Signature-Input", signature_input)
         .header("Signature", signature))
+}
+
+/// A borrowed signer, sized so that it can be handed to the signing helpers
+/// whether the caller holds a concrete key or a `dyn Signer`.
+pub(crate) struct Borrowed<'a, S: ?Sized>(pub &'a S);
+
+impl<S: Signer + ?Sized> Signer for Borrowed<'_, S> {
+    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, gnap_crypto::ProofError> {
+        self.0.sign(data)
+    }
+    fn key_id(&self) -> &str {
+        self.0.key_id()
+    }
+    fn algorithm(&self) -> &'static str {
+        self.0.algorithm()
+    }
 }

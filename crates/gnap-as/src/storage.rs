@@ -62,7 +62,9 @@ pub struct TokenRecord {
     pub issued_at: u64,
     /// The token as it was issued, in the §3.2.1 format.
     pub token: AccessToken,
-    /// The client it was issued to, which is how its key is resolved (§6).
+    /// The original client it was issued to. This identity does not change
+    /// when the token's presentation key is rotated. An explicit `token.key`
+    /// takes precedence over the client's key for resource and management proof.
     pub client: Client,
     /// The token that protects the management API (§3.2.1).
     pub management_token: String,
@@ -299,6 +301,32 @@ pub trait NonceStore {
     fn remember_nonce(&self, nonce: &str, now: u64) -> bool;
 }
 
+/// Optional replay-memory capability: atomic reservation of a nonce pair.
+///
+/// Linked key rotation (RFC 9635 §6.1.1 and §7.3.1.1) presents two signatures.
+/// This SDK requires their nonces to be reserved together or not at all; that
+/// atomic storage contract is a project choice, not an additional RFC mandate.
+/// A server can enable key rotation only for stores implementing this trait.
+/// The capability is captured when `with_key_rotation` is called, so the
+/// ordinary grant and management handlers keep working with a plain
+/// [`NonceStore`]. Stores used only with ordinary handlers need not implement
+/// this trait.
+pub trait RotationNonceStore: NonceStore {
+    /// Atomically reserves the old and new nonces of a key-rotation proof.
+    ///
+    /// Both use the same namespace and retention as
+    /// [`NonceStore::remember_nonce`]. Return false without recording either
+    /// value if one is already seen, both present values are equal, or storage
+    /// fails. An absent nonce needs no entry. Implementing this as two ordinary
+    /// insertions is not atomic.
+    fn remember_nonce_pair(
+        &self,
+        previous: Option<&str>,
+        replacement: Option<&str>,
+        now: u64,
+    ) -> bool;
+}
+
 /// The state required by an authorization server.
 pub trait Storage: GrantStore + NonceStore {}
 impl<T: GrantStore + NonceStore> Storage for T {}
@@ -342,6 +370,16 @@ macro_rules! forward_storage {
         impl<T: NonceStore + ?Sized> NonceStore for $pointer {
             fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
                 (**self).remember_nonce(nonce, now)
+            }
+        }
+        impl<T: RotationNonceStore + ?Sized> RotationNonceStore for $pointer {
+            fn remember_nonce_pair(
+                &self,
+                previous: Option<&str>,
+                replacement: Option<&str>,
+                now: u64,
+            ) -> bool {
+                (**self).remember_nonce_pair(previous, replacement, now)
             }
         }
     };
@@ -843,6 +881,34 @@ impl NonceStore for MemoryStorage {
         };
         seen.retain(|_, first| now.saturating_sub(*first) <= NONCE_MEMORY);
         seen.insert(nonce.to_owned(), now).is_none()
+    }
+}
+
+impl RotationNonceStore for MemoryStorage {
+    fn remember_nonce_pair(
+        &self,
+        previous: Option<&str>,
+        replacement: Option<&str>,
+        now: u64,
+    ) -> bool {
+        if previous.is_some() && previous == replacement {
+            return false;
+        }
+        let Ok(mut seen) = self.nonces.lock() else {
+            return false;
+        };
+        seen.retain(|_, first| now.saturating_sub(*first) <= NONCE_MEMORY);
+        if [previous, replacement]
+            .into_iter()
+            .flatten()
+            .any(|nonce| seen.contains_key(nonce))
+        {
+            return false;
+        }
+        for nonce in [previous, replacement].into_iter().flatten() {
+            seen.insert(nonce.to_owned(), now);
+        }
+        true
     }
 }
 

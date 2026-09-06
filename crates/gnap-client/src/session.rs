@@ -31,6 +31,7 @@
 //! complete MIME validator.
 
 use crate::error::ClientError;
+use crate::rotation;
 use crate::transport::{HttpRequest, HttpResponse, HttpTransport};
 use gnap_core::{check_response, Event, Grant, State};
 use gnap_crypto::hash::{verify_interaction_hash, HashMethod, InteractionHashInput};
@@ -41,6 +42,8 @@ use gnap_types::key::Key;
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{AccessToken, AccessTokenRequest, Cardinality, TokenManage, TokenValue};
 use gnap_types::user::SubjectResponse;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Where a grant stands after a round trip with the AS.
 #[derive(Debug, Clone, PartialEq)]
@@ -91,6 +94,28 @@ pub struct Session<'a, T, S> {
     /// The interaction start modes this client can actually drive (§2.5).
     /// `None` leaves that check to the caller; see [`Session::supporting`].
     supported_modes: Option<Vec<String>>,
+    /// Signers of tokens whose key was rotated (§6.1.1), by token value.
+    ///
+    /// Kept outside [`SessionState`] so that an unusable response still rolls
+    /// the protocol state back exactly; this map changes only on success. The
+    /// session's own signer keeps signing the continuation and every token
+    /// not listed here.
+    rotated: HashMap<String, TokenSigner<'a>>,
+}
+
+/// A rotation can borrow an existing key or retain one created at runtime.
+enum TokenSigner<'a> {
+    Borrowed(&'a dyn Signer),
+    Owned(Arc<dyn Signer + 'a>),
+}
+
+impl TokenSigner<'_> {
+    fn as_signer(&self) -> &dyn Signer {
+        match self {
+            Self::Borrowed(signer) => *signer,
+            Self::Owned(signer) => signer.as_ref(),
+        }
+    }
 }
 
 /// The complete mutable protocol state, independent of transport and signing.
@@ -173,6 +198,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                 interaction_window: None,
             },
             supported_modes: None,
+            rotated: HashMap::new(),
         }
     }
 
@@ -305,7 +331,14 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
 
         let body = serde_json::to_vec(request)
             .map_err(|e| ClientError::Usage(format!("serializing the request: {e}")))?;
-        let http = self.signed_request("POST", &self.endpoint.clone(), Some(body), None, now)?;
+        let http = Self::signed_request(
+            "POST",
+            &self.endpoint.clone(),
+            Some(body),
+            None,
+            self.signer,
+            now,
+        )?;
         let response = self.round_trip(http)?;
         self.absorb(&response, now)
     }
@@ -555,8 +588,14 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         };
 
         // GNAP-9635-§3.1-M03 — the continuation URI is used exactly as given.
-        let http =
-            self.signed_request("POST", &cont.uri, body, Some(&cont.access_token.value), now)?;
+        let http = Self::signed_request(
+            "POST",
+            &cont.uri,
+            body,
+            Some(&cont.access_token.value),
+            self.signer,
+            now,
+        )?;
         let response = self.round_trip(http)?;
         let before = self.protocol.grant.clone();
         self.protocol.grant = attempt;
@@ -647,11 +686,12 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
 
         let body = serde_json::to_vec(changes)
             .map_err(|e| ClientError::Usage(format!("serializing the modification: {e}")))?;
-        let http = self.signed_request(
+        let http = Self::signed_request(
             "PATCH",
             &cont.uri,
             Some(body),
             Some(&cont.access_token.value),
+            self.signer,
             now,
         )?;
         let response = self.round_trip(http)?;
@@ -710,11 +750,12 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         revoked
             .apply(Event::Revoke, now)
             .map_err(|e| ClientError::Usage(e.to_string()))?;
-        let request = self.signed_request(
+        let request = Self::signed_request(
             "DELETE",
             &continuation.uri,
             None,
             Some(&continuation.access_token.value),
+            self.signer,
             now,
         )?;
         let response = self.round_trip(request)?;
@@ -735,6 +776,8 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             ));
         }
         revoked.withhold_continuation();
+        // Nothing is held any more, so no rotated key is either (§5.4).
+        self.rotated.clear();
         self.protocol.grant = revoked;
         self.protocol.continuation = None;
         self.protocol.issued = None;
@@ -775,7 +818,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// both answers omit it or both spell out the same key, since the session
     /// holds no key material to compare and a `kid` is a name, not a key
     /// (§3.2.1). Binding another key is a different operation (§6.1.1) that
-    /// this session does not perform.
+    /// this method does not perform; use [`Self::rotate_key`] instead.
     ///
     /// # Errors
     ///
@@ -789,118 +832,237 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         now: u64,
     ) -> Result<AccessToken, ClientError> {
         let (index, manage) = self.managed(label)?;
-        let response = self.call_management("POST", &manage, None, now)?;
+        let previous_value = self.held_value(index)?;
+        let signer = self.management_signer(index)?;
+        let response = self.call_management("POST", &manage, None, signer, now)?;
+        let parsed = grant_response(&response)?;
 
-        let parsed: GrantResponse = serde_json::from_slice(&response.body)
-            .map_err(|e| ClientError::Parse(e.to_string()))?;
-        if let Some(e) = parsed.error {
-            // §6.1-M06 — "Upon receiving such an error, the client instance
-            // MUST consider the access token to not have changed its state."
-            // Nothing here has touched what the session holds.
-            return Err(ClientError::Server(e));
-        }
-
-        // §6.1 — the AS responds with "the rotated access token in the
-        // access_token field described in Section 3.2.1": one token object,
-        // even when the grant issued several (§3.2.2). Taking the first entry
-        // of an array would silently accept a different exchange.
-        let Some(tokens) = parsed.access_token else {
-            return Err(ClientError::Protocol(
-                "the rotation response carries no access token (RFC 9635 §6.1)".into(),
-            ));
+        let rotated = {
+            let previous = &self.held(index)?.1;
+            let rotated = checked_rotation(parsed, previous, &manage)?;
+            if !same_binding(rotated.key.as_ref(), previous.key.as_ref()) {
+                return Err(ClientError::Protocol(
+                    "the session cannot establish that the rotated token keeps the original \
+                     token's key binding; binding a new key is a separate operation, \
+                     `rotate_key` (RFC 9635 §6.1, §6.1.1)"
+                        .into(),
+                ));
+            }
+            rotated
         };
-        if tokens.cardinality != Cardinality::Single || tokens.tokens.len() != 1 {
-            return Err(ClientError::Protocol(
-                "the rotation response carries several access tokens where §6.1 describes \
-                 one rotated token in the form of §3.2.1"
+        self.adopt_rotated(index, &previous_value, rotated, None, now)
+    }
+
+    /// Binds a new key to a held token (§6.1.1), keeping its value's lifecycle.
+    ///
+    /// The request carries `presented`, the new public key, in its body, and
+    /// two signatures: the token's current key signs as usual, then
+    /// `replacement` signs with the `gnap-rotate` tag over that first
+    /// signature (§7.3.1.1). `presented` must be a public PS256 JWK by value
+    /// whose `kid` is the `keyid` of `replacement`. A reference, another
+    /// format, another proofing method or any proofing parameter, a private
+    /// or symmetric member, a certificate or a mismatched `kid` is refused
+    /// before anything is sent; these are the limits of this session.
+    ///
+    /// The answer is checked like a value rotation (one token in the form of
+    /// §3.2.1, new value, same rights, kept label, same flags, a management
+    /// URI) and, in addition, has to name the new key: §3.2.1 makes an omitted
+    /// `key` mean the key of the grant request, so only a `key` equal to
+    /// `presented` shows that the AS bound the token to the new key. From then
+    /// on this session signs that token's management with `replacement`, and
+    /// [`Session::signer_for`] hands it to the application for its resource
+    /// requests. The continuation keeps the session's signer, and every other
+    /// token keeps the signer it has, rotated or not. A bearer token has no key
+    /// to rotate (§6.1.1) and is refused before anything is sent. Any refusal
+    /// leaves the token, its key and this session unchanged (§6.1: the client
+    /// "MUST consider the access token to not have changed its state").
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Usage`] when the key cannot be presented by this session
+    /// or no such managed token is held; [`ClientError::Server`] for a GNAP
+    /// error such as `invalid_rotation` or `key_rotation_not_supported`;
+    /// [`ClientError::Protocol`] when the answer breaks a rule above.
+    pub fn rotate_key(
+        &mut self,
+        label: Option<&str>,
+        replacement: &'a dyn Signer,
+        presented: &Key,
+        now: u64,
+    ) -> Result<AccessToken, ClientError> {
+        self.rotate_key_with(label, TokenSigner::Borrowed(replacement), presented, now)
+    }
+
+    /// Rotates a token key while retaining shared ownership of its new signer.
+    ///
+    /// Uses the same proofs and response checks as [`Self::rotate_key`]. This
+    /// form lets an application generate a key on demand without arranging an
+    /// external lifetime for it. The session retains the `Arc` only after a
+    /// successful response. Value rotation carries it forward; another key
+    /// change, confirmed revocation, a newly issued lot or session destruction
+    /// releases the session's old handle. Other `Arc` owners remain unaffected.
+    ///
+    /// Keep a clone if the application needs the key after an inconclusive
+    /// exchange: a failed response does not undo a change already made at the
+    /// AS, and this session does not adopt the proposed key on failure.
+    ///
+    /// # Errors
+    ///
+    /// The same errors as [`Self::rotate_key`]. Refusal leaves the existing
+    /// token and signer unchanged; the supplied handle is not retained.
+    pub fn rotate_key_owned(
+        &mut self,
+        label: Option<&str>,
+        replacement: Arc<dyn Signer + 'a>,
+        presented: &Key,
+        now: u64,
+    ) -> Result<AccessToken, ClientError> {
+        self.rotate_key_with(label, TokenSigner::Owned(replacement), presented, now)
+    }
+
+    fn rotate_key_with(
+        &mut self,
+        label: Option<&str>,
+        replacement: TokenSigner<'a>,
+        presented: &Key,
+        now: u64,
+    ) -> Result<AccessToken, ClientError> {
+        let (object, verifier) = rotation::presentable(presented, replacement.as_signer())?;
+        let (index, manage) = self.managed(label)?;
+        let previous_value = self.held_value(index)?;
+        let current = self.presentation_signer(index)?;
+        let body = serde_json::to_vec(&serde_json::json!({ "key": object }))
+            .map_err(|e| ClientError::Usage(format!("serializing the new key: {e}")))?;
+        let http = HttpRequest::new("POST", &manage.uri).json_body(body);
+        let http = rotation::sign_key_rotation(
+            http,
+            current,
+            replacement.as_signer(),
+            &verifier,
+            &manage.access_token.value,
+            now,
+        )?;
+        let response = self.round_trip(http)?;
+        let parsed = grant_response(&response)?;
+
+        let rotated = {
+            let previous = &self.held(index)?.1;
+            let rotated = checked_rotation(parsed, previous, &manage)?;
+            // §3.2.1 — `key` is "The key that the token is bound to, if
+            // different from the client instance's presented key"; omitted, it
+            // means the grant request's key (§2.3), not the key of this body.
+            // Only an explicit, identical key shows the new binding took.
+            if rotated.key.as_ref() != Some(presented) {
+                return Err(ClientError::Protocol(
+                    "the key-rotation response does not name the presented key as the \
+                     token's key binding; an omitted or different key means the AS did not \
+                     bind the token to the new key (RFC 9635 §3.2.1, §6.1.1)"
+                        .into(),
+                ));
+            }
+            rotated
+        };
+        self.adopt_rotated(index, &previous_value, rotated, Some(replacement), now)
+    }
+
+    /// The signer that presents a held token: the key it was rotated to, or
+    /// the session's key. The application signs its resource requests with it.
+    /// A token does not need a management API to be presented to a resource.
+    ///
+    /// This session knows its implicit grant key and keys adopted by its own
+    /// successful rotations. An initially issued explicit key is not resolved
+    /// here, even if it might be equivalent to the grant key: matching a `kid`
+    /// does not establish that equivalence. Such a token needs an application
+    /// adapter. A bearer token is presented without a key proof.
+    /// The returned reference borrows this session, including when the signer
+    /// was supplied as an owned handle; do not keep it across a mutable call.
+    ///
+    /// # Errors
+    ///
+    /// Fails when no such token is held, the token is bearer, or its explicit
+    /// binding is not known to this session. `None` is ambiguous with several
+    /// held tokens. No request is sent and no signature is made by this lookup.
+    pub fn signer_for(&self, label: Option<&str>) -> Result<&dyn Signer, ClientError> {
+        self.presentation_signer(self.select(label)?)
+    }
+
+    fn presentation_signer(&self, index: usize) -> Result<&dyn Signer, ClientError> {
+        let token = &self.held(index)?.1;
+        if token.is_bearer() {
+            return Err(ClientError::Usage(
+                "a bearer token has no presentation key; present it without a key proof".into(),
+            ));
+        }
+        if let Some(signer) = self.rotated.get(token.value.as_str()) {
+            return Ok(signer.as_signer());
+        }
+        if token.key.is_some() {
+            return Err(ClientError::Usage(
+                "this session cannot establish the signer for an initially explicit token key; \
+                 an application key adapter is required"
                     .into(),
             ));
         }
-        let mut rotated = tokens
-            .tokens
-            .into_iter()
-            .next()
-            .ok_or_else(|| ClientError::Protocol("the rotation response is empty".into()))?;
-        rotated
-            .validate()
-            .map_err(|e| ClientError::Protocol(e.to_string()))?;
+        Ok(self.signer)
+    }
 
+    fn management_signer(&self, index: usize) -> Result<&dyn Signer, ClientError> {
+        // §7.3 binds bearer-token management to the client instance's key.
+        if self.held(index)?.1.is_bearer() {
+            Ok(self.signer)
+        } else {
+            self.presentation_signer(index)
+        }
+    }
+
+    fn held(&self, index: usize) -> Result<&(u64, AccessToken), ClientError> {
+        self.protocol
+            .issued
+            .as_ref()
+            .and_then(|held| held.get(index))
+            .ok_or_else(|| {
+                ClientError::Usage("the session no longer holds the token that was rotated".into())
+            })
+    }
+
+    fn held_value(&self, index: usize) -> Result<TokenValue, ClientError> {
+        Ok(self.held(index)?.1.value.clone())
+    }
+
+    /// Installs a rotated token and moves or sets its signer, on success only.
+    fn adopt_rotated(
+        &mut self,
+        index: usize,
+        previous_value: &TokenValue,
+        rotated: AccessToken,
+        new_signer: Option<TokenSigner<'a>>,
+        now: u64,
+    ) -> Result<AccessToken, ClientError> {
         let Some(held) = self.protocol.issued.as_mut() else {
             return Err(ClientError::Usage(
                 "the session no longer holds the token that was rotated".into(),
             ));
         };
-        let previous = &held[index].1;
-        // §6.1 — "The value of the access token MUST NOT be the same as the
-        // current value of the access token used to access the management API."
-        if rotated.value == manage.access_token.value {
+        // The session tells its tokens, and their signers, apart by value. A
+        // value that already names a sibling cannot be adopted without
+        // confusing the two; GNAP expects distinct values anyway (§3.2.2:
+        // "each access token is expected to have a unique value").
+        if held
+            .iter()
+            .enumerate()
+            .any(|(i, (_, token))| i != index && token.value == rotated.value)
+        {
             return Err(ClientError::Protocol(
-                "the rotated token reuses the previous management credential (RFC 9635 §6.1)"
+                "the rotated token repeats the value of another token this session holds; \
+                 the session cannot tell them apart (RFC 9635 §3.2.2)"
                     .into(),
             ));
         }
-        // The same section describes replacing the resource token with an
-        // updated value. Its old value and the management credential above
-        // are distinct: neither may become the new resource token.
-        if rotated.value == previous.value {
-            return Err(ClientError::Protocol(
-                "the rotated token repeats the value it was meant to replace (RFC 9635 §6.1)"
-                    .into(),
-            ));
+        let carried = self.rotated.remove(previous_value.as_str());
+        if let Some(signer) = new_signer.or(carried) {
+            self.rotated
+                .insert(rotated.value.as_str().to_owned(), signer);
         }
-        // §6.1-M05 — "The access rights in the access array for the rotated
-        // access token MUST be included in the response and MUST be the same as
-        // the token before rotation."
-        if rotated.access != previous.access {
-            return Err(ClientError::Protocol(
-                "the rotated token does not carry the same access rights as the token it \
-                 replaces (RFC 9635 §6.1)"
-                    .into(),
-            ));
-        }
-        // §6.1 — a rotation issues a token "with the same rights and properties
-        // as the original token, apart from an updated token value and
-        // expiration time". That sentence describes the operation; it states
-        // no MUST beyond the rights. What follows is this session's reading of
-        // it: the label is the name the session manages the token by (§3.2.2),
-        // and the flags and key decide how it is presented (§7.2), so a token
-        // that changes them is not one the session can go on using as the same.
-        match (&rotated.label, &previous.label) {
-            (None, kept) => rotated.label.clone_from(kept),
-            (Some(answered), Some(kept)) if answered == kept => {}
-            (Some(_), _) => {
-                return Err(ClientError::Protocol(
-                    "the rotated token changes the label the session manages the token by; \
-                     this session keeps a rotated token under its original label \
-                     (RFC 9635 §6.1 describes a rotation as keeping the token's properties)"
-                        .into(),
-                ));
-            }
-        }
-        if !same_flags(&rotated.flags, &previous.flags) {
-            return Err(ClientError::Protocol(
-                "the rotated token changes the flags of the token it replaces; this session \
-                 does not present a rotated token differently from the original \
-                 (RFC 9635 §6.1)"
-                    .into(),
-            ));
-        }
-        if !same_binding(rotated.key.as_ref(), previous.key.as_ref()) {
-            return Err(ClientError::Protocol(
-                "the session cannot establish that the rotated token keeps the original \
-                 token's key binding; binding a new key is a separate operation this \
-                 session does not perform (RFC 9635 §6.1, §6.1.1)"
-                    .into(),
-            ));
-        }
-        // §6.1-M03 — "The response MUST include an access token management
-        // URI", which §6.1-M04 has the client use from now on.
-        if rotated.manage.is_none() {
-            return Err(ClientError::Protocol(
-                "the rotated token carries no management URI (RFC 9635 §6.1)".into(),
-            ));
-        }
-
         // §6.1 — the rotation carries "an updated token value and expiration
         // time", so `expires_in` starts running again, from now.
         held[index] = (now, rotated.clone());
@@ -918,7 +1080,9 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// when the exchange does.
     pub fn revoke_token(&mut self, label: Option<&str>, now: u64) -> Result<(), ClientError> {
         let (index, manage) = self.managed(label)?;
-        let response = self.call_management("DELETE", &manage, None, now)?;
+        let value = self.held_value(index)?;
+        let signer = self.management_signer(index)?;
+        let response = self.call_management("DELETE", &manage, None, signer, now)?;
 
         if response.status != 204 {
             return Err(ClientError::Protocol(format!(
@@ -929,16 +1093,17 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         if let Some(tokens) = self.protocol.issued.as_mut() {
             tokens.remove(index);
         }
+        self.rotated.remove(value.as_str());
         Ok(())
     }
 
-    /// Finds a held token by label, and the management API it offers (§3.2.1).
+    /// Finds a held token by label, independently of its management API.
     ///
     /// `None` names the only token held, whether or not it carries a label
     /// (§3.2.1 lets the AS label a single token); with several held, a caller
     /// has to say which one, since the labels are what tells them apart
     /// (§3.2.2).
-    fn managed(&self, label: Option<&str>) -> Result<(usize, TokenManage), ClientError> {
+    fn select(&self, label: Option<&str>) -> Result<usize, ClientError> {
         let tokens = self.protocol.issued.as_ref().ok_or_else(|| {
             ClientError::Usage("no access token has been issued to this session".into())
         })?;
@@ -952,13 +1117,19 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             None if tokens.len() == 1 => 0,
             None => {
                 return Err(ClientError::Usage(format!(
-                    "{} access tokens are held; name the one to manage by its label \
+                    "{} access tokens are held; select one by its label \
                      (RFC 9635 §3.2.2)",
                     tokens.len()
                 )));
             }
         };
-        let manage = tokens[index].1.manage.clone().ok_or_else(|| {
+        Ok(index)
+    }
+
+    /// Finds the selected token's optional management API (§3.2.1).
+    fn managed(&self, label: Option<&str>) -> Result<(usize, TokenManage), ClientError> {
+        let index = self.select(label)?;
+        let manage = self.held(index)?.1.manage.clone().ok_or_else(|| {
             ClientError::Usage(
                 "this access token carries no `manage` field, so there is no management \
                  API to call (RFC 9635 §3.2.1, §6)"
@@ -974,16 +1145,19 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         method: &str,
         manage: &TokenManage,
         body: Option<Vec<u8>>,
+        signer: &dyn Signer,
         now: u64,
     ) -> Result<HttpResponse, ClientError> {
         // §6 — "The client instance MUST present proof of the key associated
         // with the token along with the value of the token management access
-        // token", which is §7.2 applied to the management token.
-        let http = self.signed_request(
+        // token", which is §7.2 applied to the management token. After a key
+        // rotation (§6.1.1) that key is the token's new key, not the session's.
+        let http = Self::signed_request(
             method,
             &manage.uri,
             body,
             Some(&manage.access_token.value),
+            signer,
             now,
         )?;
         self.round_trip(http)
@@ -991,18 +1165,18 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
 
     /// Builds a signed request (§7.2, §7.3.1).
     fn signed_request(
-        &self,
         method: &str,
         url: &str,
         body: Option<Vec<u8>>,
         token: Option<&TokenValue>,
+        signer: &dyn Signer,
         now: u64,
     ) -> Result<HttpRequest, ClientError> {
         let mut http = HttpRequest::new(method, url);
         if let Some(b) = body {
             http = http.json_body(b);
         }
-        crate::sign_request(http, self.signer, token, now)
+        crate::sign_request(http, signer, token, now)
     }
 
     fn round_trip(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
@@ -1123,38 +1297,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// Parses a response, checks what the client must check, and advances the
     /// grant.
     fn absorb(&mut self, http: &HttpResponse, now: u64) -> Result<Step, ClientError> {
-        if http.status == 204 {
-            // §5.4 uses 204 for DELETE, not for these POST/PATCH exchanges.
-            // It supplies no grant response from which to infer local state.
-            return Err(ClientError::Protocol(
-                "the AS answered 204 No Content without a usable grant response".into(),
-            ));
-        }
-
-        let mut content_types = http.header_values("content-type");
-        if let Some(content_type) = content_types.next() {
-            if content_types.next().is_some()
-                || !content_type
-                    .split(';')
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .eq_ignore_ascii_case("application/json")
-            {
-                return Err(ClientError::Protocol(
-                    "the response has an incompatible or repeated Content-Type".into(),
-                ));
-            }
-        }
-
-        let response: GrantResponse =
-            serde_json::from_slice(&http.body).map_err(|e| ClientError::Parse(e.to_string()))?;
-
-        if !(200..300).contains(&http.status) && response.error.is_none() {
-            return Err(ClientError::Protocol(
-                "a non-success HTTP response carries no GNAP error".into(),
-            ));
-        }
+        let response = grant_response(http)?;
 
         self.check_tokens(&response)?;
         self.check_interaction(&response)?;
@@ -1232,6 +1375,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             self.protocol.validated_ref = None;
         }
 
+        // A newly issued lot binds its tokens to the grant request's key
+        // (§3.2.1), whatever values it reuses: no rotated key carries over.
+        // Management calls never come through here, so their signers stay.
+        if response.access_token.is_some() {
+            self.rotated.clear();
+        }
+
         Ok(match (&response.error, self.protocol.grant.state()) {
             (Some(e), _) if response.r#continue.is_none() => Err(ClientError::Server(e.clone()))?,
             (Some(_), _) => Step::Recoverable(Box::new(response)),
@@ -1250,6 +1400,151 @@ fn requested_labels(request: Option<&AccessTokenRequest>) -> Vec<Option<String>>
     request
         .map(|tokens| tokens.tokens.iter().map(|t| t.label.clone()).collect())
         .unwrap_or_default()
+}
+
+/// Reads a grant response the way every POST/PATCH exchange has to: an HTTP
+/// answer that is not a usable GNAP message says nothing authoritative about
+/// the grant or a token, and must not be acted on.
+///
+/// A 204 supplies no message (§5.4 uses it for DELETE only); an incompatible
+/// or repeated Content-Type is not the JSON the protocol speaks (§3); a
+/// non-success status without a GNAP error is an inconclusive failure, while a
+/// valid GNAP error keeps its meaning whatever the status carries it (§3.6).
+fn grant_response(http: &HttpResponse) -> Result<GrantResponse, ClientError> {
+    if http.status == 204 {
+        // §5.4 uses 204 for DELETE, not for these POST/PATCH exchanges.
+        // It supplies no grant response from which to infer local state.
+        return Err(ClientError::Protocol(
+            "the AS answered 204 No Content without a usable grant response".into(),
+        ));
+    }
+
+    let mut content_types = http.header_values("content-type");
+    if let Some(content_type) = content_types.next() {
+        if content_types.next().is_some()
+            || !content_type
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case("application/json")
+        {
+            return Err(ClientError::Protocol(
+                "the response has an incompatible or repeated Content-Type".into(),
+            ));
+        }
+    }
+
+    let response: GrantResponse =
+        serde_json::from_slice(&http.body).map_err(|e| ClientError::Parse(e.to_string()))?;
+
+    if !(200..300).contains(&http.status) && response.error.is_none() {
+        return Err(ClientError::Protocol(
+            "a non-success HTTP response carries no GNAP error".into(),
+        ));
+    }
+    Ok(response)
+}
+
+/// The checks a rotation answer has to pass before either kind of rotation
+/// looks at the key binding (§6.1).
+fn checked_rotation(
+    parsed: GrantResponse,
+    previous: &AccessToken,
+    manage: &TokenManage,
+) -> Result<AccessToken, ClientError> {
+    if let Some(e) = parsed.error {
+        // §6.1-M06 — "Upon receiving such an error, the client instance
+        // MUST consider the access token to not have changed its state."
+        // Nothing here has touched what the session holds.
+        return Err(ClientError::Server(e));
+    }
+
+    // §6.1 — the AS responds with "the rotated access token in the
+    // access_token field described in Section 3.2.1": one token object,
+    // even when the grant issued several (§3.2.2). Taking the first entry
+    // of an array would silently accept a different exchange.
+    let Some(tokens) = parsed.access_token else {
+        return Err(ClientError::Protocol(
+            "the rotation response carries no access token (RFC 9635 §6.1)".into(),
+        ));
+    };
+    if tokens.cardinality != Cardinality::Single || tokens.tokens.len() != 1 {
+        return Err(ClientError::Protocol(
+            "the rotation response carries several access tokens where §6.1 describes \
+             one rotated token in the form of §3.2.1"
+                .into(),
+        ));
+    }
+    let mut rotated = tokens
+        .tokens
+        .into_iter()
+        .next()
+        .ok_or_else(|| ClientError::Protocol("the rotation response is empty".into()))?;
+    rotated
+        .validate()
+        .map_err(|e| ClientError::Protocol(e.to_string()))?;
+
+    // §6.1 — "The value of the access token MUST NOT be the same as the
+    // current value of the access token used to access the management API."
+    if rotated.value == manage.access_token.value {
+        return Err(ClientError::Protocol(
+            "the rotated token reuses the previous management credential (RFC 9635 §6.1)".into(),
+        ));
+    }
+    // The same section describes replacing the resource token with an
+    // updated value. Its old value and the management credential above
+    // are distinct: neither may become the new resource token.
+    if rotated.value == previous.value {
+        return Err(ClientError::Protocol(
+            "the rotated token repeats the value it was meant to replace (RFC 9635 §6.1)".into(),
+        ));
+    }
+    // §6.1-M05 — "The access rights in the access array for the rotated
+    // access token MUST be included in the response and MUST be the same as
+    // the token before rotation."
+    if rotated.access != previous.access {
+        return Err(ClientError::Protocol(
+            "the rotated token does not carry the same access rights as the token it \
+             replaces (RFC 9635 §6.1)"
+                .into(),
+        ));
+    }
+    // §6.1 — a rotation issues a token "with the same rights and properties
+    // as the original token, apart from an updated token value and
+    // expiration time". That sentence describes the operation; it states
+    // no MUST beyond the rights. What follows is this session's reading of
+    // it: the label is the name the session manages the token by (§3.2.2),
+    // and the flags decide how it is presented (§7.2), so a token that
+    // changes them is not one the session can go on using as the same.
+    match (&rotated.label, &previous.label) {
+        (None, kept) => rotated.label.clone_from(kept),
+        (Some(answered), Some(kept)) if answered == kept => {}
+        (Some(_), _) => {
+            return Err(ClientError::Protocol(
+                "the rotated token changes the label the session manages the token by; \
+                 this session keeps a rotated token under its original label \
+                 (RFC 9635 §6.1 describes a rotation as keeping the token's properties)"
+                    .into(),
+            ));
+        }
+    }
+    if !same_flags(&rotated.flags, &previous.flags) {
+        return Err(ClientError::Protocol(
+            "the rotated token changes the flags of the token it replaces; this session \
+             does not present a rotated token differently from the original \
+             (RFC 9635 §6.1)"
+                .into(),
+        ));
+    }
+    // §6.1-M03 — "The response MUST include an access token management
+    // URI", which §6.1-M04 has the client use from now on.
+    if rotated.manage.is_none() {
+        return Err(ClientError::Protocol(
+            "the rotated token carries no management URI (RFC 9635 §6.1)".into(),
+        ));
+    }
+    Ok(rotated)
 }
 
 /// Whether two flag lists say the same thing (§3.2.1).

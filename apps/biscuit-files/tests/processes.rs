@@ -108,6 +108,11 @@ fn action(
 ) -> (String, Value) {
     let response = client
         .post(format!("{origin}/action/{name}"))
+        .timeout(Duration::from_secs(if name == "rotate-key" {
+            35
+        } else {
+            5
+        }))
         .header("origin", origin)
         .header("cookie", cookie)
         .header("content-type", "application/json")
@@ -265,6 +270,29 @@ fn three_process_flow_and_authority_outage_fail_closed() {
         action(&client, &origins[2], &cookie, "read", json!({})).1["status"],
         200
     );
+    for generation in 1..=2 {
+        let changed = action(&client, &origins[2], &cookie, "rotate-key", json!({})).1;
+        assert_eq!(changed["key_rotations"], generation);
+        for (operation, status) in [
+            ("read", 200),
+            ("write", 200),
+            ("check-old-key", 403),
+            ("check-retired", 403),
+        ] {
+            assert_eq!(
+                action(&client, &origins[2], &cookie, operation, json!({})).1["status"],
+                status
+            );
+        }
+        // Retire an attenuated native descendant on the next key change.
+        action(
+            &client,
+            &origins[2],
+            &cookie,
+            "attenuate",
+            json!({"file":"notes","seconds":120}),
+        );
+    }
     action(
         &client,
         &origins[2],
