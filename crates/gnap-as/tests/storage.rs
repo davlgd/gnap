@@ -22,6 +22,7 @@ fn pending(token: &str, handle: &str) -> GrantAggregate {
 
 fn issued(value: &str, identifier: &[u8]) -> TokenRecord {
     TokenRecord {
+        derivation: None,
         identifier: Some(identifier.into()),
         issued_at: 1_000,
         token: serde_json::from_value(serde_json::json!({"value":value,"access":["read"]}))
@@ -441,6 +442,7 @@ fn normal_closure_preserves_token_management() {
 #[test]
 fn token_record_lifetime_boundaries_and_invalid_external_records() {
     let mut record = gnap_as::TokenRecord {
+        derivation: None,
         identifier: None,
         issued_at: 100,
         token: serde_json::from_str(r#"{"value":"AAA","expires_in":20}"#).unwrap(),

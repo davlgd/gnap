@@ -253,6 +253,7 @@
 //! Public interaction and management URI handles are separate identifiers, not
 //! credentials. An existing credential cannot change roles during replacement.
 
+pub mod derivation;
 pub mod encoding;
 pub mod nonce;
 pub mod policy;
@@ -261,6 +262,7 @@ pub mod rs;
 pub mod server;
 pub mod storage;
 
+pub use derivation::{DerivationPolicy, DerivedAccess, DerivedToken, ParentToken};
 pub use encoding::{
     EncodedToken, OpaqueTokenEncoder, TokenEncoder, TokenEncodingContext, TokenEncodingError,
 };

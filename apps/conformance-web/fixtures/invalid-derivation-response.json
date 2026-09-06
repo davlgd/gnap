@@ -1,0 +1,4 @@
+{
+  "kind": "derivation_response",
+  "body": "{\"access_token\":{\"value\":null,\"access\":{},\"flags\":[\"bearer\"],\"key\":\"synthetic-key-reference\",\"expires_in\":\"60\"}}"
+}

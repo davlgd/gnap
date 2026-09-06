@@ -2,8 +2,8 @@
 
 Rust libraries and application examples for the **Grant Negotiation and
 Authorization Protocol** ([RFC 9635]), with RS-facing discovery, authenticated
-introspection and resource registration from [RFC 9767] for the opaque
-reference-token profile.
+introspection, resource registration and bounded downstream delegation from
+[RFC 9767] for the opaque reference-token profile.
 
 GNAP is not an extension of OAuth 2.0 and is not compatible with it. It solves
 the same family of problems — delegating authorization to a piece of software —
@@ -275,7 +275,7 @@ should be read as covering them:
 | §7.3.2–§7.3.4 | The `mtls`, `jwsd` and `jws` key proofing methods |
 | §7.3.1.1 | Key rotation, and with it the `gnap-rotate` signature tag |
 | §9.1 | Resource-server-first discovery |
-| RFC 9767 §4 | Downstream token derivation; introspection of Biscuit tokens is also not supplied |
+| RFC 9767 §§3.3–4 | Biscuit introspection and downstream profiles beyond the selected one-hop opaque flow |
 
 The interaction modes the AS drives are `redirect` and, with no finish method,
 polling. `app`, `user_code` and `user_code_uri` are modelled in `gnap-types` but
@@ -294,7 +294,16 @@ both endpoints for every protected read: two HTTP round trips, deliberately
 without a metadata or token-result cache. It uses separate client and RS keys;
 the returned client key verifies the resource request, not the RS request to
 the AS. This path handles only opaque reference tokens; it does not introspect
-Biscuit chains or derive downstream tokens.
+Biscuit chains.
+
+The [downstream delegation profile](docs/downstream-delegation.md) lets that RS
+request a distinct token for a second resource server. The metadata action
+exercises the signed grant request, a child bound to RS1's key, and RS2's own
+authenticated introspection. The child lasts at most 60 seconds within its
+parent's lifetime. Retiring the exact parent invalidates its children atomically
+in AS storage; this is a project policy, not a blanket requirement of RFC 9767.
+The demo attempts to delete each child after use and does not retry an
+inconclusive request automatically. These HTTP roles remain co-located.
 
 The RS also registers immutable resource sets using signed HTTP requests. Their
 public references are names, not credentials: a client still needs a grant and
@@ -390,7 +399,7 @@ the adapter's responsibility.
 | ✅ | `gnap-as` — the authorization server role, §2 through §5 |
 | ✅ | `gnap-as` and `gnap-client` — token management (§6): rotate and revoke |
 | ⬜ | Key rotation (§6.1.1, §7.3.1.1) and the remaining key proofing methods |
-| 🚧 | RFC 9767 — RS-facing discovery, opaque-token introspection and immutable resource registration; downstream derivation remains open |
+| 🚧 | RFC 9767 — RS-facing discovery, opaque-token introspection, immutable resource registration and one-hop downstream delegation; broader profiles remain open |
 | 🚧 | HTTP application acceptance tests and bounded web diagnostics; full network conformance harness remains open |
 
 The [support matrix](docs/support-matrix.md) is the detailed capability inventory;

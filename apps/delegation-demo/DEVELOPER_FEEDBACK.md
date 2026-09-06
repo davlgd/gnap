@@ -26,6 +26,8 @@ allows a real protected resource to reuse exactly the AS's signature checks.
 | Continue after approval | The one-shot example could not exercise modifications or grant-wide revocation | `keep_grant_open`, contextual policy evaluation and `Session::revoke_grant` now support a real ongoing grant. A poll does not reissue tokens; a reduced set is observable at a second resource; expansion requests fresh consent. Reapproval replaces all old tokens atomically; denial closes continuation without silently revoking them |
 | Distinguish a failed preparation from a refused grant | A server configuration failure used to carry a terminal GNAP error even when no grant update had been committed; the client consequently closed a continuation that the AS had kept | Internal configuration failures now use a non-GNAP text response. A real Session/AS regression checks unchanged local and stored state after an encoding failure, then a fresh retry. Valid GNAP errors still carry their protocol meaning: RFC 9635 does not make a particular HTTP status a substitute for reading the response, and a response without continuation does not authorize another continuation call |
 | Serve a resource without access to AS storage | The first consumer used the SDK token index directly, so it could not exercise the RS/AS protocol boundary | The opaque RS now discovers the configured AS and calls RFC 9767 introspection over HTTP with a separate pre-registered RS key. It verifies client proof locally using the returned client key. The AS still owns its transactional indexes; the RS no longer reads them |
+| Call a downstream API as an RS | Reusing the incoming token would preserve the wrong key binding and audience | `GrantRequest::existing_access_token`, the signed derivation handler and `DerivationPolicy` now issue a distinct RS1-bound child for RS2. The app explicitly maps folder reading to metadata reading, limits one hop and checks the returned profile. It uses the public request/response types and `sign_request` directly, rather than a browser-interaction `Session`; fixed destinations, response validation and per-call cleanup remain application work |
+| Publish a child without racing parent retirement | An independent grant insertion cannot check the exact parent token atomically | `GrantStore::create_derived` verifies the parent revision/value/lifetime at commit. The retention adapter delegates under its external maintenance lock and records the child only after success. Parent retirement cascades in SDK storage; RS reads still have the documented network decision race |
 | Interpret an introspection refusal | `active:false` includes an AS unable to determine activity; it is not proof of intrinsic token invalidity | The RS refuses access without inventing a cause. Network failures and unusable responses are separate 503 errors; static storage-failure logs aid the AS operator without exposing credentials. No global failure counter rewrites concurrent responses |
 | Request reusable sets of rights | Literal rights in the first client hid the resource-registration boundary | The RS now registers two immutable sets over signed HTTP. The client receives their public references in process and uses them in initial requests and PATCH. The AS resolves references before consent/downscope and freezes approved leaves in tokens. A reference alone never grants access |
 | Start through a canonical URL during process replacement | The proxy can route bootstrap calls to an older instance with different ephemeral keys or incomplete capabilities | One bounded supervisor retries only explicit transient outcomes, signs every request afresh and checks returned sets against the local AS registry before publishing both references. Deduplication permits a retry after a committed registration whose response was lost. This co-location check is application coordination, not a portable GNAP discovery guarantee |
@@ -67,10 +69,21 @@ client, checks replay independently on both channels, then rotates and revokes
 tokens and stops the AS. A second HTTP fixture checks redirects, response size
 and timeouts. Malformed replies, untrusted discovered destinations,
 missing or overflowing deadlines and clock rollback have local regression tests.
-The explicit 1,200-second timestamp profile and fixed two-right vocabulary are
+The explicit 1,200-second parent timestamp profile and fixed two-right vocabulary are
 application choices, not new RFC requirements. Discovery and two short-lived
 HTTP connections per read are sufficient for this bounded consumer, not an
 efficiency result or a recommendation for a high-throughput service.
+
+The downstream consumer adds a separate metadata vocabulary and a maximum
+60-second child lifetime bounded by the parent. Socket tests exercise an actual
+Session grant, signed RS1 derivation, RS2 introspection/proof, wrong audiences
+and keys, replay, request-body tampering, refused child rotation and parent
+rotation/revocation cascade. Repeated completed reads delete their children;
+injected refusal/outage and lost cleanup replies verify one DELETE attempt and
+no false success. Separate AS/RS1/RS2 worker pools avoid a same-pool nested-call
+deadlock. These are co-located local tests, not a public deployment, a throughput
+result, or independently operated RS interoperability. AS-mediated derivation
+does not implement local Biscuit attenuation.
 
 Resource-registration tests use real local HTTP for startup, readiness gating
 and explicit-format refusal. Injected elapsed time and transport failures cover

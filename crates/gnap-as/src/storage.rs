@@ -4,12 +4,15 @@
 //! still needs a way to track a grant "in a secure and deterministic fashion".
 //! The means are left to the implementation, hence this trait.
 
+use crate::derivation::{
+    DerivedToken, ParentToken, MAX_DERIVED_CHILDREN, MAX_DERIVED_GRANTS, MAX_DERIVED_LIFETIME,
+};
 use crate::server::MAX_CLOCK_SKEW;
 use gnap_core::Grant;
 use gnap_types::client::Client;
 use gnap_types::message::GrantRequest;
-use gnap_types::token::AccessToken;
-use std::collections::HashMap;
+use gnap_types::token::{AccessToken, TokenValue};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 /// Everything the AS remembers about one grant request.
@@ -49,6 +52,8 @@ pub struct GrantRecord {
 /// An access token the AS issued, and what it needs to manage it (§6).
 #[derive(Debug, Clone)]
 pub struct TokenRecord {
+    /// AS-only one-hop provenance and audience; not token response extensions.
+    pub derivation: Option<DerivedToken>,
     /// Optional format-native identifier for a deployment's live-token index.
     /// The SDK does not publish or synchronize this state with resource servers.
     pub identifier: Option<Vec<u8>>,
@@ -161,19 +166,22 @@ pub enum GrantSelector<'a> {
 pub enum StoreError {
     /// The aggregate disappeared, was revoked, or no longer has that revision.
     Conflict,
+    /// The exact parent already has the profile's maximum active children.
+    DerivationLimit,
     /// An index value is already in use, including within the candidate.
     Collision,
     /// The candidate violates structural or terminal-state invariants.
     Invalid,
     /// The backing store cannot establish a reliable result.
     Unavailable,
-    /// The identity or revision counter cannot advance without wrapping.
+    /// A counter cannot advance or a configured/profile capacity is exhausted.
     Exhausted,
 }
 
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::DerivationLimit => "downstream derivation profile limit reached",
             Self::Conflict => "grant snapshot is no longer current",
             Self::Collision => "grant index value is already in use",
             Self::Invalid => "grant aggregate violates storage invariants",
@@ -202,6 +210,25 @@ pub trait GrantStore {
     /// # Errors
     /// Returns a collision, invalid candidate, capacity or availability failure.
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError>;
+
+    /// Atomically creates an independent child grant against a live parent token.
+    ///
+    /// Validate the expected parent revision, exact value, one-hop provenance,
+    /// child expiry and all indexes under the transaction. Reread `clock` at
+    /// that decision point, including after waiting for a lock. This trusted
+    /// callback must be brief, non-reentrant and side-effect-free. Cascade parent
+    /// token removal/replacement through every write path, including maintenance.
+    /// No partial state may be published on failure and no callback is retried.
+    /// # Errors
+    /// Refuses stale/dead parents, invalid children, collisions, budgets or outages.
+    fn create_derived(
+        &self,
+        parent: GrantId,
+        revision: Revision,
+        value: &TokenValue,
+        child: GrantAggregate,
+        clock: &dyn Fn() -> u64,
+    ) -> Result<GrantSnapshot, StoreError>;
 
     /// Reads one consistent snapshot through an index.
     /// # Errors
@@ -245,6 +272,16 @@ impl<T: GrantStore + NonceStore> Storage for T {}
 macro_rules! forward_storage {
     ($pointer:ty) => {
         impl<T: GrantStore + ?Sized> GrantStore for $pointer {
+            fn create_derived(
+                &self,
+                parent: GrantId,
+                revision: Revision,
+                value: &TokenValue,
+                child: GrantAggregate,
+                clock: &dyn Fn() -> u64,
+            ) -> Result<GrantSnapshot, StoreError> {
+                (**self).create_derived(parent, revision, value, child, clock)
+            }
             fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
                 (**self).create(aggregate)
             }
@@ -417,13 +454,84 @@ struct State {
     last_id: u64,
     grants: HashMap<GrantId, GrantSnapshot>,
     indices: Indices,
+    children: HashMap<ParentToken, HashSet<GrantId>>,
+    derived_origins: HashMap<GrantId, ParentToken>,
+}
+
+impl State {
+    fn publish(&mut self, snapshot: GrantSnapshot, indices: Indices) {
+        if let Some(parent) = self.derived_origins.get(&snapshot.id) {
+            if snapshot.aggregate.tokens.is_empty() {
+                if let Some(children) = self.children.get_mut(parent) {
+                    children.remove(&snapshot.id);
+                    if children.is_empty() {
+                        self.children.remove(parent);
+                    }
+                }
+            } else {
+                self.children
+                    .entry(parent.clone())
+                    .or_default()
+                    .insert(snapshot.id);
+            }
+        }
+        self.indices.replace(snapshot.id, indices);
+        self.grants.insert(snapshot.id, snapshot);
+    }
+
+    // Prepare every fallible revision increment before publishing any mutation.
+    fn cascade(
+        &self,
+        previous: &GrantSnapshot,
+        replacement: Option<&GrantAggregate>,
+    ) -> Result<Vec<GrantSnapshot>, StoreError> {
+        let mut cascade = Vec::new();
+        for token in previous.aggregate.tokens.values() {
+            let unchanged = replacement.is_some_and(|aggregate| {
+                !aggregate.revoked
+                    && aggregate.tokens.values().any(|next| {
+                        next.token == token.token
+                            && next.client == token.client
+                            && next.issued_at == token.issued_at
+                            && next.identifier == token.identifier
+                            && next.derivation == token.derivation
+                    })
+            });
+            if unchanged {
+                continue;
+            }
+            let parent = ParentToken::new(previous.id, &token.token.value);
+            for id in self.children.get(&parent).into_iter().flatten() {
+                let mut child = self.grants.get(id).ok_or(StoreError::Invalid)?.clone();
+                child.revision = Revision(
+                    child
+                        .revision
+                        .0
+                        .checked_add(1)
+                        .ok_or(StoreError::Exhausted)?,
+                );
+                child.aggregate.revoked = true;
+                child.aggregate.tokens.clear();
+                let record = &mut child.aggregate.record;
+                record.continuation_token = None;
+                record.interact_handle = None;
+                record.interact_ref = None;
+                record.as_nonce = None;
+                record.interact_expires_at = None;
+                record.grant.withhold_continuation();
+                cascade.push(child);
+            }
+        }
+        Ok(cascade)
+    }
 }
 
 /// Reference single-process store. One lock publishes aggregates and all indexes.
 ///
 /// Revoked/closed aggregates are retained until explicit maintenance removal.
 /// Production stores must define retention and capacity limits. Removed IDs
-/// are never reused. No policy callback or cryptographic work runs under this lock.
+/// are never reused. No policy, signature verification or token encoding runs
+/// under this lock; local index hashing and the trusted clock callback do.
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
     state: Mutex<State>,
@@ -471,6 +579,14 @@ impl MemoryStorage {
 
 impl GrantStore for MemoryStorage {
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
+        if aggregate.record.request.existing_access_token.is_some()
+            || aggregate
+                .tokens
+                .values()
+                .any(|token| token.derivation.is_some())
+        {
+            return Err(StoreError::Invalid);
+        }
         let mut state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
         let next = state.last_id.checked_add(1).ok_or(StoreError::Exhausted)?;
         let id = GrantId(next);
@@ -481,8 +597,106 @@ impl GrantStore for MemoryStorage {
             revision: Revision(0),
             aggregate,
         };
-        state.indices.replace(id, indices);
-        state.grants.insert(id, snapshot.clone());
+        state.publish(snapshot.clone(), indices);
+        state.last_id = next;
+        drop(state);
+        Ok(snapshot)
+    }
+
+    fn create_derived(
+        &self,
+        parent: GrantId,
+        revision: Revision,
+        value: &TokenValue,
+        child: GrantAggregate,
+        clock: &dyn Fn() -> u64,
+    ) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
+        let snapshot = state.grants.get(&parent).ok_or(StoreError::Conflict)?;
+        if snapshot.revision != revision || snapshot.aggregate.revoked {
+            return Err(StoreError::Conflict);
+        }
+        let source = snapshot
+            .aggregate
+            .tokens
+            .values()
+            .find(|token| &token.token.value == value)
+            .ok_or(StoreError::Conflict)?;
+        let now = clock();
+        if !source.is_valid_at(now) {
+            return Err(StoreError::Conflict);
+        }
+        let parent_exp = source.expires_at().ok_or(StoreError::Invalid)?;
+        let origin = ParentToken::new(parent, value);
+        if state.derived_origins.contains_key(&parent)
+            || source.derivation.is_some()
+            || source.identifier.is_some()
+            || !source.token.flags.is_empty()
+            || child.revoked
+            || child.tokens.len() != 1
+            || child.record.grant.state() != gnap_core::State::Approved
+            || child.record.continuation_token.is_some()
+            || child.record.interact_handle.is_some()
+            || child.record.interact_ref.is_some()
+            || child.record.interact_expires_at.is_some()
+            || child.record.as_nonce.is_some()
+            || child.record.interaction_completed
+            || child.record.request.existing_access_token.is_some()
+            || child.record.request.interact.is_some()
+            || child.record.request.subject.is_some()
+            || child.record.request.user.is_some()
+        {
+            return Err(StoreError::Invalid);
+        }
+        let token = child.tokens.values().next().ok_or(StoreError::Invalid)?;
+        if !token.is_valid_at(now)
+            || token.identifier.is_some()
+            || !token.token.flags.is_empty()
+            || token
+                .token
+                .expires_in
+                .is_none_or(|ttl| ttl == 0 || ttl > MAX_DERIVED_LIFETIME)
+            || token.expires_at().is_none_or(|expiry| expiry > parent_exp)
+            || token
+                .derivation
+                .as_ref()
+                .is_none_or(|metadata| metadata.parent != origin || metadata.audience.0.is_empty())
+        {
+            return Err(StoreError::Invalid);
+        }
+        let active_children = state
+            .children
+            .get(&origin)
+            .into_iter()
+            .flatten()
+            .filter(|id| {
+                state.grants.get(id).is_some_and(|child| {
+                    !child.aggregate.revoked
+                        && child
+                            .aggregate
+                            .tokens
+                            .values()
+                            .any(|token| token.is_valid_at(now))
+                })
+            })
+            .count();
+        if active_children >= MAX_DERIVED_CHILDREN {
+            return Err(StoreError::DerivationLimit);
+        }
+        if state.derived_origins.len() >= MAX_DERIVED_GRANTS {
+            return Err(StoreError::Exhausted);
+        }
+        let next = state.last_id.checked_add(1).ok_or(StoreError::Exhausted)?;
+        let id = GrantId(next);
+        let indices = Indices::candidate(&child, id)?;
+        state.indices.check(&indices, id)?;
+        let snapshot = GrantSnapshot {
+            id,
+            revision: Revision(0),
+            aggregate: child,
+        };
+        state.derived_origins.insert(id, origin);
+        state.publish(snapshot.clone(), indices);
         state.last_id = next;
         drop(state);
         Ok(snapshot)
@@ -516,6 +730,33 @@ impl GrantStore for MemoryStorage {
         if previous.aggregate.record.request.client != replacement.record.request.client {
             return Err(StoreError::Invalid);
         }
+        if state.derived_origins.contains_key(&id) {
+            // A child is one-shot: only removal of its token is allowed. No
+            // reparenting, clearing provenance, rotation or renewed authority.
+            if replacement.record.request != previous.aggregate.record.request
+                || replacement.record.continuation_token.is_some()
+                || replacement.tokens.iter().any(|(handle, token)| {
+                    previous.aggregate.tokens.get(handle).is_none_or(|old| {
+                        token.token != old.token
+                            || token.client != old.client
+                            || token.issued_at != old.issued_at
+                            || token.identifier != old.identifier
+                            || token.derivation != old.derivation
+                            || token.management_token != old.management_token
+                    })
+                })
+            {
+                return Err(StoreError::Invalid);
+            }
+        } else if replacement.record.request.existing_access_token.is_some()
+            || replacement
+                .tokens
+                .values()
+                .any(|token| token.derivation.is_some())
+        {
+            return Err(StoreError::Invalid);
+        }
+        let cascade = state.cascade(previous, Some(&replacement))?;
         let next = revision.0.checked_add(1).ok_or(StoreError::Exhausted)?;
         let indices = Indices::candidate(&replacement, id)?;
         state.indices.check(&indices, id)?;
@@ -524,8 +765,10 @@ impl GrantStore for MemoryStorage {
             revision: Revision(next),
             aggregate: replacement,
         };
-        state.indices.replace(id, indices);
-        state.grants.insert(id, snapshot.clone());
+        for child in cascade {
+            state.publish(child, Indices::default());
+        }
+        state.publish(snapshot.clone(), indices);
         drop(state);
         Ok(snapshot)
     }
@@ -535,6 +778,18 @@ impl GrantStore for MemoryStorage {
         let previous = state.grants.get(&id).ok_or(StoreError::Conflict)?;
         if previous.revision != revision {
             return Err(StoreError::Conflict);
+        }
+        let cascade = state.cascade(previous, None)?;
+        for child in cascade {
+            state.publish(child, Indices::default());
+        }
+        if let Some(parent) = state.derived_origins.remove(&id) {
+            if let Some(children) = state.children.get_mut(&parent) {
+                children.remove(&id);
+                if children.is_empty() {
+                    state.children.remove(&parent);
+                }
+            }
         }
         state.indices.replace(id, Indices::default());
         state.grants.remove(&id);

@@ -1,0 +1,4 @@
+{
+  "kind": "derivation_request",
+  "body": "{\"existing_access_token\":7,\"client\":{},\"access_token\":[{\"access\":null,\"label\":\"same\",\"flags\":[\"bearer\",\"bearer\"]},{\"access\":[],\"label\":\"same\"}]}"
+}

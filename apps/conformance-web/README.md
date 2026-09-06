@@ -36,7 +36,7 @@ The stable import envelope is:
 }
 ```
 
-Core kinds: `grant_request`, `grant_response`, `continue_request`. The six
+Core kinds: `grant_request`, `grant_response`, `continue_request`. The eight
 RFC 9767 kinds and their optional context are described below. Body is a string,
 not an object: digest checks need the original UTF-8 bytes, without JSON
 reformatting. Omit `headers` when they were not captured; `[]` explicitly means
@@ -74,7 +74,7 @@ References: [RFC 9635](https://www.rfc-editor.org/rfc/rfc9635.html),
 
 ## RFC 9767 imported-message diagnostics
 
-These six kinds use direct `serde_json` assertions, **not SDK message validators**.
+These eight kinds use direct `serde_json` assertions, **not SDK message validators**.
 Only registry data comes from `gnap-registry`; the separately named, optional
 digest check still uses `gnap-crypto`. No new network probe or private-key input
 is included. No report certifies an AS, RS or client.
@@ -87,6 +87,8 @@ is included. No report certifies an AS, RS or client.
 | `rs_error_response` | `gnap-rs-error-import-v1` | `http_status`: integer 100..599 |
 | `resource_registration_request` | `gnap-resource-registration-request-import-v1` | None; even `{}` is rejected |
 | `resource_registration_response` | `gnap-resource-registration-response-import-v1` | None; even `{}` is rejected |
+| `derivation_request` | `gnap-derivation-request-import-v1` | None; even `{}` is rejected |
+| `derivation_response` | `gnap-derivation-response-import-v1` | None; even `{}` is rejected |
 
 `rs_context` is a caller-declared comparison, never evidence of network behavior,
 issuer trust or token properties. Inapplicable fields reject the import instead
@@ -153,6 +155,72 @@ authenticated exchange. Neither imported request nor response proves them.
 Extensions are not forbidden, but their registration and semantics remain
 untested. No comparison context is accepted for registration imports.
 
+### Downstream derivation imports
+
+[RFC 9767 §4](https://www.rfc-editor.org/rfc/rfc9767.html#section-4) reuses the
+GNAP client grant endpoint and grant-message structures: RS1 acts as a client
+with **its own key**, not the incoming token's key or the original client's key.
+The AS must determine that the presented token is appropriate for use at RS1.
+Neither condition can be inferred from an imported `client` or token string.
+
+- `derivation_request` selects a **request for a derived access token**, not all
+  possible GNAP grant requests. It requires string `existing_access_token`,
+  `client` as a reference or object with key, and `access_token` as an object or
+  array under [RFC 9635 §2.1](https://www.rfc-editor.org/rfc/rfc9635.html#section-2.1).
+  Each token object requires GNAP `access`; arrays require unique string labels.
+  A singleton label is optional. Supplied flags are string arrays without
+  repetitions. Unknown flags are not forbidden, but their semantics remain
+  untested. Optional `subject`/`interact` objects and `user` object/reference
+  receive outer-type checks only. Interaction is not prohibited by the example
+  diagram, and this import is not limited to opaque tokens or one downstream hop.
+- `derivation_response` checks selected fields of the ordinary grant response,
+  not a special RS-facing error format. If `access_token` appears, each object
+  requires string `value` and GNAP `access` under
+  [RFC 9635 §3.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.2).
+  A multiple-token response requires unique string labels. Label correspondence
+  to the request and object/array agreement are not tested from a response alone.
+  Supplied flags cannot repeat; `bearer` plus any `key` member fails. Otherwise
+  key is checked only as object/reference. Optional `expires_in` and `manage`
+  receive integer/object checks only, not deadline or nested management checks.
+  Top-level `continue`, `interact`, `subject`, `instance_id` and `error` also
+  receive outer-type checks only, not validation of their contents or combinations.
+
+The response's `derivation-response-value` assertion deliberately checks **string
+shape only**: even a string outside token68 can pass that assertion, while
+`derivation-token-value-encoding` remains `not_tested`. This is not an acceptance
+of that value under the RFC. Parent-token string checks likewise establish no
+format, authenticity or validity. Empty rights arrays are not forbidden. Empty
+token arrays have an array shape but supply no token to validate; per-token
+checks are `not_tested`, not vacuous passes. A response containing only
+continuation, interaction, error, or no members never establishes token issuance.
+
+The following checks always remain `not_tested` on both profiles:
+
+- `derivation-proof-and-parent-validity`: key ownership, signature/replay and
+  parent validity/equality to the original presentation.
+- `derivation-parent-rs-suitability`: the AS's mandatory RS1 suitability decision.
+- `derivation-effective-rights-and-audience`: actual authority, consent and
+  downstream audience. No universal subset policy is inferred from a demo.
+- `derivation-revocation-and-lineage`: parent-child relationships and later
+  expiry/revocation. Cascading revocation is not imposed as a blanket §4 rule.
+- `derivation-grant-exchange`: state, matching, interaction, continuation, errors,
+  nested keys/management, token formats and extension semantics.
+- `derivation-token-value-encoding`: token68 and token content validation.
+
+Additional members, including an unrecognized `type_token`, are not prohibited
+or interpreted as format negotiation. No comparison context, private-key input,
+new HTTP assertion or network probe is added. Imported headers do not authenticate
+these messages. Existing size, duplicate-name and parser limits apply unchanged.
+
+Synthetic fixtures: `fixtures/derivation-request.json`,
+`fixtures/derivation-response.json`, `fixtures/invalid-derivation-request.json`
+and `fixtures/invalid-derivation-response.json`. Their names and tokens are test
+data, not captures of an authenticated downstream exchange. The offline table
+tests in `tests/derivation_imports.rs` include multi-token, interaction-only,
+continuation-only and error-only responses, malformed fields and ambiguity.
+
+### Shared import limits
+
 Imported headers do not create an HTTP 200 or single-Content-Type rule from an
 RFC example. Actual HTTP/media behavior remains untested, not certified valid.
 In the discovery and active-issuer URI checks, userinfo, including an empty
@@ -183,7 +251,8 @@ curl --fail-with-body http://localhost:8080/api/analyze \
   --data-binary @apps/conformance-web/fixtures/introspection-active.json
 ```
 
-Tests in `tests/rs_imports.rs` and `tests/resource_registration_imports.rs`
+Tests in `tests/rs_imports.rs`, `tests/resource_registration_imports.rs` and
+`tests/derivation_imports.rs`
 exercise the diagnostic oracle, not a deployed AS.
 Report time is analysis time, not capture time. State, revocation, effective
 rights, trust, RS authorization and actual publication remain `not_tested`;

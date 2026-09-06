@@ -14,14 +14,18 @@ use gnap_types::{
 };
 
 pub(super) const RS_ID: &str = "delegation-demo-rs";
+pub(super) const RS2_ID: &str = "delegation-demo-metadata-rs";
+pub(super) const RS2_OWNER: &str = "demo-metadata-owner";
 const MAX_RESPONSE: usize = 8192;
 type Transport = dyn HttpTransport<Error = &'static str> + Send + Sync;
 
 pub(super) struct Registration {
     pub key: KeyObject,
+    pub metadata_key: KeyObject,
     pub client_key: KeyObject,
     pub decisions: Decisions,
     pub nonces: MemoryStorage,
+    pub derivation_nonces: MemoryStorage,
     pub resources: Arc<MemoryResourceSetStore>,
 }
 
@@ -36,10 +40,17 @@ pub(super) fn public_key(signer: &Ps256Signer) -> KeyObject {
 
 impl ResourceServerResolver for Registration {
     fn resolve(&self, rs: &ResourceServer) -> Option<ResolvedResourceServer> {
-        (rs.as_reference() == Some(RS_ID)).then(|| ResolvedResourceServer {
-            id: RsId(resource_registration::RS_OWNER.into()),
-            key: self.key.clone(),
-        })
+        match rs.as_reference()? {
+            RS_ID => Some(ResolvedResourceServer {
+                id: RsId(resource_registration::RS_OWNER.into()),
+                key: self.key.clone(),
+            }),
+            RS2_ID => Some(ResolvedResourceServer {
+                id: RsId(RS2_OWNER.into()),
+                key: self.metadata_key.clone(),
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -59,6 +70,29 @@ impl IntrospectionPolicy for Registration {
         token: &TokenRecord,
         minimum: Option<&[AccessItem]>,
     ) -> IntrospectionDecision {
+        if rs.as_reference() == Some(RS2_ID) {
+            let expected = vec![AccessItem::Reference(derivation::METADATA_READ.into())];
+            let accepted = token
+                .derivation
+                .as_ref()
+                .is_some_and(|derived| derived.audience == RsId(RS2_OWNER.into()))
+                && token.client.as_reference() == Some(RS_ID)
+                && token.token.access.as_ref() == Some(&expected)
+                && token
+                    .token
+                    .key
+                    .as_ref()
+                    .is_none_or(|key| key.as_value() == Some(&self.key))
+                && minimum.is_none_or(|rights| rights == expected);
+            return if accepted {
+                IntrospectionDecision::Active {
+                    access: expected,
+                    key: Some(self.key.clone()),
+                }
+            } else {
+                IntrospectionDecision::Inactive
+            };
+        }
         // These two synthetic rights are this pre-registered RS's audience.
         // Unknown descriptions are never silently ignored or mapped to a right.
         let known = |right: &AccessItem| matches!(right, AccessItem::Reference(value) if matches!(value.as_str(), FOLDER_READ | ARCHIVE_READ));
@@ -71,6 +105,7 @@ impl IntrospectionPolicy for Registration {
             .map(|registry| registry.clients.contains(&client_id(&token.client)))
             .unwrap_or(false);
         if rs.as_reference() != Some(RS_ID)
+            || token.derivation.is_some()
             || !registered
             || token
                 .token
@@ -102,6 +137,32 @@ pub(super) struct ResourceClient {
     pub nonces: MemoryStorage,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Profile {
+    Documents,
+    Metadata,
+}
+impl Profile {
+    fn rs_id(self) -> &'static str {
+        match self {
+            Self::Documents => RS_ID,
+            Self::Metadata => RS2_ID,
+        }
+    }
+    fn accepts_lifetime(self, duration: Option<u64>) -> bool {
+        match self {
+            Self::Documents => duration == Some(1200),
+            Self::Metadata => duration.is_some_and(|seconds| (1..=60).contains(&seconds)),
+        }
+    }
+    fn accepts_rights(self, access: &[AccessItem]) -> bool {
+        match self {
+            Self::Documents => access.len() <= 2 && access.iter().all(|right| matches!(right, AccessItem::Reference(value) if matches!(value.as_str(), FOLDER_READ | ARCHIVE_READ))),
+            Self::Metadata => access == [AccessItem::Reference(derivation::METADATA_READ.into())],
+        }
+    }
+}
+
 // This transport owns no blocking runtime: constructing/dropping a reqwest
 // blocking client happens only inside the bounded blocking resource task.
 pub(super) struct Http {
@@ -114,8 +175,11 @@ impl HttpTransport for Http {
             format!("{}/.well-known/gnap-as-rs", self.origin),
             format!("{}/introspect", self.origin),
             format!("{}{}", self.origin, resource_registration::PATH),
+            format!("{}/gnap", self.origin),
+            format!("{}{}", self.origin, derivation::RS2_PATH),
         ]
         .contains(&request.url)
+            && !derivation::management_destination(&self.origin, &request.url)
         {
             return Err("untrusted introspection destination");
         }
@@ -168,13 +232,21 @@ impl HttpTransport for Http {
 pub(super) fn json_response<T: serde::de::DeserializeOwned>(
     response: HttpResponse,
 ) -> Result<T, ResourceError> {
+    if response.status != 200 {
+        return Err(ResourceError::Unavailable);
+    }
+    json_body(&response)
+}
+
+pub(super) fn json_body<T: serde::de::DeserializeOwned>(
+    response: &HttpResponse,
+) -> Result<T, ResourceError> {
     let types: Vec<_> = response
         .headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
         .collect();
-    if response.status != 200
-        || response.body.len() > MAX_RESPONSE
+    if response.body.len() > MAX_RESPONSE
         || types.len() != 1
         || !types[0]
             .1
@@ -192,6 +264,16 @@ impl ResourceClient {
         &self,
         request: &HttpRequest,
         right: &str,
+        clock: impl Fn() -> u64,
+    ) -> Result<(), ResourceError> {
+        self.authorize_profile(request, right, Profile::Documents, clock)
+    }
+
+    pub fn authorize_profile(
+        &self,
+        request: &HttpRequest,
+        right: &str,
+        profile: Profile,
         clock: impl Fn() -> u64,
     ) -> Result<(), ResourceError> {
         let auth: Vec<_> = request
@@ -237,7 +319,7 @@ impl ResourceClient {
         }
         let context = IntrospectionRequest {
             access_token: TokenValue::new(value).map_err(|_| ResourceError::Denied)?,
-            resource_server: ResourceServer::ByReference(RS_ID.into()),
+            resource_server: ResourceServer::ByReference(profile.rs_id().into()),
             proof: Some(KeyProofingMethod::Httpsig),
             access: Some(vec![AccessItem::Reference(right.into())]),
             extra: Default::default(),
@@ -268,14 +350,13 @@ impl ResourceClient {
             return Err(ResourceError::Unavailable);
         };
         if active.iss != format!("{}/gnap", self.origin)
-            || expires.checked_sub(issued) != Some(1200)
+            || !profile.accepts_lifetime(expires.checked_sub(issued))
             || key.validate().is_err()
             || key.proof.method() != &KeyProofingMethod::Httpsig
             || matches!(&key.proof, gnap_types::key::Proof::Detailed { params, .. } if !params.is_empty())
             || active.flags.as_ref().is_some_and(|flags| !flags.is_empty())
             || !active.extra.is_empty()
-            || active.access.len() > 2
-            || active.access.iter().any(|right| !matches!(right, AccessItem::Reference(value) if matches!(value.as_str(), FOLDER_READ | ARCHIVE_READ)))
+            || !profile.accepts_rights(&active.access)
         {
             return Err(ResourceError::Unavailable);
         }

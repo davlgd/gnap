@@ -171,7 +171,238 @@ struct PreparedToken {
     continuation: Option<TokenValue>,
 }
 
+struct ApprovedDerivation {
+    request: GrantRequest,
+    access: crate::DerivedAccess,
+    requester: crate::ResolvedResourceServer,
+    parent: GrantSnapshot,
+    issued_at: u64,
+    ttl: u64,
+}
+
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K, S, N> {
+    /// Opts the grant endpoint into the one-hop opaque downstream profile.
+    ///
+    /// All POST grant bodies entering this handler are bounded to 64 KiB;
+    /// ordinary requests then follow the normal flow. Derivation allows
+    /// one token, no interaction/user/subject/continuation, and a finite
+    /// parent. RS proof uses the trusted RS registry and separate replay memory.
+    /// Every identity recognized by this derivation resolver must also resolve
+    /// through [`KeyResolver`] to a verifier accepting the same proof, so child
+    /// management remains usable. Restrict this resolver to eligible requester
+    /// identities; it need not admit every RS known to introspection.
+    /// The policy must establish parent suitability for this precise RS and the
+    /// cross-API rights mapping. The child is bound to RS1, destined for another
+    /// RS, and expires within 60 seconds and no later than its parent.
+    ///
+    /// `clock` is a trusted Unix-seconds source, reread after proof/policy and at
+    /// the storage commit. It must be brief, non-reentrant and side-effect-free;
+    /// the memory store calls it under its transaction lock. Neither this method
+    /// nor the store retries policy, proof or a failed commit automatically.
+    pub fn handle_grant_with_derivation(
+        &self,
+        request: &HttpRequest,
+        keys: &impl crate::ResourceServerResolver,
+        policy: &impl crate::DerivationPolicy,
+        nonces: &dyn crate::NonceStore,
+        clock: &dyn Fn() -> u64,
+    ) -> HttpResponse {
+        let now = clock();
+        if request.url != self.endpoints.grant || !request.method.eq_ignore_ascii_case("POST") {
+            return self.handle(request, now);
+        }
+        let Some(bytes) = request
+            .body
+            .as_deref()
+            .filter(|body| body.len() <= 64 * 1024)
+        else {
+            return error(ErrorCode::InvalidRequest, "invalid grant request");
+        };
+        let Ok(raw) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+            return error(ErrorCode::InvalidRequest, "invalid grant request");
+        };
+        if raw.get("existing_access_token").is_none() {
+            return self.handle(request, now);
+        }
+        if let Err(response) = require_json_content(request) {
+            return response;
+        }
+        let Ok(body) = serde_json::from_slice::<GrantRequest>(bytes) else {
+            return error(ErrorCode::InvalidRequest, "invalid downstream request");
+        };
+        let Some(value) = body.existing_access_token.as_ref() else {
+            return derivation_denied();
+        };
+        let identity = match derivation_identity(&body, &raw, request) {
+            Ok(identity) => identity,
+            Err(response) => return response,
+        };
+        // RFC 9767 §4: "the RS MUST identify itself with its own key in the client
+        // field and sign the request just as any client instance would".
+        let Some(rs) = crate::rs::authenticate_rs(keys, nonces, request, &identity, now) else {
+            return derivation_denied();
+        };
+        if self.keys.resolve(&body.client).is_none_or(|verifier| {
+            !crate::derivation::management_binding(request, &rs.key, verifier.as_ref(), now)
+        }) {
+            return misconfigured("inconsistent downstream management key");
+        }
+        let parent = match self
+            .storage
+            .lookup(GrantSelector::AccessToken(value.as_str()))
+        {
+            Ok(Some(parent)) => parent,
+            Ok(None) => return derivation_denied(),
+            Err(failure) => return storage_failure(failure),
+        };
+        let Some(source) = parent
+            .aggregate
+            .tokens
+            .values()
+            .find(|token| &token.token.value == value)
+        else {
+            return derivation_denied();
+        };
+        if parent.aggregate.revoked
+            || !source.is_valid_at(now)
+            || source.derivation.is_some()
+            || source.identifier.is_some()
+            || !source.token.flags.is_empty()
+            || !source.token.extra.is_empty()
+            || source.expires_at().is_none()
+        {
+            return derivation_denied();
+        }
+        // RFC 9767 §4: "The AS MUST determine that the token being presented is
+        // appropriate for use at the RS making the token chaining request."
+        let Some(approved) = policy.evaluate(&body, &rs, &parent, source) else {
+            return derivation_denied();
+        };
+        if approved.audience == rs.id
+            || approved.audience.0.is_empty()
+            || approved.access.is_empty()
+            || approved.access.len() > 64
+        {
+            return derivation_denied();
+        }
+        let issued_at = clock();
+        let Some(ttl) = source
+            .expires_at()
+            .and_then(|deadline| deadline.checked_sub(issued_at))
+            .filter(|ttl| *ttl > 0)
+            .map(|ttl| ttl.min(crate::derivation::MAX_DERIVED_LIFETIME))
+        else {
+            return derivation_denied();
+        };
+        if issued_at < now || !source.is_valid_at(issued_at) {
+            return derivation_denied();
+        }
+        self.issue_derived(
+            ApprovedDerivation {
+                request: body,
+                access: approved,
+                requester: rs,
+                parent,
+                issued_at,
+                ttl,
+            },
+            clock,
+        )
+    }
+
+    fn issue_derived(&self, approved: ApprovedDerivation, clock: &dyn Fn() -> u64) -> HttpResponse {
+        let ApprovedDerivation {
+            request: body,
+            access: approved,
+            requester: rs,
+            parent,
+            issued_at,
+            ttl,
+        } = approved;
+        let Some(value) = body.existing_access_token.as_ref() else {
+            return derivation_denied();
+        };
+        let Some(tokens) = body.access_token.as_ref() else {
+            return derivation_denied();
+        };
+        // This snapshot reserves against parent/sibling credential collisions;
+        // it does not copy or continue the parent grant's continuation.
+        let prepared = match self.encode_issued_with_lifetime(
+            &body,
+            &approved.access,
+            issued_at,
+            false,
+            Some(&parent),
+            Some(ttl),
+        ) {
+            Ok(prepared) => prepared,
+            Err(response) => return response,
+        };
+        let token = AccessToken {
+            value: prepared.encoded.value,
+            label: tokens.tokens[0].label.clone(),
+            manage: Some(TokenManage {
+                uri: format!(
+                    "{}/{}",
+                    self.endpoints.token_management.trim_end_matches('/'),
+                    prepared.management
+                ),
+                access_token: BoundToken::new(prepared.management_token.clone()),
+            }),
+            access: Some(approved.access),
+            expires_in: Some(ttl),
+            key: Some(gnap_types::key::Key::ByValue(Box::new(rs.key))),
+            flags: Vec::new(),
+            extra: serde_json::Map::new(),
+        };
+        if token.validate().is_err() {
+            return misconfigured("invalid derived token preparation");
+        }
+        let mut grant = Grant::new();
+        if grant.apply(Event::AsNeedsNoInteraction, issued_at).is_err() {
+            return misconfigured("invalid derived grant state");
+        }
+        let mut stored_request = body.clone();
+        stored_request.existing_access_token = None;
+        let mut child = GrantAggregate::new(GrantRecord {
+            grant,
+            request: stored_request,
+            continuation_token: None,
+            as_nonce: None,
+            interact_handle: None,
+            interact_expires_at: None,
+            interact_ref: None,
+            interaction_completed: false,
+        });
+        child.tokens.insert(
+            prepared.management,
+            TokenRecord {
+                derivation: Some(crate::DerivedToken {
+                    parent: crate::ParentToken::new(parent.id, value),
+                    audience: approved.audience,
+                }),
+                identifier: None,
+                issued_at,
+                token: token.clone(),
+                client: body.client,
+                management_token: prepared.management_token.as_str().into(),
+            },
+        );
+        match self
+            .storage
+            .create_derived(parent.id, parent.revision, value, child, clock)
+        {
+            Ok(_) => ok(&GrantResponse {
+                access_token: Some(AccessTokenResponse {
+                    cardinality: gnap_types::Cardinality::Single,
+                    tokens: vec![token],
+                }),
+                ..GrantResponse::default()
+            }),
+            Err(StoreError::Conflict | StoreError::DerivationLimit) => derivation_denied(),
+            Err(failure) => storage_failure(failure),
+        }
+    }
     /// Offers discovery and introspection for this AS's opaque reference tokens.
     ///
     /// The RS resolver and replay memory are separate from client authentication.
@@ -362,6 +593,12 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             Ok(b) => b,
             Err(r) => return r,
         };
+        if body.existing_access_token.is_some() {
+            return error(
+                ErrorCode::InvalidRequest,
+                "downstream derivation is not enabled on this handler",
+            );
+        }
 
         // §7.1 — a key sent by value is presented in exactly one format, and a
         // JWK carries `alg` and `kid`. The AS checks that before trying to use
@@ -580,13 +817,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // SDK policy, not an RFC requirement: an expired or not-yet-issued
         // value cannot be renewed. A clock rollback or an unrepresentable new
         // deadline must not extend it either. Keep all original metadata.
-        if !record.is_valid_at(now)
-            || record
-                .token
-                .expires_in
-                .is_some_and(|seconds| now.checked_add(seconds).is_none())
-            || !self.policy.may_rotate(&record.token)
-        {
+        if !rotation_permitted_at(&record, now) || !self.policy.may_rotate(&record.token) {
             return error(
                 ErrorCode::InvalidRotation,
                 "token lifetime or server policy prevents rotation (RFC 9635 §6.1)",
@@ -1269,6 +1500,18 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         authenticated: Option<&GrantSnapshot>,
     ) -> Result<PreparedToken, HttpResponse> {
         let expires_in = self.access_token_lifetime(request, now)?;
+        self.encode_issued_with_lifetime(request, access, now, keep_open, authenticated, expires_in)
+    }
+
+    fn encode_issued_with_lifetime(
+        &self,
+        request: &GrantRequest,
+        access: &[AccessItem],
+        now: u64,
+        keep_open: bool,
+        authenticated: Option<&GrantSnapshot>,
+        expires_in: Option<u64>,
+    ) -> Result<PreparedToken, HttpResponse> {
         let candidate = TokenValue::new(self.nonces.next()).map_err(|_| {
             misconfigured("Nonces returned an access value outside token68 (RFC 9635 §3.2.1)")
         })?;
@@ -1495,6 +1738,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         aggregate.tokens.insert(
             management,
             TokenRecord {
+                derivation: None,
                 identifier: encoded.identifier,
                 issued_at: now,
                 token: token.clone(),
@@ -2023,4 +2267,66 @@ fn storage_failure(failure: StoreError) -> HttpResponse {
         headers: vec![("Cache-Control".into(), "no-store".into())],
         body: Vec::new(),
     }
+}
+
+fn rotation_permitted_at(record: &TokenRecord, now: u64) -> bool {
+    record.derivation.is_none()
+        && record.is_valid_at(now)
+        && record
+            .token
+            .expires_in
+            .is_none_or(|seconds| now.checked_add(seconds).is_some())
+}
+
+fn derivation_identity(
+    body: &GrantRequest,
+    raw: &serde_json::Value,
+    request: &HttpRequest,
+) -> Result<gnap_types::rs::ResourceServer, HttpResponse> {
+    let Some(tokens) = body.access_token.as_ref() else {
+        return Err(derivation_denied());
+    };
+    if request
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        || ["interact", "user", "subject"]
+            .iter()
+            .any(|field| raw.get(field).is_some())
+        || !body.extra.is_empty()
+        || tokens.cardinality != gnap_types::Cardinality::Single
+        || tokens.tokens.len() != 1
+        || tokens.tokens[0].access.is_empty()
+        || tokens.tokens[0].access.len() > 64
+        || !tokens.tokens[0].flags.is_empty()
+        || !tokens.tokens[0].extra.is_empty()
+    {
+        return Err(error(
+            ErrorCode::InvalidRequest,
+            "unsupported downstream request shape",
+        ));
+    }
+    match &body.client {
+        Client::ByReference(reference) => Ok(gnap_types::rs::ResourceServer::ByReference(
+            reference.clone(),
+        )),
+        Client::ByValue(client) => {
+            if !client.extra.is_empty() || client.display.is_some() || client.class_id.is_some() {
+                return Err(error(
+                    ErrorCode::InvalidRequest,
+                    "unsupported downstream client fields",
+                ));
+            }
+            Ok(gnap_types::rs::ResourceServer::ByValue(Box::new(
+                gnap_types::rs::ResourceServerObject {
+                    key: client.key.clone(),
+                    extra: serde_json::Map::new(),
+                },
+            )))
+        }
+    }
+}
+
+fn derivation_denied() -> HttpResponse {
+    error(ErrorCode::RequestDenied, "downstream derivation denied")
 }

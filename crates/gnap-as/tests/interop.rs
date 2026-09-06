@@ -3072,6 +3072,7 @@ fn management_server<N: Nonces>(
         &storage,
         "oldhandle",
         TokenRecord {
+            derivation: None,
             identifier: None,
             issued_at: 1_000,
             token,
@@ -3610,6 +3611,7 @@ fn rotation_refusal_preserves_value_rights_lifetime_and_timestamp() {
             "manage":{"uri":"https://as.example/token/oldhandle", "access_token":{"value":"oldmanagement"}}
         })).unwrap();
         let original = TokenRecord {
+            derivation: None,
             identifier: None,
             issued_at,
             token,

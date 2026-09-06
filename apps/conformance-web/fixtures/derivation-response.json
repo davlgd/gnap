@@ -1,0 +1,5 @@
+{
+  "kind": "derivation_response",
+  "body": "{\"access_token\":{\"value\":\"synthetic-child-not-a-credential\",\"access\":[\"demo-downstream-read\"],\"label\":\"downstream\",\"expires_in\":60}}",
+  "headers": [["Content-Type", "application/json"], ["Cache-Control", "no-store"]]
+}

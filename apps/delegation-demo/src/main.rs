@@ -37,6 +37,7 @@ const MAX_GRANTS: usize = 256;
 const SESSION_LIFETIME: Duration = Duration::from_secs(1200);
 const FOLDER_READ: &str = "synthetic-folder:read";
 const ARCHIVE_READ: &str = "synthetic-archive:read";
+mod derivation;
 mod introspection;
 mod resource_registration;
 #[derive(Default)]
@@ -267,6 +268,25 @@ impl IndexedStorage {
     }
 }
 impl GrantStore for IndexedStorage {
+    fn create_derived(
+        &self,
+        parent: GrantId,
+        revision: Revision,
+        parent_value: &TokenValue,
+        child: GrantAggregate,
+        clock: &dyn Fn() -> u64,
+    ) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.lock()?;
+        if state.continuation_deadlines.len() >= MAX_GRANTS {
+            return Err(StoreError::Unavailable);
+        }
+        let deadline = clock().checked_add(60).ok_or(StoreError::Exhausted)?;
+        let snapshot = state
+            .base
+            .create_derived(parent, revision, parent_value, child, clock)?;
+        state.continuation_deadlines.insert(snapshot.id, deadline);
+        Ok(snapshot)
+    }
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
         let mut state = self.lock()?;
         let now = now();
@@ -322,6 +342,9 @@ fn requested_rights(
     resources: &gnap_as::MemoryResourceSetStore,
 ) -> Option<Vec<AccessItem>> {
     use gnap_as::ResourceSetStore;
+    if request.client.as_reference() == Some(introspection::RS_ID) {
+        return None;
+    }
     let tokens = &request.access_token.as_ref()?.tokens;
     if tokens.len() != 1 {
         return None;
@@ -418,10 +441,16 @@ fn client_id(client: &Client) -> String {
 }
 struct KnownKeys {
     signer: Arc<Ps256Signer>,
+    rs_key: gnap_types::key::KeyObject,
     decisions: Decisions,
 }
 impl KeyResolver for KnownKeys {
     fn resolve(&self, client: &Client) -> Option<Box<dyn Verifier>> {
+        if client.as_reference() == Some(introspection::RS_ID) {
+            return gnap_crypto::Ps256Verifier::from_public_jwk(self.rs_key.jwk.as_ref()?)
+                .ok()
+                .map(|key| Box::new(key) as Box<dyn Verifier>);
+        }
         self.decisions
             .lock()
             .unwrap()
@@ -449,7 +478,10 @@ impl HttpTransport for Network {
             && (url.path() == "/gnap"
                 || url.path() == "/continue"
                 || url.path().starts_with("/token/")
-                || matches!(url.path(), "/resource/folder" | "/resource/archive"));
+                || matches!(
+                    url.path(),
+                    "/resource/folder" | "/resource/archive" | derivation::RS1_PATH
+                ));
         if !allowed {
             return Err("Network transport refused an endpoint outside this demo's fixed origin/path allow-list".into());
         }
@@ -497,8 +529,10 @@ struct App {
     starts: Arc<Mutex<VecDeque<Instant>>>,
     admission: Arc<tokio::sync::Semaphore>,
     resource_admission: Arc<tokio::sync::Semaphore>,
+    metadata_admission: Arc<tokio::sync::Semaphore>,
     rs_registration: Arc<introspection::Registration>,
     resource_client: Arc<introspection::ResourceClient>,
+    metadata_client: Arc<introspection::ResourceClient>,
     bootstrap: resource_registration::Bootstrap,
 }
 struct Command {
@@ -852,7 +886,7 @@ fn client_worker(
                     session.folder = None;
                     session.events.push("Signed DELETE on continuation revoked the grant and all its tokens atomically (204).".into());
                 }
-                "read" | "read-archive" | "check-retired" => {
+                "read" | "read-archive" | "read-metadata" | "check-retired" => {
                     let token = if command.action != "check-retired" {
                         session
                             .client
@@ -865,7 +899,9 @@ fn client_worker(
                             .clone()
                             .ok_or("Rotate or revoke a token first")?
                     };
-                    let path = if command.action == "read-archive" {
+                    let path = if command.action == "read-metadata" {
+                        derivation::RS1_PATH
+                    } else if command.action == "read-archive" {
                         "/resource/archive"
                     } else {
                         "/resource/folder"
@@ -880,7 +916,7 @@ fn client_worker(
                     let response = transport.send(request)?;
                     session.last_resource_status = Some(response.status);
                     if response.status == 503 {
-                        return Err("The RS could not complete introspection (503). Access is refused temporarily; this does not establish token invalidity.".into());
+                        return Err("The RS could not complete an AS or downstream exchange (503). Access is refused temporarily; this does not establish token invalidity.".into());
                     }
                     if command.action == "check-retired" {
                         if response.status != 401 {
@@ -984,6 +1020,18 @@ fn read_resource_with_clock(
     request: &HttpRequest,
     clock: impl Fn() -> u64,
 ) -> Result<Value, ResourceError> {
+    if request.url == format!("{}{}", app.origin, derivation::RS1_PATH) && request.method == "GET" {
+        return derivation::read(&app.resource_client, request);
+    }
+    if request.url == format!("{}{}", app.origin, derivation::RS2_PATH) && request.method == "GET" {
+        app.metadata_client.authorize_profile(
+            request,
+            derivation::METADATA_READ,
+            introspection::Profile::Metadata,
+            clock,
+        )?;
+        return Ok(json!({"source":"synthetic-archive","document_count":1}));
+    }
     let right = match request.url.strip_prefix(&app.origin) {
         Some("/resource/folder") if request.method == "GET" => FOLDER_READ,
         Some("/resource/archive") if request.method == "GET" => ARCHIVE_READ,
@@ -1001,7 +1049,12 @@ async fn resource(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(permit) = app.resource_admission.clone().try_acquire_owned() else {
+    let admission = if uri.path() == derivation::RS2_PATH {
+        &app.metadata_admission
+    } else {
+        &app.resource_admission
+    };
+    let Ok(permit) = admission.clone().try_acquire_owned() else {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
     let request = HttpRequest {
@@ -1022,7 +1075,7 @@ async fn resource(
         Ok(Ok(folder)) => Json(folder).into_response(),
         Ok(Err(ResourceError::Unavailable)) => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":"introspection_unavailable"})),
+            Json(json!({"error":"resource_unavailable"})),
         )
             .into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -1072,6 +1125,7 @@ async fn action(
         "downscope",
         "expand",
         "read-archive",
+        "read-metadata",
         "revoke-grant",
     ]
     .contains(&action)
@@ -1199,7 +1253,14 @@ async fn protocol(
             ) {
                 introspection::handle(&app, &request, now())
             } else {
-                app.server.handle(&request, now())
+                let registration = &app.rs_registration;
+                app.server.handle_grant_with_derivation(
+                    &request,
+                    &derivation::Requesters(registration),
+                    registration.as_ref(),
+                    &registration.derivation_nonces,
+                    &now,
+                )
             },
         )
     })
@@ -1252,6 +1313,14 @@ async fn main() {
         Ps256Signer::generate(2048, "delegation-demo-ephemeral")
             .expect("OS randomness and RSA generation"),
     );
+    let rs_signer = Arc::new(
+        Ps256Signer::generate(2048, "delegation-demo-rs")
+            .expect("OS randomness and RSA generation"),
+    );
+    let metadata_signer = Arc::new(
+        Ps256Signer::generate(2048, "delegation-demo-metadata-rs")
+            .expect("OS randomness and RSA generation"),
+    );
     let decisions: Decisions = Arc::default();
     let storage = Arc::new(IndexedStorage::default());
     let resources = resource_registration::store();
@@ -1259,6 +1328,7 @@ async fn main() {
         ConsentPolicy(decisions.clone(), resources.clone()),
         KnownKeys {
             signer: signer.clone(),
+            rs_key: introspection::public_key(&rs_signer),
             decisions: decisions.clone(),
         },
         storage.clone(),
@@ -1280,20 +1350,26 @@ async fn main() {
         server
     });
     let (sender, receiver) = mpsc::sync_channel(32);
-    let rs_signer = Arc::new(
-        Ps256Signer::generate(2048, "delegation-demo-rs")
-            .expect("OS randomness and RSA generation"),
-    );
     let rs_registration = Arc::new(introspection::Registration {
         key: introspection::public_key(&rs_signer),
+        metadata_key: introspection::public_key(&metadata_signer),
         client_key: introspection::public_key(&signer),
         decisions: decisions.clone(),
         nonces: MemoryStorage::default(),
+        derivation_nonces: MemoryStorage::default(),
         resources,
     });
     let resource_client = Arc::new(introspection::ResourceClient {
         origin: origin.clone(),
         signer: rs_signer,
+        transport: Arc::new(introspection::Http {
+            origin: origin.clone(),
+        }),
+        nonces: MemoryStorage::default(),
+    });
+    let metadata_client = Arc::new(introspection::ResourceClient {
+        origin: origin.clone(),
+        signer: metadata_signer,
         transport: Arc::new(introspection::Http {
             origin: origin.clone(),
         }),
@@ -1311,8 +1387,10 @@ async fn main() {
         starts: Arc::default(),
         admission: Arc::new(tokio::sync::Semaphore::new(16)),
         resource_admission: Arc::new(tokio::sync::Semaphore::new(4)),
+        metadata_admission: Arc::new(tokio::sync::Semaphore::new(4)),
         rs_registration,
         resource_client,
+        metadata_client,
         bootstrap: Arc::default(),
     };
     let worker_storage = storage.clone();
@@ -1379,6 +1457,8 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/continue", axum::routing::any(protocol))
         .route("/resource/folder", get(resource))
         .route("/resource/archive", get(resource))
+        .route(derivation::RS1_PATH, get(resource))
+        .route(derivation::RS2_PATH, get(resource))
         .route("/continue/{handle}", axum::routing::any(protocol))
         .route("/token/{handle}", axum::routing::any(protocol))
         .route("/app.js", get(|| async { ([("content-type", "text/javascript")], include_str!("../static/app.js")) }))
@@ -1760,6 +1840,8 @@ mod tests {
     }
     fn configured_test_app(origin: &str, ready: bool) -> App {
         let signer = Arc::new(Ps256Signer::generate(2048, "test-client").unwrap());
+        let rs_signer = Arc::new(Ps256Signer::generate(2048, "test-rs").unwrap());
+        let metadata_signer = Arc::new(Ps256Signer::generate(2048, "test-metadata-rs").unwrap());
         let storage = Arc::new(IndexedStorage::default());
         let resources = resource_registration::store();
         let bootstrap = Arc::new(std::sync::OnceLock::new());
@@ -1778,6 +1860,7 @@ mod tests {
             ConsentPolicy(decisions.clone(), resources.clone()),
             KnownKeys {
                 signer: signer.clone(),
+                rs_key: introspection::public_key(&rs_signer),
                 decisions: decisions.clone(),
             },
             storage.clone(),
@@ -1795,12 +1878,13 @@ mod tests {
             server
         });
         let (commands, _) = mpsc::sync_channel(1);
-        let rs_signer = Arc::new(Ps256Signer::generate(2048, "test-rs").unwrap());
         let rs_registration = Arc::new(introspection::Registration {
             key: introspection::public_key(&rs_signer),
+            metadata_key: introspection::public_key(&metadata_signer),
             client_key: introspection::public_key(&signer),
             decisions: decisions.clone(),
             nonces: MemoryStorage::default(),
+            derivation_nonces: MemoryStorage::default(),
             resources,
         });
         let resource_client = Arc::new(introspection::ResourceClient {
@@ -1810,6 +1894,14 @@ mod tests {
                 server: server.clone(),
                 storage: storage.clone(),
                 registration: rs_registration.clone(),
+                origin: origin.into(),
+            }),
+            nonces: MemoryStorage::default(),
+        });
+        let metadata_client = Arc::new(introspection::ResourceClient {
+            origin: origin.into(),
+            signer: metadata_signer,
+            transport: Arc::new(introspection::Http {
                 origin: origin.into(),
             }),
             nonces: MemoryStorage::default(),
@@ -1824,13 +1916,16 @@ mod tests {
             starts: Arc::default(),
             admission: Arc::new(tokio::sync::Semaphore::new(2)),
             resource_admission: Arc::new(tokio::sync::Semaphore::new(2)),
+            metadata_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             rs_registration,
             resource_client,
+            metadata_client,
             bootstrap,
         }
     }
     pub(super) fn test_record(value: &str) -> TokenRecord {
         TokenRecord {
+            derivation: None,
             identifier: None,
             issued_at: now(),
             token: serde_json::from_value(
@@ -2262,12 +2357,14 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).unwrap(),
-                json!({"error":if path == "/resource/folder" {"introspection_unavailable"} else {"storage_unavailable"}})
+                json!({"error":if path == "/resource/folder" {"resource_unavailable"} else {"storage_unavailable"}})
             );
         }
     }
 }
 
+#[cfg(test)]
+mod derivation_tests;
 #[cfg(test)]
 mod introspection_tests;
 #[cfg(test)]
