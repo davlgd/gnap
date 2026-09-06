@@ -1,0 +1,8 @@
+{
+  "kind": "rs_discovery",
+  "body": "{\"grant_request_endpoint\":\"https://as.example/gnap\",\"introspection_endpoint\":\"https://as.example/introspect\",\"token_formats_supported\":[\"biscuit\"],\"key_proofs_supported\":[\"httpsig\"]}",
+  "rs_context": {
+    "grant_request_endpoint": "https://as.example/gnap",
+    "discovery_url": "https://as.example/.well-known/gnap-as-rs"
+  }
+}

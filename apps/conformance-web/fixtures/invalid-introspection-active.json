@@ -1,0 +1,5 @@
+{
+  "kind": "introspection_response",
+  "body": "{\"active\":true,\"access\":[],\"flags\":[\"bearer\"],\"key\":\"synthetic-key-reference\",\"value\":\"synthetic-not-a-token\"}",
+  "rs_context": {"token_binding":"bearer"}
+}

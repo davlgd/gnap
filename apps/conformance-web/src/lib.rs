@@ -16,6 +16,8 @@ use tokio::sync::Semaphore;
 
 pub mod discovery;
 pub mod probe;
+mod rs_import;
+pub use rs_import::{Binding as TokenBinding, Context as RsContext};
 
 pub const MAX_UPLOAD: usize = 65_536;
 pub const MAX_MESSAGE: usize = 32_768;
@@ -27,6 +29,10 @@ pub enum MessageKind {
     GrantResponse,
     ContinueRequest,
     AsDiscovery,
+    RsDiscovery,
+    IntrospectionRequest,
+    IntrospectionResponse,
+    RsErrorResponse,
 }
 
 /// Headers are optional: absence means the trace did not capture them, not an
@@ -38,6 +44,8 @@ pub struct Import {
     pub body: String,
     pub headers: Option<Vec<(String, String)>>,
     pub content_digest: Option<String>,
+    /// Caller-declared comparison context for the RFC 9767 kinds only.
+    pub rs_context: Option<RsContext>,
     /// Captured discovery context only. This value is never fetched.
     pub queried_endpoint: Option<String>,
     pub http_status: Option<u16>,
@@ -189,6 +197,7 @@ pub fn analyze(input: Import) -> Result<Report, &'static str> {
         return Err("queried_endpoint and http_status are only supported for kind as_discovery.");
     }
     let mut checks = Vec::new();
+    rs_import::validate_context(&input)?;
     match input.kind {
         MessageKind::AsDiscovery => {
             return Ok(Report {
@@ -206,6 +215,10 @@ pub fn analyze(input: Import) -> Result<Report, &'static str> {
                 ),
             });
         }
+        MessageKind::RsDiscovery
+        | MessageKind::IntrospectionRequest
+        | MessageKind::IntrospectionResponse
+        | MessageKind::RsErrorResponse => return rs_import::analyze(&input),
         MessageKind::GrantRequest => {
             if let Some(req) = parse_check::<GrantRequest>(
                 &input.body,
@@ -343,7 +356,7 @@ async fn import_handler(headers: axum::http::HeaderMap, body: Bytes) -> Response
             .into_response();
     }
     let Ok(input) = serde_json::from_slice::<Import>(&body) else {
-        return (StatusCode::BAD_REQUEST, "Invalid import envelope. Expected kind, body string, optional headers array and content_digest string.").into_response();
+        return (StatusCode::BAD_REQUEST, "Invalid import envelope. Expected kind and body string, with optional headers array and content_digest string. Use queried_endpoint and http_status for as_discovery, or an applicable rs_context object for RFC 9767 messages.").into_response();
     };
     match analyze(input) {
         Ok(report) => Json(report).into_response(),
@@ -366,6 +379,7 @@ mod tests {
             body: body.into(),
             headers: None,
             content_digest: None,
+            rs_context: None,
             queried_endpoint: None,
             http_status: None,
         }

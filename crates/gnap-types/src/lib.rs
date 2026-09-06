@@ -44,6 +44,7 @@ pub mod interact;
 pub mod key;
 pub mod message;
 pub mod polymorphic;
+pub mod rs;
 pub mod token;
 pub mod uri;
 pub mod user;

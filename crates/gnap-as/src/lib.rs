@@ -1,4 +1,4 @@
-//! The GNAP authorization server role — RFC 9635.
+//! The GNAP authorization server role — RFC 9635 and an RFC 9767 RS-facing API.
 //!
 //! Takes a described HTTP request and returns a described HTTP response, with
 //! no HTTP framework and no runtime in the way. What the RFC leaves to the
@@ -82,11 +82,46 @@
 //! [`TokenRecord::is_valid_at`] on each access, in addition to verifying the
 //! proof and rights. [`MemoryStorage`] does not sweep expired tokens. Production
 //! clock handling, authoritative RS metadata, persistence and garbage collection
-//! remain deployment responsibilities; these helpers do not implement RFC 9767
+//! remain deployment responsibilities; these lifetime helpers alone are not
 //! introspection. An open grant's DELETE atomically clears its associated tokens
 //! and indexes. A separate resource server must consult or receive authoritative
 //! live state; the SDK does not itself propagate revocation across services.
 
+//! # Opaque-token introspection
+//!
+//! [`AuthorizationServer::resource_server_api`] opts an opaque-encoder AS into
+//! RFC 9767 discovery and introspection. It borrows a separate preregistered
+//! [`ResourceServerResolver`], [`IntrospectionPolicy`] and RS [`NonceStore`].
+//! The caller routes discovery GET and signed introspection POST requests to
+//! the returned [`ResourceServerApi`]. Discovery derives its well-known URL
+//! from the configured grant endpoint, advertises `httpsig`, and omits token
+//! formats: opaque references have no registered GNAP token-format name.
+//!
+//! RS authentication requires a PS256 public JWK and a nonce. Proof parameter
+//! objects with nonempty extensions are outside this profile. The introspected
+//! value is in the signed JSON body, never an Authorization header. RS-management
+//! access tokens, dynamic registration, derivation and structured-token
+//! introspection are not implemented. The builder is unavailable with a custom
+//! encoder, and records with native identifiers are also refused.
+//!
+//! The policy establishes suitability for the authenticated RS and understands
+//! every requested minimum access description. It can disclose only an exact
+//! subset of the stored descriptions, possibly empty; this conservative profile
+//! does not attempt a universal comparison of GNAP rights objects. It resolves
+//! the client's public key when stored only by reference. That is a trusted
+//! deployment decision, checked against any known by-value token/client binding.
+//! The RS must then verify the actual resource request with that client key,
+//! enforce its own rights, and check the returned issuer and timestamps.
+//!
+//! Every introspection rereads the grant revision after policy and key processing.
+//! A changed revision, unavailable store, unrecognized token or unhandled request
+//! parameter produces only `active: false`; indeterminate is not proof that a
+//! token is intrinsically invalid. Storage adapters should observe outages without
+//! logging credentials. There is no positive cache or claim that revocation cannot
+//! happen after the final read but before delivery. The RS remains responsible for
+//! its final authorization decision and fresh time checks after network/crypto work.
+//! RS API errors are HTTP 400 with only `error`, independently of client API rules.
+//!
 //! # Continuing an approved grant
 //!
 //! [`Policy::keep_grant_open`] opts into returning `continue` after approval
@@ -180,6 +215,7 @@
 pub mod encoding;
 pub mod nonce;
 pub mod policy;
+pub mod rs;
 pub mod server;
 pub mod storage;
 
@@ -189,6 +225,9 @@ pub use encoding::{
 pub use nonce::{Nonces, OsNonces};
 pub use policy::{
     Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround,
+};
+pub use rs::{
+    IntrospectionDecision, IntrospectionPolicy, ResourceServerApi, ResourceServerResolver,
 };
 pub use server::{
     AuthorizationServer, Endpoints, Finish, InteractionError, INTERACTION_LIFETIME, MAX_CLOCK_SKEW,

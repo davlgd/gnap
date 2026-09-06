@@ -105,6 +105,7 @@ def demo(base, outcomes):
     expected_deviation = "insecure-loopback-discovery" if base.startswith("http://") else None
     expect(headers.get("gnap-development-only") == expected_deviation, "Discovery development mode is mislabelled")
     outcomes.append({"check": "as-options-discovery", "status": "pass", "elapsed_ms": elapsed})
+    rs_api(base, outcomes)
     status, _, _, _ = request(browser, base, "/resource/folder")
     expect(status in (401, 403), "Resource did not reject an unauthenticated request")
     outcomes.append({"check": "resource-requires-authorization", "status": "pass"})
@@ -330,6 +331,87 @@ def workbench(base, outcomes):
         outcomes.append({"check": "workbench-" + label, "status": "pass", "elapsed_ms": elapsed})
 
 
+def rs_imports(base, outcomes):
+    """Check imported wire diagnostics, never infer live AS/RS authentication."""
+    browser = client()
+    discovery = {"grant_request_endpoint": "https://as.example/gnap"}
+    active = {"active": True, "access": ["synthetic-folder:read"],
+              "iss": "https://as.example/gnap", "key": "synthetic-client-key"}
+    cases = [
+        ("discovery", "rs_discovery", discovery,
+         {"grant_request_endpoint": "https://as.example/gnap",
+          "discovery_url": "https://as.example/.well-known/gnap-as-rs"},
+         {"rs-discovery-grant-identity": "pass", "rs-discovery-declared-location": "pass"}),
+        ("wrong-location", "rs_discovery", discovery,
+         {"discovery_url": "https://as.example/other"},
+         {"rs-discovery-declared-location": "fail", "rs-discovery-grant-identity": "not_tested"}),
+        ("optional-request-context", "introspection_request",
+         {"access_token": "synthetic-token", "resource_server": "synthetic-rs"}, None,
+         {"introspection-request-proof": "not_tested", "introspection-request-access": "not_tested"}),
+        ("inactive", "introspection_response", {"active": False}, None,
+         {"introspection-inactive-only": "pass"}),
+        ("inactive-disclosure", "introspection_response", {"active": False, "iss": "https://as.example/gnap"}, None,
+         {"introspection-inactive-only": "fail"}),
+        ("active", "introspection_response", active, {"token_binding": "bound"},
+         {"introspection-active-access": "pass", "introspection-active-issuer": "pass", "introspection-key-condition": "pass"}),
+        ("missing-issuer", "introspection_response", {k: v for k, v in active.items() if k != "iss"}, None,
+         {"introspection-active-issuer": "fail"}),
+        ("token-disclosure", "introspection_response", active | {"value": "synthetic-token"}, None,
+         {"introspection-response-no-value": "fail"}),
+        ("rs-error", "rs_error_response", {"error": "invalid_resource_server"}, {"http_status": 400},
+         {"rs-error-shape": "pass", "rs-error-http-status": "pass"}),
+        ("rs-error-status", "rs_error_response", {"error": "invalid_resource_server"}, {"http_status": 401},
+         {"rs-error-http-status": "fail"}),
+    ]
+    for label, kind, body, context, expected in cases:
+        payload = {"kind": kind, "body": json.dumps(body)}
+        if context is not None:
+            payload["rs_context"] = context
+        status, headers, result, elapsed = request(browser, base, "/api/analyze", "POST", payload)
+        expect(status == 200 and isinstance(result, dict) and result.get("certification") is False,
+               "RS import diagnostic failed or claimed certification: " + label)
+        expect(headers.get("cache-control") == "no-store", "RS import report is cacheable")
+        checks = {item["id"]: item["status"] for item in result["checks"]}
+        for name, expected_status in expected.items():
+            expect(checks.get(name) == expected_status, "Wrong RS import diagnostic: " + label + "/" + name)
+        expect(checks.get("rs-authentication-and-state") == "not_tested"
+               and checks.get("rs-http-and-discovery-publication") == "not_tested",
+               "Imported RS message was mistaken for a live observation")
+        outcomes.append({"check": "workbench-rs-" + label, "status": "pass", "elapsed_ms": elapsed})
+
+
+def rs_api(base, outcomes):
+    """Wire checks independent of the SDK; no claim of RS authentication here."""
+    browser = client()
+    status, headers, body, elapsed = request(browser, base, "/.well-known/gnap-as-rs")
+    expect(status == 200 and isinstance(body, dict), "RS-facing discovery is not a JSON object response")
+    expect(headers.get_content_type() == "application/json", "RS-facing discovery has the wrong media type")
+    expect(body.get("grant_request_endpoint") == base + "/gnap", "RS-facing discovery changed the grant endpoint")
+    expect(body.get("introspection_endpoint") == base + "/introspect", "RS-facing discovery changed the introspection endpoint")
+    expect(body.get("key_proofs_supported") == ["httpsig"], "RS-facing discovery advertised unsupported proofs")
+    expect("token_formats_supported" not in body and "resource_registration_endpoint" not in body,
+           "RS-facing discovery advertised unsupported formats or registration")
+    expect(headers.get("cache-control") == "no-store", "RS-facing discovery response is cacheable")
+    expect(headers.get("set-cookie") is None and headers.get("location") is None,
+           "RS-facing discovery created browser state or redirected")
+    expected_deviation = "insecure-loopback-discovery" if base.startswith("http://") else None
+    expect(headers.get("gnap-development-only") == expected_deviation,
+           "RS-facing discovery development mode is mislabelled")
+    outcomes.append({"check": "rs-facing-discovery", "status": "pass", "elapsed_ms": elapsed})
+    # These are refusal cases, not evidence that a valid RS proof is accepted.
+    for label, payload, expected_error in [
+        ("unsigned", {"access_token": "synthetic-not-issued", "resource_server": "delegation-demo-rs"},
+         "invalid_resource_server"),
+        ("missing-token", {"resource_server": "delegation-demo-rs"}, "invalid_request"),
+    ]:
+        status, headers, body, elapsed = request(browser, base, "/introspect", "POST", payload)
+        expect(status == 400 and body == {"error": expected_error},
+               "Introspection refusal must use HTTP 400 and a single error field: " + label)
+        expect(headers.get_content_type() == "application/json" and headers.get("cache-control") == "no-store",
+               "Introspection refusal has unsafe headers: " + label)
+        outcomes.append({"check": "rs-introspection-rejects-" + label, "status": "pass", "elapsed_ms": elapsed})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", type=origin)
@@ -351,6 +433,7 @@ def main():
         if args.workbench:
             ready(args.workbench)
             workbench(args.workbench, outcomes)
+            rs_imports(args.workbench, outcomes)
     except (AssertionError, OSError, ValueError, TypeError, KeyError) as error:
         # Do not render arbitrary transport/parser errors, which may contain a
         # URL with a callback secret. Assertions above contain only fixed text.

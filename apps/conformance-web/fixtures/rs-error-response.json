@@ -1,0 +1,5 @@
+{
+  "kind": "rs_error_response",
+  "body": "{\"error\":{\"code\":\"invalid_resource_server\",\"description\":\"Synthetic authentication failure\"}}",
+  "rs_context": {"http_status":400}
+}

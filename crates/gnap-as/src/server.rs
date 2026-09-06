@@ -172,6 +172,37 @@ struct PreparedToken {
 }
 
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K, S, N> {
+    /// Offers discovery and introspection for this AS's opaque reference tokens.
+    ///
+    /// The RS resolver and replay memory are separate from client authentication.
+    /// This API is deliberately unavailable with a custom token encoder: in
+    /// particular, a Biscuit's parent identifier is not token introspection.
+    /// The explicit loopback-discovery development setting is inherited.
+    /// # Errors
+    /// Rejects invalid or non-HTTPS endpoint configuration, except explicit
+    /// HTTP-loopback development configuration.
+    pub fn resource_server_api<
+        'a,
+        R: crate::ResourceServerResolver,
+        Q: crate::IntrospectionPolicy,
+    >(
+        &'a self,
+        keys: &'a R,
+        policy: &'a Q,
+        nonces: &'a dyn crate::NonceStore,
+        endpoint: &'a str,
+    ) -> Result<crate::ResourceServerApi<'a, R, Q, S>, gnap_types::message::DiscoveryError> {
+        crate::ResourceServerApi::new(
+            keys,
+            policy,
+            &self.storage,
+            nonces,
+            &self.endpoints.grant,
+            endpoint,
+            self.development_http_discovery,
+        )
+    }
+
     /// Assembles a server from its parts.
     pub const fn new(policy: P, keys: K, storage: S, nonces: N, endpoints: Endpoints) -> Self {
         Self {

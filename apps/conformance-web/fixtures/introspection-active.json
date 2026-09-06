@@ -1,0 +1,5 @@
+{
+  "kind": "introspection_response",
+  "body": "{\"active\":true,\"access\":[],\"iss\":\"https://as.example/gnap\",\"key\":\"synthetic-key-reference\"}",
+  "rs_context": {"token_binding":"bound"}
+}
