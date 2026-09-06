@@ -42,6 +42,7 @@ mod derivation;
 mod introspection;
 mod multiple;
 mod resource_registration;
+mod secondary_device;
 #[derive(Default)]
 struct ConsentRegistry {
     clients: HashSet<String>,
@@ -49,7 +50,8 @@ struct ConsentRegistry {
 }
 struct Consent {
     request: GrantRequest,
-    interaction_reference: String,
+    interaction_reference: Option<String>,
+    as_nonce: Option<String>,
     allowed: multiple::Choice,
 }
 type Decisions = Arc<Mutex<ConsentRegistry>>;
@@ -223,7 +225,11 @@ struct RetainedGrants {
 struct IndexedStorage {
     state: Mutex<RetainedGrants>,
     nonces: MemoryStorage,
+    #[cfg(test)]
+    before_exchange: Mutex<Option<ExchangeHook>>,
 }
+#[cfg(test)]
+type ExchangeHook = Arc<dyn Fn(&GrantAggregate) + Send + Sync>;
 impl RetainedGrants {
     fn cleanup(&mut self, now: u64) -> Result<(), StoreError> {
         // Bounded by MAX_GRANTS. No clone of a credential index or token TTL.
@@ -302,6 +308,13 @@ impl GrantStore for IndexedStorage {
         revision: Revision,
         replacement: GrantAggregate,
     ) -> Result<GrantSnapshot, StoreError> {
+        #[cfg(test)]
+        {
+            let hook = self.before_exchange.lock().unwrap().clone();
+            if let Some(hook) = hook {
+                hook(&replacement);
+            }
+        }
         let mut state = self.lock()?;
         state.cleanup(now())?;
         // Neither a successful rewrite nor a refused CAS renews retention.
@@ -334,6 +347,13 @@ impl DerivedGrantStore for IndexedStorage {
             .create_derived(parent, revision, parent_value, child, clock)?;
         state.continuation_deadlines.insert(snapshot.id, deadline);
         Ok(snapshot)
+    }
+}
+impl gnap_as::UserCodeStore for IndexedStorage {
+    fn lookup_user_code(&self, code: &str) -> Result<Option<GrantSnapshot>, StoreError> {
+        let mut state = self.lock()?;
+        state.cleanup(now())?;
+        gnap_as::UserCodeStore::lookup_user_code(&state.base, code)
     }
 }
 impl NonceStore for IndexedStorage {
@@ -438,8 +458,9 @@ impl Policy for ConsentPolicy {
                 match choices.grants.get(&snapshot.id) {
                     Some(choice)
                         if choice.request == *request
-                            && snapshot.aggregate.record.interact_ref.as_deref()
-                                == Some(&choice.interaction_reference) =>
+                            && snapshot.aggregate.record.interact_ref
+                                == choice.interaction_reference
+                            && snapshot.aggregate.record.as_nonce == choice.as_nonce =>
                     {
                         multiple::decision(shape, &slots, &choice.allowed)
                     }
@@ -539,10 +560,12 @@ struct App {
     // Test fixtures drive the client role without starting its browser worker.
     #[cfg(test)]
     signer: Arc<Ps256Signer>,
-    #[cfg(test)]
     decisions: Decisions,
     commands: mpsc::SyncSender<Command>,
     starts: Arc<Mutex<VecDeque<Instant>>>,
+    code_entries: Arc<Mutex<secondary_device::Entries>>,
+    #[cfg(test)]
+    code_completion_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     admission: Arc<tokio::sync::Semaphore>,
     resource_admission: Arc<tokio::sync::Semaphore>,
     metadata_admission: Arc<tokio::sync::Semaphore>,
@@ -562,6 +585,7 @@ struct BrowserSession<'a> {
     client: Session<'a, Network, Ps256Signer>,
     grant_id: GrantId,
     handle: String,
+    code: Option<gnap_types::interact::UserCodeUri>,
     born: Instant,
     operations: usize,
     state: &'static str,
@@ -601,10 +625,15 @@ impl BrowserSession<'_> {
                 .ok_or("Missing interaction handle")?
                 .into();
             self.state = "pending";
+        } else if self.code.is_some() && response.access_token.is_none() && self.state == "pending"
+        {
+            // A no-finish poll can return only a fresh continuation. It does
+            // not turn a still-pending human-code request into an approval.
         } else {
             self.state = "approved";
         }
         if response.access_token.is_some() {
+            self.code = None;
             // A replacement lot retires the primary token under its own label,
             // or nothing when the previous lot had no such token.
             self.retired = before;
@@ -651,6 +680,9 @@ fn consent_finish_choice(
     if snapshot.id != grant || client_id(&snapshot.aggregate.record.request.client) != client {
         return Err("Interaction does not belong to this browser grant".into());
     }
+    // Lock order: decisions, then storage. Storage never calls into decisions.
+    // A concurrent post-completion poll must wait until its choice is visible.
+    let mut choices = decisions.lock().map_err(|_| "Consent state unavailable")?;
     let Finish::Redirect { uri } = server
         .complete_interaction(handle, now())
         .map_err(|_| "Interaction completion refused")?
@@ -661,11 +693,12 @@ fn consent_finish_choice(
         InteractCallback::from_redirect(&uri).map_err(|_| "Invalid completion reference")?;
     // Completion's CAS must succeed first. The decision is read, not popped,
     // during policy evaluation: a later CAS conflict cannot consume consent.
-    decisions.lock().unwrap().grants.insert(
+    choices.grants.insert(
         grant,
         Consent {
             request: snapshot.aggregate.record.request,
-            interaction_reference: callback.interact_ref,
+            interaction_reference: Some(callback.interact_ref),
+            as_nonce: snapshot.aggregate.record.as_nonce,
             allowed,
         },
     );
@@ -683,7 +716,7 @@ fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
         .flatten()
         .flat_map(|t| t.access.iter().flatten())
         .collect();
-    json!({"state":session.state, "mode":session.mode.name(), "events":session.events, "rights":rights, "tokens":multiple::view(tokens.as_ref()), "requested_rights":session.requested_rights, "requested_tokens":multiple::slots_view(&session.requested), "token_present":tokens.is_some(), "resource_available":true, "retired_token_present":session.retired.is_some(), "retired_token_label":session.retired.as_ref().and_then(|retired| retired.label.clone()), "folder":session.folder, "last_resource_status":session.last_resource_status, "interaction_uri":format!("{origin}/interact/{}",session.handle), "continuation_open":session.continuation_open, "continuation_wait_seconds":session.next_continuation.saturating_sub(now())})
+    json!({"state":session.state, "mode":session.mode.name(), "events":session.events, "rights":rights, "tokens":multiple::view(tokens.as_ref()), "requested_rights":session.requested_rights, "requested_tokens":multiple::slots_view(&session.requested), "token_present":tokens.is_some(), "resource_available":true, "retired_token_present":session.retired.is_some(), "retired_token_label":session.retired.as_ref().and_then(|retired| retired.label.clone()), "folder":session.folder, "last_resource_status":session.last_resource_status, "user_code_uri":session.code, "interaction_uri":session.code.is_none().then(|| format!("{origin}/interact/{}",session.handle)), "continuation_open":session.continuation_open, "continuation_wait_seconds":session.next_continuation.saturating_sub(now())})
 }
 
 fn client_session<'a>(
@@ -745,7 +778,13 @@ fn client_worker(
                     .unwrap()
                     .clients
                     .insert(command.session.clone());
-                let mut client = client_session(&transport, signer.as_ref(), &origin);
+                let codes = command.action == "start-code";
+                let mut client = if codes {
+                    Session::new(&transport, signer.as_ref(), format!("{origin}/gnap"))
+                        .supporting(&["user_code_uri"])
+                } else {
+                    client_session(&transport, signer.as_ref(), &origin)
+                };
                 let mode = if command.action == "start-multiple" {
                     multiple::Mode::Multiple
                 } else {
@@ -755,23 +794,39 @@ fn client_worker(
                     multiple::Mode::Single => json!({"access": [&references.both]}),
                     multiple::Mode::Multiple => multiple::lot(&references, true),
                 };
+                let interact = if codes {
+                    json!({"start":["user_code_uri"]})
+                } else {
+                    json!({"start": ["redirect"], "finish": {"method":"redirect", "uri":format!("{origin}/callback"), "nonce":fresh_nonce().map_err(|e| e.to_string())?}})
+                };
                 let grant: GrantRequest = serde_json::from_value(json!({
                     "client": command.session,
                     "access_token": access_token,
-                    "interact": {"start": ["redirect"], "finish": {"method":"redirect", "uri":format!("{origin}/callback"), "nonce":fresh_nonce().map_err(|e| e.to_string())?}}
-                })).map_err(|e| e.to_string())?;
+                    "interact": interact
+                }))
+                .map_err(|e| e.to_string())?;
                 let step = client.start(&grant, now()).map_err(|e| e.to_string())?;
                 let interaction = step
                     .response()
                     .interact
                     .as_ref()
-                    .and_then(|i| i.redirect.as_ref())
                     .ok_or("AS did not request consent")?;
-                let handle = interaction
-                    .rsplit('/')
-                    .next()
-                    .ok_or("Missing interaction handle")?
-                    .to_owned();
+                let code = interaction.user_code_uri.clone();
+                let handle = if let Some(code) = &code {
+                    // Co-located bookkeeping for session cleanup and event
+                    // views only. A separate client uses the offered code/URI
+                    // and signed polling; it cannot call the AS resolver.
+                    server
+                        .resolve_user_code(&code.code, now())
+                        .map_err(|_| "Code lookup unavailable")?
+                } else {
+                    interaction
+                        .redirect
+                        .as_ref()
+                        .and_then(|uri| uri.rsplit('/').next())
+                        .ok_or("Missing interaction handle")?
+                        .to_owned()
+                };
                 let grant_id = storage
                     .lookup(GrantSelector::Interaction(&handle))
                     .map_err(|_| "Grant storage unavailable")?
@@ -783,6 +838,7 @@ fn client_worker(
                         client,
                         grant_id,
                         handle,
+                        code,
                         born: Instant::now(),
                         operations: 0,
                         state: "pending",
@@ -819,6 +875,12 @@ fn client_worker(
             }
             match command.action.as_str() {
                 "approve" | "deny" | "approve-reports" => {
+                    if session.code.is_some() {
+                        return Err(
+                            "Enter the code in the separate resource-owner browser to decide"
+                                .into(),
+                        );
+                    }
                     if session.state != "pending" {
                         return Err("Consent already completed".into());
                     }
@@ -876,6 +938,7 @@ fn client_worker(
                             if matches!(&e,gnap_client::ClientError::Server(e) if e.code == gnap_registry::ErrorCode::UserDenied)
                             {
                                 session.state = "denied";
+                                session.code = None;
                                 session.continuation_open = false;
                                 session.events.push("AS refused the request and closed continuation. Any previously issued tokens keep their own lifecycle; refusal is not revocation.".into());
                             } else {
@@ -1240,6 +1303,7 @@ async fn action(
     let action = uri.path().trim_start_matches("/api/");
     if ![
         "start",
+        "start-code",
         "approve",
         "deny",
         "continue",
@@ -1477,6 +1541,9 @@ async fn main() {
     // CanonicalOrigin has already restricted HTTP to explicit loopback hosts.
     // Local discovery is a labelled development deviation from RFC 9635 §9;
     // the production HTTPS path never opts in to this exception.
+    let server = server
+        .with_user_code_uri(format!("{origin}/code"))
+        .expect("code entry URI");
     let server = Arc::new(if origin.starts_with("http:") {
         eprintln!("Development-only HTTP loopback discovery enabled; RFC 9635 §9 requires HTTPS in production.");
         server.with_development_http_discovery()
@@ -1524,10 +1591,12 @@ async fn main() {
         storage: storage.clone(),
         #[cfg(test)]
         signer: signer.clone(),
-        #[cfg(test)]
         decisions: decisions.clone(),
         commands: sender,
         starts: Arc::default(),
+        code_entries: Arc::default(),
+        #[cfg(test)]
+        code_completion_hook: None,
         admission: Arc::new(tokio::sync::Semaphore::new(16)),
         resource_admission: Arc::new(tokio::sync::Semaphore::new(4)),
         metadata_admission: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -1592,6 +1661,10 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/", get(|| async { Html(include_str!("../static/index.html")) }))
         .route("/health", get(|State(app):State<App>| async move { Json(json!({"status":"ok", "bootstrap":resource_registration::state(&app.bootstrap), "profile":"GNAP HTTPSig client/AS demonstrator; not certification"})) }))
         .route("/api/status", get(status))
+        .route("/code", get(secondary_device::entry))
+        .route("/code/lookup", post(secondary_device::submit).layer(DefaultBodyLimit::max(1024)))
+        .route("/code/consent", post(secondary_device::submit).layer(DefaultBodyLimit::max(1024)))
+        .route("/code.js", get(|| async { ([("content-type", "text/javascript")], include_str!("../static/code.js")) }))
         .route("/api/{action}", post(action))
         .route("/callback", get(callback))
         .route("/interact/{handle}", get(interaction))
@@ -1692,7 +1765,11 @@ mod tests {
         assert_eq!(discovery.key_rotation_supported, Some(false));
         assert_eq!(
             discovery.interaction_start_modes_supported,
-            Some(vec![gnap_registry::InteractionStartMode::Redirect])
+            Some(vec![
+                gnap_registry::InteractionStartMode::Redirect,
+                gnap_registry::InteractionStartMode::UserCode,
+                gnap_registry::InteractionStartMode::UserCodeUri
+            ])
         );
         let response = router
             .oneshot(
@@ -2022,6 +2099,7 @@ mod tests {
                 token_management: format!("{origin}/token"),
             },
         );
+        let server = server.with_user_code_uri(format!("{origin}/code")).unwrap();
         let server = Arc::new(if origin.starts_with("http:") {
             server.with_development_http_discovery()
         } else {
@@ -2073,6 +2151,8 @@ mod tests {
             decisions,
             commands,
             starts: Arc::default(),
+            code_entries: Arc::default(),
+            code_completion_hook: None,
             admission: Arc::new(tokio::sync::Semaphore::new(2)),
             resource_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             metadata_admission: Arc::new(tokio::sync::Semaphore::new(2)),

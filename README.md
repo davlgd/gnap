@@ -302,9 +302,11 @@ should be read as covering them:
 | RFC 9767 §§3.3–4 | Biscuit introspection and downstream profiles beyond the selected one-hop opaque flow |
 
 The AS supports `redirect` and opt-in [`user_code` and `user_code_uri`
-starts](docs/secondary-device-interaction.md). The code modes have SDK lifecycle
-tests; their web entry page, consent flow and attempt limits still need a
-consumer. The `app` start is modelled but not served. With no finish method,
+starts](docs/secondary-device-interaction.md). The demo also supplies a code-entry
+page with separate owner sessions, explicit consent and bounded attempts. Local
+HTTP tests exercise acceptance, denial and protected reads; they are not tests
+of a physical second device or authenticated owner identity.
+The `app` start is modelled but not served. With no finish method,
 the client polls for completion; polling is not a separate interaction start.
 
 The AS answers OPTIONS at its grant endpoint with the discovery document from

@@ -101,7 +101,7 @@ jobs:
           node-version: '22'
           package-manager-cache: false
       - name: Check application interface behavior
-        run: node --test apps/conformance-web/tests/ui/panel_generation.test.mjs apps/delegation-demo/tests/ui/requested_rights.test.mjs
+        run: node --test apps/conformance-web/tests/ui/panel_generation.test.mjs apps/delegation-demo/tests/ui/*.test.mjs
       - name: Install stable toolchain
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
       - uses: Swatinem/rust-cache@v2

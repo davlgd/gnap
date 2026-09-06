@@ -114,6 +114,58 @@ The introspection composition test also starts a real loopback AS/RS router:
 it checks separate RS/client keys, both replay caches, rotation and revocation
 with fresh signatures, and a 503 resource response when the AS becomes unreachable.
 
+## Secondary-device flow
+
+Choose **Start on a second screen**. Keep that client page open, then open the
+displayed code-entry address in another browser profile or private window. Type
+the eight-symbol code there, read the requested rights, and allow or deny the
+request. Return to the first page and poll after the displayed wait period.
+The client can then read the protected resources only if the owner allowed it.
+An early poll stays pending and does not invalidate the consent page.
+
+The client requests `user_code_uri`, conveys the returned URI unchanged, and
+negotiates no finish callback. The entry page uses a separate `gnap_owner`
+cookie, not the first browser's `gnap_demo` cookie. Neither the code nor an
+internal grant handle is placed in a form URL. Decisions require an Origin
+matching the configured application, a session-bound form ticket and an
+explicit POST. Unknown, malformed and expired codes get the same error message;
+no constant-time lookup claim is made. The page never redirects to a client.
+
+This is still a fictional owner, not account authentication: anyone using the
+sandbox may play that role. The code is a locator, not proof of identity.
+Loopback addresses work only on the machine running the app. A physical second
+device needs a reachable HTTPS deployment; these changes have not been deployed.
+Polling here is not the full C2 profile, which also needs other capabilities.
+
+Owner state is limited to 64 sessions with a fixed ten-minute lifetime. Each
+session has five admitted submissions, including malformed input, invalid form
+tickets and consent decisions. A rolling shared budget admits at most 60 per
+minute, after checking that the owner session exists and has attempts left.
+Reloading does not extend the lifetime or reset the budget. Requests with the
+wrong origin or bodies over 1 KiB are refused before code lookup and do not
+consume those form budgets. Client starts and grant storage retain their own
+limits. Acquiring 64 owner sessions can saturate the page for ten minutes;
+there is no eviction or claim of production multi-tenant availability. A public
+production service needs its own owner authentication and admission policy.
+
+Consent is bound to the displayed request and interaction window, not the
+continuation revision, which changes on an ordinary poll. Completion and
+decision publication are coordinated so a later poll cannot observe a finished
+interaction without its choice. A poll and completion prepared from the same
+snapshot can still race: the losing write is refused atomically. No automatic
+retry occurs. Check the first screen; if the code is still live, explicitly
+submit it again rather than assuming the refusal cancelled the grant. A lost
+HTTP response is similarly not proof that an operation did not happen.
+
+The co-located client worker resolves the issued code internally only to track
+its grant for cleanup. A separate client would not have that access: its
+protocol exchange uses the code, entry URI and signed polling alone. The
+consumer tests exercise those browser-facing operations with two independent
+HTTP sessions, then a real protected read through introspection. They do not
+automate browser rendering, prove owner identity or establish interoperability
+with another implementation. See the [SDK guide](../../docs/secondary-device-interaction.md)
+for generation, normalization and storage-adapter requirements.
+
 ## Deployment contract
 
 - `PORT`: listening port, default `8080`.
