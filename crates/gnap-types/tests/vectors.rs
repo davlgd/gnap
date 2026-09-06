@@ -5,7 +5,7 @@
 use gnap_types::message::{GrantRequest, GrantResponse};
 use serde_json::Value;
 
-const CORPUS: &str = include_str!("../../../vectors/deserialization.json");
+const CORPUS: &str = include_str!("fixtures/deserialization.json");
 
 struct Vector {
     id: String,

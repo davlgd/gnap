@@ -1,0 +1,22 @@
+{
+  "crates/gnap-client/tests/fixtures/rfc9421-b12.pkcs1.pem": "crates/gnap-crypto/tests/rfc9421-b12.pkcs1.pem",
+  "crates/gnap-subject/tests/fixtures/rfc9421-b12.pkcs1.pem": "crates/gnap-crypto/tests/rfc9421-b12.pkcs1.pem",
+  "crates/gnap-subject/tests/fixtures/rfc9421-b12.spki.pem": "crates/gnap-crypto/tests/rfc9421-b12.spki.pem",
+  "crates/gnap-core/tests/fixtures/state-machine.json": "vectors/state-machine.json",
+  "crates/gnap-as/tests/fixtures/rfc9421-b12.pkcs1.pem": "crates/gnap-crypto/tests/rfc9421-b12.pkcs1.pem",
+  "crates/gnap-rs/tests/fixtures/rfc9421-b12.pkcs1.pem": "crates/gnap-crypto/tests/rfc9421-b12.pkcs1.pem",
+  "crates/gnap-as/tests/fixtures/rfc9421-b12.spki.pem": "crates/gnap-crypto/tests/rfc9421-b12.spki.pem",
+  "crates/gnap-crypto/tests/fixtures/interaction-hash.json": "vectors/interaction-hash.json",
+  "crates/gnap-biscuit/tests/fixtures/rfc9421-b12.pkcs1.pem": "crates/gnap-crypto/tests/rfc9421-b12.pkcs1.pem",
+  "crates/gnap-types/tests/fixtures/deserialization.json": "vectors/deserialization.json",
+  "crates/gnap-registry/LICENSE": "LICENSE",
+  "crates/gnap-types/LICENSE": "LICENSE",
+  "crates/gnap-core/LICENSE": "LICENSE",
+  "crates/gnap-crypto/LICENSE": "LICENSE",
+  "crates/gnap-subject/LICENSE": "LICENSE",
+  "crates/gnap-client/LICENSE": "LICENSE",
+  "crates/gnap-as/LICENSE": "LICENSE",
+  "crates/gnap-rs/LICENSE": "LICENSE",
+  "crates/gnap-biscuit/LICENSE": "LICENSE",
+  "crates/gnap-net/LICENSE": "LICENSE"
+}

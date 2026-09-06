@@ -23,7 +23,7 @@ implementation change and link its tests and application evidence.
 - **mTLS is an allowed additional proof method**, not a prerequisite for the
   next application. It needs a real TLS client-certificate trust boundary;
   accepting an untrusted forwarded certificate header is not mTLS support.
-- Other proof methods are deferred from the next milestone. This is a delivery
+- Other proof methods are deferred. This is a delivery
   priority, not a claim that GNAP forbids them.
 
 Opaque reference tokens remain the existing test baseline. Their presence does
@@ -102,19 +102,19 @@ interoperability is currently claimed.
 | PS256 request signatures | C1/C2 required | Required baseline | **Implemented and tested**: `sign_and_verify_with_ps256` in the HTTPSig tests. This is not JWT support. |
 | Public request-signing helper | SDK ergonomics for RFC 9635 §§7.2–7.3.1, not a separate protocol capability | Required consumer improvement | **Implemented and tested**: [`sign_request`](../crates/gnap-client/src/signing.rs) signs exact request targets and optional tokens without imposing JSON or a transport. `Session` and the reference-token demo use it. [Real PS256 tests](../crates/gnap-client/tests/signing.rs) exercise replay, tampering, body presence and conflicting headers. TLS, audience and token/key selection remain application responsibilities. |
 | mTLS | Conditional if selected as a proof; [§7.3.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.2) | Allowed additional implementation | **Model only**: proof name exists; no GNAP client-certificate adapter or live mTLS scenario. |
-| `jwsd` and `jws` request proofs | Conditional if selected; [§§7.3.3–7.3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.3) | Deferred from the next milestone | **Model only**, no proof adapters. JWT access-token alternatives do not change this status. |
+| `jwsd` and `jws` request proofs | Conditional if selected; [§§7.3.3–7.3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.3) | Deferred | **Model only**, no proof adapters. JWT access-token alternatives do not change this status. |
 | JWK key representation and resolution | C1/C2 require the JWK representation and key algorithm information; [§7.1](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.1) | Required target | **Implemented and tested** for public RSA/PS256 keys: [import/export tests](../crates/gnap-crypto/tests/ps256_jwk.rs) cover encoding, size, metadata and exact signature key ID. The [JWK client example](../crates/gnap-as/examples/jwk_client.rs) derives a verifier through `KeyResolver`, then exercises issuance, rotation and revocation without pre-registration. This bounded bare-key adapter does not supply other algorithms, certificate trust or client identity. |
 | Certificate and certificate-thumbprint keys | Conditional on selecting `cert` or `cert#S256`; §7.1 | Deferred unless needed by the mTLS consumer | **Model only**: representation fields are present; no X.509 parsing/trust adapter supplied. A certificate representation is distinct from an mTLS proof. |
 | Browser redirect start and finish | C1 required; [§2.5 and §4.2.1](https://www.rfc-editor.org/rfc/rfc9635.html#section-4.2.1) | Required target | **Implemented and tested** in [client tests](../crates/gnap-client/tests/flow.rs), AS interop tests and the HTTP acceptance script. Browser consent is synthetic. |
 | Client interaction-finish deadlines | [RFC 9635 §4](https://www.rfc-editor.org/rfc/rfc9635.html#section-4) recommends suitable finish timeouts; `interact.expires_in` is optional in §3.3 | Required client lifecycle work | **Implemented and tested for finish callbacks**: [`with_finish_timeout`](../crates/gnap-client/src/session.rs) supplies an optional positive client maximum, taking the shorter limit when the AS announces one. [Policy tests](../crates/gnap-client/tests/flow/finish_timeout.rs) cover redirect, push and parsed callbacks, exact boundaries, wide arithmetic, reconfiguration without extension, renewal and rollback. The [demo test](../apps/delegation-demo/src/finish_timeout_tests.rs) obtains a real HTTP response and advances the callback clock across its five-minute local limit. This is not elapsed-time browser validation. Polling without a finish method, already validated references, transport timeouts and total session lifetime remain separate; timeout does not revoke a remote grant. |
 | `user_code` and `user_code_uri` start | C2 required; [§2.5.1](https://www.rfc-editor.org/rfc/rfc9635.html#section-2.5.1) | Required secondary-device milestone | **Partial**: the opt-in [SDK profile](secondary-device-interaction.md) issues eight-symbol codes and atomically retires code and redirect handle together. [SDK lifecycle tests](../crates/gnap-as/tests/user_codes.rs) and [storage races](../crates/gnap-as/tests/user_codes/storage.rs) cover the engine. The demo supplies code entry, separate owner sessions, consent and attempt limits; [consumer tests](../apps/delegation-demo/src/secondary_device/tests.rs) exercise two independent HTTP sessions, polling, acceptance/denial, protected reads and concurrent writes. The [hosted validation](validation-2026-09-06.md) also exercises two isolated HTTP cookie stores over HTTPS. No authenticated owner, physical second-device test, browser-engine test or complete C2 profile is claimed. |
-| `app` interaction start | Conditional if negotiated; §2.5.1 | Deferred from the next milestone | **Model only**: no application-launch flow. |
+| `app` interaction start | Conditional if negotiated; §2.5.1 | Deferred | **Model only**: no application-launch flow. |
 | `push` interaction finish | C2 AS capability; [§4.2.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-4.2.2) | Required interaction capability | **Implemented and tested for a same-origin consumer**: the [demo sender and receiver](../apps/delegation-demo/src/push_finish.rs) exchange the SDK's callback body over HTTP, using per-grant registration and pinned public addresses for HTTPS. [Transport tests](../apps/delegation-demo/src/push_finish/transport.rs) cover destination restrictions, redirects, size and time limits; [consumer tests](../apps/delegation-demo/src/push_finish/tests.rs) cover approval, denial, resource access, cross-grant callbacks, replay, expiry and capacity refusal. The [selected profile](push-finish.md) uses one attempt, no AS polling fallback and closed continuation after issuance. Local loopback evidence does not prove hosted TLS delivery, external-client registration or complete C2 interoperability. |
 | Polling without a finish callback | Conditional on the negotiated interaction; [§5.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-5.2) | Supported baseline | **Implemented and tested** in AS/client flow tests. This does not supply missing C2 AS capabilities. |
 | SHA-256 interaction hash | C1/C2 required; [§4.2.3](https://www.rfc-editor.org/rfc/rfc9635.html#section-4.2.3) | Required target | **Implemented and tested** against [interaction-hash vectors](../crates/gnap-crypto/tests/interaction_hash.rs); additional implemented hashes are not additional profile requirements. |
 | Opaque subject identifiers | C1/C2 required capability; [§3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.4) | Required target | **Partial**: the demo's opt-in identity flow releases an opaque identifier and matching `iss_sub` for one fictional owner after explicit consent. The identifier is scoped to this application's shared proof key and changes on restart. Same-party attribution remains an AS policy responsibility; no production identity service or general persistent pairwise identifier store is supplied. See the [bounded profile](subject-assertions.md). |
 | `id_token` assertions | C1/C2 required capability; §3.4 | Required profile work, separate from access-token formats | **Implemented and tested for a bounded PS256 profile**: [`gnap-subject`](../crates/gnap-subject) issues and verifies pinned-key assertions; [client tests](../crates/gnap-client/tests/flow/subject_assertions.rs) bind verification to the actual AS endpoint, client proof-key audience and retained finish nonce. The [demo consumer](../apps/delegation-demo/src/identity.rs) requests disclosure through explicit consent. [Profile restrictions](subject-assertions.md) include one assertion, one trusted audience and exact `iss_sub` agreement. This is not a complete OpenID Provider, authenticated-user deployment, encrypted assertion or JWT access-token implementation; C1/C2 completeness is not claimed. Raw [`issuer_subject`](../crates/gnap-types/src/user.rs) still only decodes. |
-| SAML assertions | Conditional when requested/returned; §3.4 | Deferred from the next milestone | **Model only**: carried as a string; no SAML validator. |
+| SAML assertions | Conditional when requested/returned; §3.4 | Deferred | **Model only**: carried as a string; no SAML validator. |
 
 ## Protocol lifecycle, RS connections and public diagnostics
 
@@ -149,26 +149,28 @@ independent interoperability is claimed. The [dated hosted validation](validatio
 | Arbitrary third-party self-service tests | Project tooling and deployment security | Deferred until ownership, quotas and egress safeguards exist | **Missing**. Adding an endpoint to a public form must not create an unrestricted scanner. |
 | Durable storage, real RO authentication and restart recovery | Deployment responsibilities; requirements depend on the advertised deployment guarantees | Required before claiming production readiness | **Missing** as supplied services. The current examples remain synthetic, single-instance and volatile. |
 
-## Delivery sequence and acceptance
+## Remaining work and acceptance
 
-1. Keep this scope and evidence inventory public, and use the
-   [review and merge process](../CONTRIBUTING.md) for each subsequent change.
-2. Let a consumer built from the public documentation drive bounded-token
-   lifetime, safe resource-request signing and client-state improvements.
-3. Build the first separated client/AS/RS application, with no shared process
-   state. Integrate Biscuit using an identified implementation/version and a
-   documented rights/key-binding policy. Keep the existing reference-token path
-   as a comparison; add JWT alternatives only with a concrete consumer need.
-4. Extend the web workbench with authenticated lifecycle scenarios and wire-level
-   assertions authored separately from SDK validators. Publish redacted evidence,
-   limitations and negative cases alongside successful paths.
-5. Expand discovery, registration, multiple resources/tokens, secondary-device
-   interaction and downstream delegation through individually reviewed slices.
+The separate Biscuit application and authenticated workbench are delivered;
+their dated observations are indexed in the [documentation](README.md#support-and-evidence).
+The rows above remain the capability inventory, including model-only and missing
+features. Do not read the completed application scenarios as completion of entire
+RFC sections.
 
-A slice is ready only after its positive and negative tests pass, its application
-scenario works where applicable, the documentation states the actual support
-level, Claude's adversarial findings are reconciled, and the PR's Copilot review
-and CI satisfy the merge gate. A coordinated consumer agent is useful feedback,
-not evidence of independent-vendor interoperability. No release may claim all of
-GNAP, either complete interoperability profile or production readiness on the
-strength of this matrix alone.
+Further protocol work should start from an identified consumer need or an
+unresolved requirement: review applicability in the normative ledger, add the
+needed API or profile, and exercise both accepted and refused requests.
+Deferred proof methods and token formats remain deferred until explicitly
+selected; this page does not schedule a new implementation milestone.
+
+The [0.1.0 release guide](releasing.md) covers package preparation separately
+from protocol expansion. A first crate release requires its own reviewed
+packaging, dependency and consumer checks, not a claim that every GNAP feature
+has been implemented.
+
+A change is ready after relevant tests pass, its application scenario works where
+applicable, its documentation describes the actual support, and its reviews and
+CI satisfy the [merge gate](../CONTRIBUTING.md#review-and-publication).
+Coordinated consumer feedback is not independent-vendor interoperability.
+This matrix alone does not establish complete GNAP, either interoperability
+profile, or production readiness.

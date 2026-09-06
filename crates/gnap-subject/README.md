@@ -29,5 +29,5 @@ paired AS endpoint, issuer and key. It accepts one assertion and requires each
 `iss_sub` identifier to match; opaque identifiers remain the issuer's policy
 responsibility. `gnap-client::Session::verify_subject` derives audience and
 nonce from the actual session under the documented project convention.
-See the [profile and integration guide](../../docs/subject-assertions.md) for
+See the [profile and integration guide](https://github.com/davlgd/gnap/blob/main/docs/subject-assertions.md) for
 the release policy, context binding, limits and demonstration boundaries.

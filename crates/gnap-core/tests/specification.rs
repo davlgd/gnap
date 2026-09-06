@@ -7,7 +7,7 @@
 use gnap_core::{Event, Grant, State};
 use serde_json::Value;
 
-const SPEC: &str = include_str!("../../../vectors/state-machine.json");
+const SPEC: &str = include_str!("fixtures/state-machine.json");
 
 fn spec() -> Value {
     serde_json::from_str(SPEC).expect("unreadable state machine specification")

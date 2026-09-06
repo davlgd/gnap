@@ -24,7 +24,7 @@ const AUDIENCE: &str = "https://rs.example";
 const ONE: &str = "https://rs.example/files/one";
 const TWO: &str = "https://rs.example/files/two";
 // Public RFC 9421 Appendix B.1.2 test key, never a deployment credential.
-const PRIVATE: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
+const PRIVATE: &str = include_str!("fixtures/rfc9421-b12.pkcs1.pem");
 
 struct Fixture {
     signer: Ps256Signer,
