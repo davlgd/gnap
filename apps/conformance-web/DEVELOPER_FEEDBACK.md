@@ -41,6 +41,53 @@ independent implementation has passed GNAP interoperability tests.
    leaves proof checks `not_tested` until complete request context, trusted key,
    intended token and explicit clock/replay policies can be supplied safely.
 
+## Discovery increment: independent assertions, shared reference data
+
+The AS discovery profile now consumes imported documents and one bounded OPTIONS
+response from an existing operator-approved AS target. It checks raw JSON/HTTP
+and endpoint relationships without using the SDK's discovery deserializer or
+validator. This avoids proving that a producer and the same validator agree.
+It is still not a second GNAP implementation or a certification suite.
+
+The GNAP registry enums are useful independently as reference data; duplicating
+their known names would create a second maintenance problem. Subject Identifier
+formats are in another IANA registry absent from `gnap-registry`, so this app
+currently carries a small documented snapshot for those names only. Unknown
+names require external registry review and remain unresolved rather than
+becoming automatic normative failures.
+
+Three useful distinctions emerged: absent optional capabilities versus invalid
+types; a declared capability versus tested behavior; and a missing capture of
+HTTP context versus a bad response. The import envelope now preserves those
+distinctions. URL parsers can silently repair malformed inputs, so independent
+assertions inspect raw URL characters first and compare the original endpoint
+without normalizing it. Local HTTP discovery remains a labelled development
+deviation, not a conformant result.
+After explicit raw URI syntax prechecks, IPvFuture, numeric ports outside u16
+and reg-name forms rejected by WHATWG parsing remain visibly unresolved, not
+normative failures inferred from a library error. Passing those prechecks does
+not establish all host UTF-8/IDNA or URI production semantics. Exact identity
+can still be compared; malformed literals, percent triplets and nondigit ports
+fail independently of library acceptance.
+The safe import profile additionally rejects userinfo under the recipient
+SHOULD in RFC 9110 section 4.2.4, with a policy-specific finding rather than an
+invented GNAP MUST. Supplying non-null discovery context to another message
+kind now produces an explicit error instead of silently discarding that context.
+
+Tests cover the actual diagnostic routes, fixed outbound OPTIONS request shape,
+bounded response adapter, redirects/authentication failures as response fixtures,
+malformed documents and redacted reports. These fixture tests do not themselves
+make a network round trip or exercise remote capability implementations.
+
+A separate [manual network smoke](LIVE_SMOKE.md) on 2026-09-05 did exercise the
+local workbench's real outbound HTTPS OPTIONS path to the deployed test AS:
+8 checks passed, none failed, and 5 stayed explicitly untested. The shared
+cooldown also rejected a different operation eleven seconds later. Reading the
+actual report exposed a small usability issue: the key-rotation declaration
+finding now states explicitly when the AS declares that feature unsupported.
+This was rechecked over the real network after rebuilding, without changing
+the assertions or claiming that any rotation was executed.
+
 ## Next increments, after this bounded prototype
 
 Add a complete synthetic client/AS/RS scenario with consent, token binding,

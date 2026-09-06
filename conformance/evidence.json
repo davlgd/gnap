@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "claims": [
+    {
+      "clause_id": "rfc9635:section-9-2",
+      "run": "conformance/receipts/gnap-delegation-discovery-replay-2026-09-06.json",
+      "case_id": "test_as_discovery.DiscoveryResponse.test_options_response_media_type",
+      "assertion": "Historical captured OPTIONS response has unambiguous application/json media type. No HTTP 200 requirement or general header-cardinality MUST is claimed."
+    },
+    {
+      "clause_id": "rfc9635:section-9-2",
+      "run": "conformance/receipts/gnap-delegation-discovery-replay-2026-09-06.json",
+      "case_id": "test_as_discovery.DiscoveryResponse.test_response_is_json_object",
+      "assertion": "Exact historical response body parses as one JSON object. This does not establish all fields or capability behavior in the source block."
+    },
+    {
+      "clause_id": "rfc9635:section-9-3.2.1",
+      "run": "conformance/receipts/gnap-delegation-discovery-replay-2026-09-06.json",
+      "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_required_string",
+      "assertion": "Historical discovery document contains grant_request_endpoint as a JSON string, following the REQUIRED field and its string field context."
+    },
+    {
+      "clause_id": "rfc9635:section-9-3.2.1",
+      "run": "conformance/receipts/gnap-delegation-discovery-replay-2026-09-06.json",
+      "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_absolute_host_without_fragment",
+      "assertion": "The endpoint in this historical response satisfies the independent absolute-URI grammar assertion, with a host and without a fragment. No separate userinfo safety policy is mapped to a GNAP MUST."
+    },
+    {
+      "clause_id": "rfc9635:section-9-3.2.1",
+      "run": "conformance/receipts/gnap-delegation-discovery-replay-2026-09-06.json",
+      "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_https",
+      "assertion": "The historical response's grant_request_endpoint has the HTTPS scheme. This is not an independent TLS or remote-code attestation."
+    },
+    {
+      "clause_id": "rfc9635:section-9-3.2.1",
+      "run": "conformance/receipts/gnap-delegation-discovery-replay-2026-09-06.json",
+      "case_id": "test_as_discovery.DiscoveryResponse.test_endpoint_matches_exact_request",
+      "assertion": "The announced endpoint equals the exact URL recorded by the collector for the historical OPTIONS request, without URL normalization."
+    }
+  ]
+}
