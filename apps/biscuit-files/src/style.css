@@ -1,0 +1,7 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.6; }
+body { margin: 0; padding: 2rem 1rem; }
+main { max-width: 54rem; margin: auto; }
+section { border-top: 1px solid #8886; padding: 1rem 0; }
+button, input, select { font: inherit; padding: .45rem .7rem; margin: .25rem; }
+button { cursor: pointer; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; background: #8882; border-radius: .5rem; }
