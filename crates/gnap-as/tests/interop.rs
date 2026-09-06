@@ -3066,6 +3066,41 @@ fn malformed_rotation_content_does_not_rotate_the_token() {
     }
 }
 
+#[test]
+fn stripping_signed_rotation_content_cannot_rotate_a_token_value() {
+    use gnap_as::TokenStore;
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    let as_ = management_server(Counted(Cell::new(0)));
+    let original = as_.storage().get_token("oldhandle").unwrap();
+    let token = gnap_types::token::TokenValue::new("oldmanagement").unwrap();
+    let intact = gnap_client::sign_request(
+        HttpRequest::new("POST", "https://as.example/token/oldhandle")
+            .json_body(br#"{"key":"replacement-key-reference"}"#.to_vec()),
+        &signer,
+        Some(&token),
+        1_000,
+    )
+    .unwrap();
+    let mut stripped = intact.clone();
+    stripped.body = None;
+    let response = as_.handle(&stripped, 1_000);
+    assert_eq!(response.status, 400, "{}", body_of(&response));
+    let preserved = as_.storage().get_token("oldhandle").unwrap();
+    assert_eq!(preserved.token, original.token);
+    assert_eq!(preserved.issued_at, original.issued_at);
+    assert_eq!(preserved.management_token, original.management_token);
+
+    // The unchanged signed request still reaches the unsupported-key-rotation
+    // decision: the tampered request did not spend its signature's nonce.
+    let response = as_.handle(&intact, 1_000);
+    assert_eq!(response.status, 400);
+    assert!(
+        body_of(&response).contains("key_rotation_not_supported"),
+        "{}",
+        body_of(&response)
+    );
+}
+
 /// GNAP-9635-§6.1-MN02 compares with the CURRENT management token, not only
 /// the replacement management token. A failed rotation must also preserve the
 /// existing token (§6.1, `invalid_rotation`).
