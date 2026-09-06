@@ -25,6 +25,9 @@ const MANAGE_TOKEN: &str = "B8CDFONP21-4TB8N6.BW7ONM";
 const ISSUED: &str = "OS9M2PMHKUR64TB8N6BW7OZB8CDFONP219RP1LT0";
 const REBOUND: &str = "FP6A8H6HY37MH13CK76LBZ6Y1UADG6VEUPEER5H2";
 
+#[path = "key_rotation/owned.rs"]
+mod owned;
+
 struct FakeAs {
     replies: RefCell<Vec<HttpResponse>>,
     seen: RefCell<Vec<HttpRequest>>,

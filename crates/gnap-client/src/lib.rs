@@ -72,6 +72,11 @@
 //! resolve. Management also refuses unknown explicit bindings before signing.
 //! These are adapter limits, not GNAP prohibitions on those token forms.
 //! A new session does not recover another session's rotated-key registry.
+//! Use [`Session::rotate_key_owned`] to let a session retain a runtime-generated
+//! signer's `Arc`; [`Session::rotate_key`] still accepts a borrowed signer.
+//! `signer_for` now borrows the session, so its result cannot be held across a
+//! mutation that might release the owned key. This is a lifetime migration for
+//! callers that previously kept the returned reference independently.
 //!
 //! # Callback clocks and API migration
 //!
