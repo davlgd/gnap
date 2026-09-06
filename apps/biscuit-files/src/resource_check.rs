@@ -25,8 +25,29 @@ pub const REQUEST_HASH: &str = "biscuit-check-request-sha256";
 pub struct Nonces(Mutex<(u64, HashMap<String, u64>)>);
 impl NonceMemory for Nonces {
     fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
-        let mut state = self.0.lock().unwrap();
-        if now < state.0 || nonce.len() > 128 {
+        self.reserve(&[nonce], now)
+    }
+}
+impl Nonces {
+    /// Both proof nonces share the ordinary memory and are inserted together.
+    pub(crate) fn remember_pair(
+        &self,
+        previous: Option<&str>,
+        replacement: Option<&str>,
+        now: u64,
+    ) -> bool {
+        match (previous, replacement) {
+            (Some(old), Some(new)) if old != new && !old.is_empty() && !new.is_empty() => {
+                self.reserve(&[old, new], now)
+            }
+            _ => false,
+        }
+    }
+    fn reserve(&self, nonces: &[&str], now: u64) -> bool {
+        let Ok(mut state) = self.0.lock() else {
+            return false;
+        };
+        if now < state.0 || nonces.iter().any(|nonce| nonce.len() > 128) {
             return false;
         }
         state.0 = now;
@@ -35,10 +56,14 @@ impl NonceMemory for Nonces {
         let Some(until) = now.checked_add(2 * gnap_as::server::MAX_CLOCK_SKEW) else {
             return false;
         };
-        if state.1.len() >= 4096 || state.1.contains_key(nonce) {
+        if nonces.len() > 4096 - state.1.len()
+            || nonces.iter().any(|nonce| state.1.contains_key(*nonce))
+        {
             return false;
         }
-        state.1.insert(nonce.into(), until);
+        for nonce in nonces {
+            state.1.insert((*nonce).into(), until);
+        }
         true
     }
 }
@@ -250,5 +275,78 @@ impl LiveCheck {
             return LiveDecision::Unavailable;
         };
         check_response(&response, &request, &nonce)
+    }
+}
+
+#[cfg(test)]
+mod nonce_tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    #[test]
+    fn pairs_share_ordinary_retention_and_never_reserve_only_one_half() {
+        let memory = Nonces::default();
+        assert!(memory.remember_nonce("spent", 100));
+        assert!(!memory.remember_pair(Some("spent"), Some("free"), 100));
+        assert!(memory.remember_nonce("free", 100));
+        for (old, new, free) in [
+            (None, Some("a"), "a"),
+            (Some(""), Some("b"), "b"),
+            (Some("same"), Some("same"), "same"),
+        ] {
+            assert!(!memory.remember_pair(old, new, 100));
+            assert!(memory.remember_nonce(free, 100));
+        }
+        assert!(memory.remember_pair(Some("old"), Some("new"), 100));
+        assert!(!memory.remember_nonce("old", 100));
+        assert!(!memory.remember_nonce("new", 100));
+        assert!(!memory.remember_pair(Some("old"), Some("fresh"), 700));
+        assert!(memory.remember_nonce("fresh", 700));
+        assert!(memory.remember_pair(Some("old"), Some("new"), 701));
+        assert!(!memory.remember_pair(Some("rollback-a"), Some("rollback-b"), 700));
+        assert!(memory.remember_pair(Some("rollback-a"), Some("rollback-b"), 701));
+        assert!(!memory.remember_pair(Some("overflow-a"), Some("overflow-b"), u64::MAX));
+    }
+
+    #[test]
+    fn pairs_need_two_capacity_slots_and_fail_closed_on_poison() {
+        let memory = Nonces::default();
+        for i in 0..4095 {
+            assert!(memory.remember_nonce(&format!("seed-{i}"), 100));
+        }
+        assert!(!memory.remember_pair(Some("last-a"), Some("last-b"), 100));
+        assert!(memory.remember_nonce("last-a", 100));
+        assert!(!memory.remember_nonce("last-b", 100));
+        let poisoned = Arc::new(Nonces::default());
+        let worker = poisoned.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = worker.0.lock().unwrap();
+            panic!("poison the test nonce store");
+        })
+        .join()
+        .is_err());
+        assert!(!poisoned.remember_nonce("ordinary", 100));
+        assert!(!poisoned.remember_pair(Some("old"), Some("new"), 100));
+    }
+
+    #[test]
+    fn competing_pairs_have_one_winner_and_leave_the_losing_half_free() {
+        let memory = Arc::new(Nonces::default());
+        let gate = Arc::new(Barrier::new(3));
+        let workers = ["left", "right"].map(|old| {
+            let memory = memory.clone();
+            let gate = gate.clone();
+            std::thread::spawn(move || {
+                gate.wait();
+                (old, memory.remember_pair(Some(old), Some("shared"), 100))
+            })
+        });
+        gate.wait();
+        let results = workers.map(|worker| worker.join().unwrap());
+        assert_eq!(results.iter().filter(|(_, won)| *won).count(), 1);
+        for (old, won) in results {
+            assert_eq!(memory.remember_nonce(old, 100), !won);
+        }
+        assert!(!memory.remember_nonce("shared", 100));
     }
 }

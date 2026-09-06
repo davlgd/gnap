@@ -13,7 +13,8 @@ use biscuit_auth::{KeyPair, PublicKey};
 use gnap_as::{
     nonce::OsNonces, AuthorizationServer, Decision, EncodedToken, Endpoints, GrantAggregate,
     GrantId, GrantSelector, GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore,
-    Policy, Revision, StoreError, TokenEncoder, TokenEncodingContext, TokenEncodingError,
+    Policy, Revision, RotationNonceStore, StoreError, TokenEncoder, TokenEncodingContext,
+    TokenEncodingError, TokenRecord,
 };
 use gnap_biscuit::{FileAction, FileRight, Issuer, VerifiedToken};
 use gnap_crypto::{Ps256Verifier, Verifier};
@@ -30,13 +31,25 @@ pub fn client_jwk(client: &Client) -> Option<&Map<String, Value>> {
     let Client::ByValue(client) = client else {
         return None;
     };
-    let Key::ByValue(key) = &client.key else {
+    binding_jwk(&client.key)
+}
+fn binding_jwk(binding: &Key) -> Option<&Map<String, Value>> {
+    let Key::ByValue(key) = binding else {
         return None;
     };
-    if key.validate().is_err() || key.proof.method().as_str() != "httpsig" {
+    if key.validate().is_err()
+        || key.proof.method().as_str() != "httpsig"
+        || matches!(&key.proof, gnap_types::key::Proof::Detailed { params, .. } if !params.is_empty())
+    {
         return None;
     }
     key.jwk.as_ref()
+}
+fn token_jwk(record: &TokenRecord) -> Option<&Map<String, Value>> {
+    match record.token.key.as_ref() {
+        Some(key) => binding_jwk(key),
+        None => client_jwk(&record.client),
+    }
 }
 pub fn rights(origin: &str) -> Vec<FileRight> {
     vec![
@@ -63,9 +76,7 @@ impl Encoder {
 }
 impl TokenEncoder for Encoder {
     fn encode(&self, c: &TokenEncodingContext<'_>) -> Result<EncodedToken, TokenEncodingError> {
-        // This consumer has not enabled key rotation. Refuse an explicit
-        // binding rather than silently minting claims for the grant's key.
-        if c.issuer != self.grant || c.binding.is_some() {
+        if c.issuer != self.grant {
             return Err(TokenEncodingError);
         }
         let rights = c
@@ -82,7 +93,11 @@ impl TokenEncoder for Encoder {
             .issuer
             .mint(
                 &rights,
-                client_jwk(c.client).ok_or(TokenEncodingError)?,
+                match c.binding {
+                    Some(key) => binding_jwk(key),
+                    None => client_jwk(c.client),
+                }
+                .ok_or(TokenEncodingError)?,
                 c.issued_at,
                 deadline,
             )
@@ -181,7 +196,7 @@ impl Store {
         if matches.next().is_some() || !record.is_valid_at(now) {
             return LiveDecision::Denied;
         }
-        let Some(key) = client_jwk(&record.client).and_then(crate::replay::key_identity) else {
+        let Some(key) = token_jwk(record).and_then(crate::replay::key_identity) else {
             return LiveDecision::Denied;
         };
         state.requests.reserve(key, nonce, created, now, instant)
@@ -232,6 +247,16 @@ impl NonceStore for Store {
         gnap_crypto::NonceMemory::remember_nonce(&self.nonces, n, now)
     }
 }
+impl RotationNonceStore for Store {
+    fn remember_nonce_pair(
+        &self,
+        previous: Option<&str>,
+        replacement: Option<&str>,
+        now: u64,
+    ) -> bool {
+        self.nonces.remember_pair(previous, replacement, now)
+    }
+}
 pub struct FilePolicy {
     allowed: Vec<FileRight>,
 }
@@ -260,6 +285,11 @@ impl Policy for FilePolicy {
     }
     fn token_lifetime(&self, _: &GrantRequest) -> Option<NonZeroU64> {
         NonZeroU64::new(TTL)
+    }
+    fn may_rotate_key(&self, _: &TokenRecord, _: &gnap_types::key::KeyObject) -> bool {
+        // Fixed demonstration policy: both old and new possession have already
+        // been verified by the AS. This does not change the approved rights.
+        true
     }
 }
 pub struct KnownClient(Map<String, Value>);
@@ -295,7 +325,8 @@ pub fn engine(
             token_management: format!("{}/token", origin.value),
         },
     )
-    .with_token_encoder(Encoder::new(root, grant, rs.value.clone())?);
+    .with_token_encoder(Encoder::new(root, grant, rs.value.clone())?)
+    .with_key_rotation(true);
     Ok(if origin.value.starts_with("http:") {
         as_.with_development_http_discovery()
     } else {

@@ -18,6 +18,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "lifecycle/key_rotation.rs"]
+mod key_rotation;
+
 fn client() -> &'static Ps256Signer {
     static KEY: OnceLock<Ps256Signer> = OnceLock::new();
     KEY.get_or_init(|| {
@@ -405,7 +408,8 @@ fn exact_attenuation_deadline_and_post_lookup_clock_are_enforced() {
 
 #[test]
 fn disabled_key_rotation_preserves_the_native_token_and_resource_access() {
-    let f = fixture();
+    let mut f = fixture();
+    f.engine = f.engine.with_key_rotation(false);
     let direct = Direct(&f.engine, Cell::new(f.now));
     let replacement = Ps256Signer::generate(2048, "unused-replacement").unwrap();
     let mut session = Session::new(&direct, client(), "https://as.example/gnap");
@@ -449,7 +453,7 @@ fn disabled_key_rotation_preserves_the_native_token_and_resource_access() {
 }
 
 #[test]
-fn encoder_refuses_unresolved_clients_wrong_issuer_missing_deadlines_or_explicit_bindings() {
+fn encoder_preserves_supported_bindings_and_refuses_unrepresentable_contexts() {
     use gnap_as::{TokenEncoder, TokenEncodingContext};
     let encoder = authorization::Encoder::new(
         KeyPair::new(),
@@ -481,7 +485,20 @@ fn encoder_refuses_unresolved_clients_wrong_issuer_missing_deadlines_or_explicit
     assert_eq!(encoded.identifier.unwrap().len(), 64);
     let key = &request.client.as_value().unwrap().key;
     context.binding = Some(key);
-    assert!(encoder.encode(&context).is_err());
+    assert!(encoder.encode(&context).is_ok());
+    for invalid in [
+        serde_json::json!("unresolved-key"),
+        serde_json::json!({"proof": "mtls", "jwk": client().public_jwk().unwrap()}),
+        serde_json::json!({"proof": {"method": "httpsig", "unknown": true}, "jwk": client().public_jwk().unwrap()}),
+        serde_json::json!({"proof": "httpsig", "jwk": {"kty":"RSA","alg":"PS256","kid":"incomplete"}}),
+    ] {
+        let invalid = serde_json::from_value(invalid).unwrap();
+        let invalid_context = TokenEncodingContext {
+            binding: Some(&invalid),
+            ..context
+        };
+        assert!(encoder.encode(&invalid_context).is_err());
+    }
 }
 
 #[test]
