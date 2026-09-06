@@ -13,6 +13,19 @@
 //! What the AS is allowed to put in a response depends on the state of the
 //! grant, so the session carries a [`Grant`] from `gnap-core` and checks each
 //! response against it.
+//!
+//! For initial, continuation and modification requests, an unusable response
+//! or transport failure leaves the complete local state unchanged. This is not
+//! a remote rollback: the AS may already have committed the request. Calls are
+//! never retried automatically. A caller choosing to
+//! retry sends a fresh proof, but the old continuation credential or interaction
+//! reference may already be spent; a terminal GNAP error then requires a new
+//! grant in a new `Session`. Valid GNAP errors are absorbed, including a
+//! replacement continuation.
+//!
+//! On these exchanges, explicit incompatible or repeated `Content-Type` fields are
+//! rejected. Missing fields remain accepted for compatibility; this is not a
+//! complete MIME validator.
 
 use crate::error::ClientError;
 use crate::transport::{HttpRequest, HttpResponse, HttpTransport};
@@ -47,6 +60,7 @@ impl Step {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct InteractionWindow {
     received_at: u64,
     expires_at: Option<u128>,
@@ -68,6 +82,15 @@ pub struct Session<'a, T, S> {
     transport: &'a T,
     signer: &'a S,
     endpoint: String,
+    protocol: SessionState,
+    /// The interaction start modes this client can actually drive (§2.5).
+    /// `None` leaves that check to the caller; see [`Session::supporting`].
+    supported_modes: Option<Vec<String>>,
+}
+
+/// The complete mutable protocol state, independent of transport and signing.
+#[derive(Debug, Clone, PartialEq)]
+struct SessionState {
     grant: Grant,
     continuation: Option<Continue>,
     client_nonce: Option<String>,
@@ -97,11 +120,6 @@ pub struct Session<'a, T, S> {
     /// Receipt time and optional exclusive deadline for the current set of
     /// interaction responses. Responses without `interact` do not renew it.
     interaction_window: Option<InteractionWindow>,
-    /// The interaction start modes this client can actually drive (§2.5).
-    ///
-    /// `None` means the caller has not said, and the check of §2.5-MN01 does
-    /// not run; see [`Session::supporting`].
-    supported_modes: Option<Vec<String>>,
 }
 
 /// Subject information and the AS that stated it (§3.4-M15).
@@ -128,18 +146,20 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             transport,
             signer,
             endpoint: endpoint.into(),
-            grant: Grant::new(),
-            continuation: None,
-            client_nonce: None,
-            as_nonce: None,
-            hash_method: None,
-            requested: None,
-            offered_modes: Vec::new(),
-            validated_ref: None,
-            subject: None,
-            issued: None,
-            interaction_finished: false,
-            interaction_window: None,
+            protocol: SessionState {
+                grant: Grant::new(),
+                continuation: None,
+                client_nonce: None,
+                as_nonce: None,
+                hash_method: None,
+                requested: None,
+                offered_modes: Vec::new(),
+                validated_ref: None,
+                subject: None,
+                issued: None,
+                interaction_finished: false,
+                interaction_window: None,
+            },
             supported_modes: None,
         }
     }
@@ -161,7 +181,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     pub fn subject(&self) -> Option<AttributedSubject<'_>> {
         Some(AttributedSubject {
             as_endpoint: &self.endpoint,
-            subject: self.subject.as_deref()?,
+            subject: self.protocol.subject.as_deref()?,
         })
     }
 
@@ -181,6 +201,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     #[must_use]
     pub fn usable_tokens(&self, now: u64) -> Option<Vec<&AccessToken>> {
         let live: Vec<&AccessToken> = self
+            .protocol
             .issued
             .as_ref()?
             .iter()
@@ -213,13 +234,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// The state of the grant as the client understands it.
     #[must_use]
     pub const fn state(&self) -> State {
-        self.grant.state()
+        self.protocol.grant.state()
     }
 
     /// What the AS offered for continuing, if anything.
     #[must_use]
     pub const fn continuation(&self) -> Option<&Continue> {
-        self.continuation.as_ref()
+        self.protocol.continuation.as_ref()
     }
 
     /// Sends the initial grant request (§2).
@@ -233,6 +254,10 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// cannot be parsed, or when the AS answers something the RFC forbids in
     /// the state its answer implies.
     pub fn start(&mut self, request: &GrantRequest, now: u64) -> Result<Step, ClientError> {
+        self.transaction(|session| session.start_inner(request, now))
+    }
+
+    fn start_inner(&mut self, request: &GrantRequest, now: u64) -> Result<Step, ClientError> {
         // §2.3 — what the client says about itself is checked before it leaves.
         // §2.3-MN09 binds the client, not the AS: "The client instance MUST NOT
         // send a symmetric key by value in the key field of the request". A
@@ -276,13 +301,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                          compute, so it could not validate the callback (RFC 9635 §4.2.3)"
                     ))
                 })?;
-                self.client_nonce = Some(f.nonce.clone());
-                self.hash_method = Some(method);
+                self.protocol.client_nonce = Some(f.nonce.clone());
+                self.protocol.hash_method = Some(method);
             }
         }
-        self.requested = request.access_token.as_ref().map(|a| a.cardinality);
+        self.protocol.requested = request.access_token.as_ref().map(|a| a.cardinality);
         if let Some(i) = &request.interact {
-            self.offered_modes = i
+            self.protocol.offered_modes = i
                 .start
                 .iter()
                 .map(|m| m.method().as_str().to_owned())
@@ -291,8 +316,11 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             // §2.5-MN01 — declaring a mode this client cannot drive strands the
             // end user in front of something nobody will finish.
             if let Some(supported) = &self.supported_modes {
-                if let Some(unsupported) =
-                    self.offered_modes.iter().find(|m| !supported.contains(m))
+                if let Some(unsupported) = self
+                    .protocol
+                    .offered_modes
+                    .iter()
+                    .find(|m| !supported.contains(m))
                 {
                     return Err(ClientError::Usage(format!(
                         "the request declares the `{unsupported}` interaction mode, which \
@@ -372,19 +400,26 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         callback: &InteractCallback,
         now: u64,
     ) -> Result<(), ClientError> {
-        let (Some(client_nonce), Some(as_nonce)) = (&self.client_nonce, &self.as_nonce) else {
+        let (Some(client_nonce), Some(as_nonce)) =
+            (&self.protocol.client_nonce, &self.protocol.as_nonce)
+        else {
             return Err(ClientError::Usage(
                 "no interaction finish was negotiated, so no callback can be validated \
                  (RFC 9635 §2.5.2)"
                     .into(),
             ));
         };
-        if self.interaction_window.as_ref().is_some_and(|window| {
-            now < window.received_at
-                || window
-                    .expires_at
-                    .is_some_and(|deadline| u128::from(now) >= deadline)
-        }) {
+        if self
+            .protocol
+            .interaction_window
+            .as_ref()
+            .is_some_and(|window| {
+                now < window.received_at
+                    || window
+                        .expires_at
+                        .is_some_and(|deadline| u128::from(now) >= deadline)
+            })
+        {
             return Err(ClientError::Interaction(
                 "the interaction response has expired or the clock precedes its receipt (RFC 9635 §3.3; finish timeout recommendation in §4)".into(),
             ));
@@ -398,7 +433,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         };
         // §4.2.3 — absence selects the default; a value that was present and
         // unusable never got this far.
-        let method = self.hash_method.unwrap_or(HashMethod::DEFAULT);
+        let method = self.protocol.hash_method.unwrap_or(HashMethod::DEFAULT);
 
         let ok = verify_interaction_hash(&input, method, &callback.hash)
             .map_err(|e| ClientError::Interaction(e.to_string()))?;
@@ -413,13 +448,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             ));
         }
 
-        if self.interaction_finished || self.grant.state() != State::Pending {
+        if self.protocol.interaction_finished || self.protocol.grant.state() != State::Pending {
             return Err(ClientError::Interaction(
                 "this interaction is no longer awaiting a callback (RFC 9635 §4)".into(),
             ));
         }
-        self.validated_ref = Some(callback.interact_ref.clone());
-        self.interaction_finished = true;
+        self.protocol.validated_ref = Some(callback.interact_ref.clone());
+        self.protocol.interaction_finished = true;
         Ok(())
     }
 
@@ -436,7 +471,11 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// Fails when no continuation was offered, when a state guard refuses the
     /// call, or for the same reasons as [`Session::start`].
     pub fn continue_grant(&mut self, now: u64) -> Result<Step, ClientError> {
-        let cont = self.continuation.clone().ok_or_else(|| {
+        self.transaction(|session| session.continue_inner(now))
+    }
+
+    fn continue_inner(&mut self, now: u64) -> Result<Step, ClientError> {
+        let cont = self.protocol.continuation.clone().ok_or_else(|| {
             ClientError::Usage(
                 "the AS offered no continuation, so the client MUST NOT call the \
                  continuation API (RFC 9635 §5)"
@@ -449,7 +488,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         // associated interaction reference on the callback URI." Polling in
         // that window asks the AS to act on an interaction the client has no
         // evidence of, which is the very thing the reference is for.
-        if self.as_nonce.is_some() && !self.interaction_finished {
+        if self.protocol.as_nonce.is_some() && !self.protocol.interaction_finished {
             return Err(ClientError::Usage(
                 "the AS returned a `finish` nonce, so this grant continues on the \
                  interaction reference from the callback; it MUST NOT be continued before \
@@ -459,15 +498,15 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         }
 
         let event = self
+            .protocol
             .validated_ref
             .clone()
             .map_or(Event::ContinuePoll, Event::ContinueWithInteractRef);
 
         // gnap-core owns the wait period and the state guards. The transition
-        // is decided on a copy: a signing or transport failure happens before
-        // the AS has seen anything, and must leave the session able to try
-        // again rather than stranded mid-transition.
-        let mut attempt = self.grant.clone();
+        // is decided on a copy. An inconclusive exchange must not strand the
+        // local session mid-transition; the AS may still have committed it.
+        let mut attempt = self.protocol.grant.clone();
         attempt
             .apply(event.clone(), now)
             .map_err(|e| ClientError::Usage(e.to_string()))?;
@@ -489,16 +528,24 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         let http =
             self.signed_request("POST", &cont.uri, body, Some(&cont.access_token.value), now)?;
         let response = self.round_trip(http)?;
-        let before = self.grant.clone();
-        self.grant = attempt;
-        let step = self.absorb(&response, now)?;
+        let before = self.protocol.grant.clone();
+        self.protocol.grant = attempt;
+        let step = match self.absorb(&response, now) {
+            Err(error @ ClientError::Server(_)) => {
+                // A terminal GNAP error removed continuation; this reference
+                // can no longer be submitted, whether or not the AS spent it.
+                self.protocol.validated_ref = None;
+                return Err(error);
+            }
+            result => result?,
+        };
 
         if matches!(step, Step::Recoverable(_)) {
             self.rewind(before, now);
         } else {
             // The call went through, so the reference is spent: §4.2 makes it
             // one-time-use.
-            self.validated_ref = None;
+            self.protocol.validated_ref = None;
         }
         Ok(step)
     }
@@ -512,9 +559,9 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// sent. Leaving the transition applied would strand the session a step
     /// ahead of the AS.
     fn rewind(&mut self, before: Grant, now: u64) {
-        self.grant = before;
-        if let Some(wait) = self.continuation.as_ref().map(|c| c.wait) {
-            self.grant.offer_continuation(now, wait);
+        self.protocol.grant = before;
+        if let Some(wait) = self.protocol.continuation.as_ref().map(|c| c.wait) {
+            self.protocol.grant.offer_continuation(now, wait);
         }
     }
 
@@ -534,7 +581,11 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         changes: &ContinueRequest,
         now: u64,
     ) -> Result<Step, ClientError> {
-        let cont = self.continuation.clone().ok_or_else(|| {
+        self.transaction(|session| session.modify_inner(changes, now))
+    }
+
+    fn modify_inner(&mut self, changes: &ContinueRequest, now: u64) -> Result<Step, ClientError> {
+        let cont = self.protocol.continuation.clone().ok_or_else(|| {
             ClientError::Usage(
                 "the AS offered no continuation, so the client MUST NOT call the \
                  continuation API (RFC 9635 §5)"
@@ -552,7 +603,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
 
         // gnap-core owns the states a modification is allowed from (§5.3-M01),
         // and the transition is committed only once the AS has answered.
-        let mut attempt = self.grant.clone();
+        let mut attempt = self.protocol.grant.clone();
         attempt
             .apply(Event::Modify, now)
             .map_err(|e| ClientError::Usage(e.to_string()))?;
@@ -567,8 +618,8 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             now,
         )?;
         let response = self.round_trip(http)?;
-        let before = self.grant.clone();
-        self.grant = attempt;
+        let before = self.protocol.grant.clone();
+        self.protocol.grant = attempt;
         let step = self.absorb(&response, now)?;
 
         if matches!(step, Step::Recoverable(_)) {
@@ -623,7 +674,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             .validate()
             .map_err(|e| ClientError::Protocol(e.to_string()))?;
 
-        let Some(held) = self.issued.as_mut() else {
+        let Some(held) = self.protocol.issued.as_mut() else {
             return Err(ClientError::Usage(
                 "the session no longer holds the token that was rotated".into(),
             ));
@@ -671,7 +722,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                 response.status
             )));
         }
-        if let Some(tokens) = self.issued.as_mut() {
+        if let Some(tokens) = self.protocol.issued.as_mut() {
             tokens.remove(index);
         }
         Ok(())
@@ -679,7 +730,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
 
     /// Finds a held token by label, and the management API it offers (§3.2.1).
     fn managed(&self, label: Option<&str>) -> Result<(usize, TokenManage), ClientError> {
-        let tokens = self.issued.as_ref().ok_or_else(|| {
+        let tokens = self.protocol.issued.as_ref().ok_or_else(|| {
             ClientError::Usage("no access token has been issued to this session".into())
         })?;
         let index = tokens
@@ -751,7 +802,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         tokens
             .validate()
             .map_err(|e| ClientError::Protocol(e.to_string()))?;
-        if let Some(requested) = self.requested {
+        if let Some(requested) = self.protocol.requested {
             tokens
                 .check_cardinality(requested)
                 .map_err(|e| ClientError::Protocol(e.to_string()))?;
@@ -770,7 +821,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         let Some(interact) = &response.interact else {
             return Ok(());
         };
-        let offered = |mode: &str| self.offered_modes.iter().any(|m| m == mode);
+        let offered = |mode: &str| self.protocol.offered_modes.iter().any(|m| m == mode);
 
         for (mode, present) in [
             ("redirect", interact.redirect.is_some()),
@@ -789,18 +840,55 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         Ok(())
     }
 
+    /// An unusable response says nothing authoritative about the remote grant.
+    /// Retain all local state, but commit valid GNAP errors just like successes.
+    fn transaction(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<Step, ClientError>,
+    ) -> Result<Step, ClientError> {
+        let before = self.protocol.clone();
+        let result = operation(self);
+        if result.is_err() && !matches!(&result, Err(ClientError::Server(_))) {
+            self.protocol = before;
+        }
+        result
+    }
+
     /// Parses a response, checks what the client must check, and advances the
     /// grant.
     fn absorb(&mut self, http: &HttpResponse, now: u64) -> Result<Step, ClientError> {
         if http.status == 204 {
-            // §5.4 — a revocation is answered with 204 and no content.
-            return Err(ClientError::Usage(
-                "the AS answered 204 No Content; the grant is revoked (RFC 9635 §5.4)".into(),
+            // §5.4 uses 204 for DELETE, not for these POST/PATCH exchanges.
+            // It supplies no grant response from which to infer local state.
+            return Err(ClientError::Protocol(
+                "the AS answered 204 No Content without a usable grant response".into(),
             ));
+        }
+
+        let mut content_types = http.header_values("content-type");
+        if let Some(content_type) = content_types.next() {
+            if content_types.next().is_some()
+                || !content_type
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .eq_ignore_ascii_case("application/json")
+            {
+                return Err(ClientError::Protocol(
+                    "the response has an incompatible or repeated Content-Type".into(),
+                ));
+            }
         }
 
         let response: GrantResponse =
             serde_json::from_slice(&http.body).map_err(|e| ClientError::Parse(e.to_string()))?;
+
+        if !(200..300).contains(&http.status) && response.error.is_none() {
+            return Err(ClientError::Protocol(
+                "a non-success HTTP response carries no GNAP error".into(),
+            ));
+        }
 
         self.check_tokens(&response)?;
         self.check_interaction(&response)?;
@@ -823,22 +911,24 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         // The response is the only notice the client gets, so it has to be
         // willing to leave `pending` on the strength of it. Refusing would
         // strand the client polling a grant that has already been decided.
-        if self.grant.state() == State::Pending
+        if self.protocol.grant.state() == State::Pending
             && (response.access_token.is_some() || response.subject.is_some())
         {
-            self.grant
+            self.protocol
+                .grant
                 .apply(Event::OutOfBandRoDecision, now)
                 .map_err(|e| ClientError::Protocol(e.to_string()))?;
         }
 
-        if self.grant.state() == State::Processing {
-            self.grant
+        if self.protocol.grant.state() == State::Processing {
+            self.protocol
+                .grant
                 .apply(event, now)
                 .map_err(|e| ClientError::Protocol(e.to_string()))?;
         }
 
         // What the AS sent must be legal in the state it implies.
-        let violations = check_response(self.grant.state(), &response);
+        let violations = check_response(self.protocol.grant.state(), &response);
         if let Some(v) = violations.first() {
             return Err(ClientError::Protocol(v.to_string()));
         }
@@ -848,13 +938,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             subject
                 .validate()
                 .map_err(|e| ClientError::Protocol(e.to_string()))?;
-            self.subject = Some(Box::new(subject.clone()));
+            self.protocol.subject = Some(Box::new(subject.clone()));
         }
 
         // §3.2.1 — `expires_in` is a duration; it starts running when the
         // response arrives, which is here and nowhere else.
         if let Some(tokens) = &response.access_token {
-            self.issued = Some(tokens.tokens.iter().map(|t| (now, t.clone())).collect());
+            self.protocol.issued = Some(tokens.tokens.iter().map(|t| (now, t.clone())).collect());
         }
 
         if let Some(c) = &response.r#continue {
@@ -862,21 +952,21 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             // given, so it has to be one that can be used as it stands.
             c.validate()
                 .map_err(|e| ClientError::Protocol(e.to_string()))?;
-            self.grant.offer_continuation(now, c.wait);
-            self.continuation = Some(c.clone());
+            self.protocol.grant.offer_continuation(now, c.wait);
+            self.protocol.continuation = Some(c.clone());
         } else {
-            self.grant.withhold_continuation();
-            self.continuation = None;
+            self.protocol.grant.withhold_continuation();
+            self.protocol.continuation = None;
         }
 
         if let Some(i) = &response.interact {
-            self.as_nonce.clone_from(&i.finish);
-            self.interaction_window = interaction_window;
-            self.interaction_finished = false;
-            self.validated_ref = None;
+            self.protocol.as_nonce.clone_from(&i.finish);
+            self.protocol.interaction_window = interaction_window;
+            self.protocol.interaction_finished = false;
+            self.protocol.validated_ref = None;
         }
 
-        Ok(match (&response.error, self.grant.state()) {
+        Ok(match (&response.error, self.protocol.grant.state()) {
             (Some(e), _) if response.r#continue.is_none() => Err(ClientError::Server(e.clone()))?,
             (Some(_), _) => Step::Recoverable(Box::new(response)),
             (None, State::Approved) => Step::Approved(Box::new(response)),
@@ -884,3 +974,6 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;
