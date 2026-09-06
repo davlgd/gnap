@@ -352,8 +352,8 @@ cargo test                                   # unit, integration and every RFC v
 cargo clippy --workspace --all-targets -- -D warnings
 cargo doc --workspace --no-deps --open       # every public item is documented
 
-python3 tools/check_quotes.py                # selected RFC quotations match the text
 python3 -B -m unittest discover -s tools/tests -v  # offline quotation-checker regressions
+python3 tools/check_quotes.py                # selected RFC quotations match the text
 python3 tools/check_readme.py                # transcript and available local scope check
 python3 -B tools/conformance_ledger.py check  # pinned source inventory and evidence accounting
 python3 -B tools/conformance_ledger.py run-tests  # test the ledger itself, not GNAP

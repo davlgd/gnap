@@ -4,7 +4,7 @@ import contextlib
 import errno
 import importlib.util
 import io
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import tempfile
 import unittest
 from unittest import mock
@@ -28,7 +28,13 @@ class QuoteTests(unittest.TestCase):
         return path
 
     def selected(self):
-        return [str(path.relative_to(self.root)) for path in quotes.rust_sources(self.root)]
+        return [path.relative_to(self.root).as_posix() for path in quotes.rust_sources(self.root)]
+
+    def test_selection_expectations_normalize_windows_paths(self):
+        self.root = PureWindowsPath("C:/checkout")
+        selected = self.root / "apps/sample/src/main.rs"
+        with mock.patch.object(quotes, "rust_sources", return_value=[selected]):
+            self.assertEqual(self.selected(), ["apps/sample/src/main.rs"])
 
     def check(self, corpus):
         files = {number: self.write(f"rfc/{number}.txt", text) for number, text in corpus.items()}
@@ -85,13 +91,13 @@ class QuoteTests(unittest.TestCase):
         self.write("crates/sample/src/target/helper.rs", '// RFC 9767: "This invented sentence does not exist anywhere."\n')
         result, output, _ = self.check({"9767": "The actual source says something different."})
         self.assertEqual(result, 1)
-        self.assertIn("crates/sample/src/target/helper.rs:1: introuvable dans 9767", output)
+        self.assertIn(f"{Path('crates/sample/src/target/helper.rs')}:1: introuvable dans 9767", output)
 
     def test_invalid_quote_under_source_fixtures_is_not_ignored(self):
         self.write("apps/sample/src/fixtures/helper.rs", '// RFC 9767: "This invented sentence does not exist anywhere."\n')
         result, output, _ = self.check({"9767": "The actual source says something different."})
         self.assertEqual(result, 1)
-        self.assertIn("apps/sample/src/fixtures/helper.rs:1: introuvable dans 9767", output)
+        self.assertIn(f"{Path('apps/sample/src/fixtures/helper.rs')}:1: introuvable dans 9767", output)
 
     def test_does_not_follow_file_directory_package_or_source_symlinks(self):
         external = self.write("outside/source.rs")
@@ -129,7 +135,7 @@ class QuoteTests(unittest.TestCase):
         self.write("crates/sample/src/nested/invalid.rs", '// RFC 9767: "This invented sentence does not exist anywhere."\n')
         result, output, _ = self.check({"9767": "The actual source says something different."})
         self.assertEqual(result, 1)
-        self.assertIn("crates/sample/src/nested/invalid.rs:1: introuvable dans 9767", output)
+        self.assertIn(f"{Path('crates/sample/src/nested/invalid.rs')}:1: introuvable dans 9767", output)
 
     def test_misattributed_quote_is_not_accepted_from_another_rfc(self):
         text = "This synthetic quotation belongs to the other document."
