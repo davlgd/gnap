@@ -7,7 +7,9 @@ acceptance smoke test, not a general GNAP conformance checker.
 """
 
 import argparse
+from html.parser import HTMLParser
 import http.cookiejar
+from http.cookies import CookieError, SimpleCookie
 import json
 import time
 import urllib.error
@@ -45,8 +47,8 @@ def client():
     )
 
 
-def request(opener, base, path, method="GET", data=None, browser_origin=None):
-    headers = {"Accept": "application/json"}
+def request(opener, base, path, method="GET", data=None, browser_origin=None, *, html=False):
+    headers = {"Accept": "text/html" if html else "application/json"}
     if browser_origin is not None:
         headers["Origin"] = browser_origin
     payload = None if data is None else json.dumps(data).encode()
@@ -63,7 +65,7 @@ def request(opener, base, path, method="GET", data=None, browser_origin=None):
         if len(raw) > 131_072:
             raise AssertionError("Response exceeds smoke-test bound")
         try:
-            body = json.loads(raw)
+            body = raw.decode("utf-8") if html else json.loads(raw)
         except (ValueError, UnicodeDecodeError):
             body = None
         return response.status, response.headers, body, round((time.monotonic() - started) * 1000)
@@ -190,6 +192,87 @@ def wait_for_continuation(browser, base):
     expect(isinstance(wait, int) and not isinstance(wait, bool) and 0 <= wait <= 30, "Invalid continuation wait hint")
     if wait:
         time.sleep(wait + 0.1)
+
+
+def owner_cookie(headers):
+    candidates = []
+    for value in headers.get_all("set-cookie") or []:
+        cookie = SimpleCookie(value).get("gnap_owner")
+        if cookie is not None:
+            candidates.append(cookie)
+    expect(len(candidates) == 1, "Owner response must set exactly one owner cookie")
+    return candidates[0]
+
+
+class CodeEntryPage(HTMLParser):
+    """Read only the form ticket; never evaluate the page or follow its URLs."""
+
+    def __init__(self):
+        super().__init__()
+        self.tickets = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "body":
+            self.tickets.extend(value for name, value in attrs if name == "data-ticket")
+
+
+def secondary_device_demo(base, outcomes):
+    """Exercise two HTTP cookie stores, not a browser engine or real owner login."""
+    for choice in ("allow", "deny"):
+        initiator, owner = client(), client()
+
+        def action(name, expected_status=200):
+            status, _, body, _ = request(initiator, base, "/api/" + name, "POST", {}, base)
+            expect(status == expected_status and isinstance(body, dict),
+                   "Code-flow client action failed: " + name)
+            return body
+
+        started = action("start-code")
+        code = started.get("user_code_uri")
+        expect(started.get("state") == "pending" and isinstance(code, dict)
+               and code.get("uri") == base + "/code" and isinstance(code.get("code"), str)
+               and not started.get("interaction_uri"), "Code start changed the entry flow")
+        action("approve", 400)
+        status, headers, page, _ = request(owner, base, "/code", html=True)
+        expect(status == 200 and isinstance(page, str)
+               and headers.get_content_type() == "text/html", "Code entry is not an HTML page")
+        cookie = owner_cookie(headers)
+        expect(cookie is not None and cookie["httponly"] and cookie["samesite"] == "Strict"
+               and cookie["path"] == "/code" and bool(cookie["secure"]) == base.startswith("https://"),
+               "Owner cookie lost its scope or transport protections")
+        parsed = CodeEntryPage()
+        parsed.feed(page)
+        expect(len(parsed.tickets) == 1 and isinstance(parsed.tickets[0], str)
+               and 1 <= len(parsed.tickets[0]) <= 128, "Code page has no unique bounded ticket")
+        payload = {"ticket": parsed.tickets[0], "code": code["code"]}
+        status, _, _, _ = request(initiator, base, "/code/lookup", "POST", payload, base)
+        expect(status == 401, "Client cookie was accepted as an owner session")
+        status, _, looked, _ = request(owner, base, "/code/lookup", "POST", payload, base)
+        expect(status == 200 and isinstance(looked, dict), "Owner code lookup failed")
+        expect(looked.get("rights") == [{"label": None, "rights": ["synthetic-archive:read", "synthetic-folder:read"]}],
+               "Owner did not see the exact requested rights")
+        expect(isinstance(looked.get("ticket"), str) and looked["ticket"] != payload["ticket"],
+               "Lookup did not rotate the owner ticket")
+        wait_for_continuation(initiator, base)
+        pending = action("continue")
+        expect(pending.get("state") == "pending" and pending.get("token_present") is False,
+               "Polling approved a request without the owner's decision")
+        status, headers, decided, _ = request(owner, base, "/code/consent", "POST",
+                                             {"ticket": looked["ticket"], "choice": choice}, base)
+        expect(status == 200 and isinstance(decided, dict) and decided.get("complete") is True
+               and headers.get("location") is None, "Owner decision failed or redirected")
+        wait_for_continuation(initiator, base)
+        result = action("continue")
+        expect(result.get("state") == ("approved" if choice == "allow" else "denied")
+               and result.get("token_present") is (choice == "allow")
+               and result.get("user_code_uri") is None, "Client lost the owner's decision")
+        if choice == "allow":
+            expect(action("read").get("last_resource_status") == 200, "Approved code grant could not read")
+            wait_for_continuation(initiator, base)
+            expect(action("revoke-grant").get("token_present") is False, "Code grant cleanup failed")
+        else:
+            action("read", 400)
+        outcomes.append({"check": "secondary-device-" + choice, "status": "pass"})
 
 
 def check_metadata(body):
@@ -677,6 +760,7 @@ def main():
             demo(args.demo, outcomes)
             ongoing_demo(args.demo, outcomes)
             multiple_demo(args.demo, outcomes)
+            secondary_device_demo(args.demo, outcomes)
             if args.demo_alias:
                 demo_alias(args.demo, args.demo_alias, outcomes)
         if args.workbench:
@@ -685,7 +769,7 @@ def main():
             rs_imports(args.workbench, outcomes)
             derivation_imports(args.workbench, outcomes)
             token_exchange_imports(args.workbench, outcomes)
-    except (AssertionError, OSError, ValueError, TypeError, KeyError) as error:
+    except (AssertionError, OSError, ValueError, TypeError, KeyError, CookieError) as error:
         # Do not render arbitrary transport/parser errors, which may contain a
         # URL with a callback secret. Assertions above contain only fixed text.
         detail = str(error) if isinstance(error, AssertionError) else type(error).__name__

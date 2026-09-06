@@ -128,8 +128,11 @@ and [diagnostic workbench](https://gnap-conformance.cleverapps.io).
 These experimental deployments use synthetic data and volatile state. Do not
 submit personal data or production credentials. Active probes are restricted to
 operator-approved targets, not arbitrary public endpoints.
-Hosted deployments can lag the source: the RS introspection, registration and
-import diagnostics described here have been tested locally, not deployed yet.
+Hosted deployments can lag the source. The [6 September validation](docs/validation-2026-09-06.md)
+records the deployed revision and HTTPS observations for introspection,
+registration, ongoing grants, multiple tokens, downstream access, code consent
+and imported-message diagnostics. The separate Biscuit services are not covered
+by that deployment record.
 
 See the [development methodology](docs/ecosystem-development.md), the consumer
 feedback in each application, and the [comparison with modern

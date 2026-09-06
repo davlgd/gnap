@@ -34,7 +34,7 @@ not current server behavior, remote source attestation or block completion.
 
 ```json
 {
-  "conformance/receipts/gnap-delegation-discovery-replay-2026-09-06.json": {
+  "conformance/receipts/gnap-delegation-discovery-2026-09-06.json": {
     "assertions": [
       {
         "assertion": "Historical captured OPTIONS response has unambiguous application/json media type. No HTTP 200 requirement or general header-cardinality MUST is claimed.",
@@ -69,9 +69,9 @@ not current server behavior, remote source attestation or block completion.
     ],
     "observation": {
       "capture_origin": "live",
-      "capture_path": "conformance/captures/gnap-delegation-discovery-2026-09-05.json",
-      "capture_sha256": "90a8ea8d27ce8f546a14de28aff0273d62f1e85a3e275bcb4d2e38a93e73246f",
-      "captured_at_unix_utc": 1788645193,
+      "capture_path": "conformance/captures/gnap-delegation-discovery-2026-09-06.json",
+      "capture_sha256": "1649b5d868ca940faac31184ee5af09f287563a1c1d91d263849cf2f32046bd4",
+      "captured_at_unix_utc": 1788712167,
       "collector_config_sha256": "5da70f5b3062631cae0441aa79a36d762b605eba434bc7e3b09ccc6e054121e9",
       "endpoint": "https://gnap-delegation.cleverapps.io/gnap",
       "execution_mode": "capture_replay",

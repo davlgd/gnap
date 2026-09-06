@@ -302,17 +302,27 @@ current source tree. Its recorded sources remain available at commit
 A scenario, helper or runner change requires a fresh replay receipt, not a new
 network capture or a change to the historical capture time.
 
-The active [replay receipt](receipts/gnap-delegation-discovery-replay-2026-09-06.json)
+The earlier [replay receipt](receipts/gnap-delegation-discovery-replay-2026-09-06.json)
 was produced on 6 September from the corrected scenario at clean commit
 `a470b42c9915130dcf086d3d7730afb71ea0c803`. It reuses the exact same capture
-from 5 September: no new network observation was made. Its six executed cases
-are the active mappings in `evidence.json`.
+from 5 September: no new network observation was made. It remains preserved,
+but its cases are no longer the active mappings in `evidence.json`.
 
-The body contains only the public grant endpoint, announced `httpsig` proof and
+That older body contains only the public grant endpoint, announced `httpsig` proof and
 `key_rotation_supported: false`. The six response assertions do not establish
 capability execution or the remote source revision. A passing replay is only
 `passing_observation_not_completion`, contextualized by its capture time and
 endpoint; the ledger still has no global percentage or certification.
+
+The active [receipt](receipts/gnap-delegation-discovery-2026-09-06.json) replays a
+[new live capture](captures/gnap-delegation-discovery-2026-09-06.json), acquired at
+UTC Unix `1788712167` after the two applications were redeployed. The body also
+announces the `redirect`, `user_code` and `user_code_uri` start modes. Six cases
+ran from clean commit `18987d2dcecb5695b8f947cae5b4aca4c24f0896` and now support
+the same six assertions on the same two blocks; no additional obligation is
+counted as completed. See the [dated validation record](../docs/validation-2026-09-06.md)
+for separate HTTPS application observations and their limits. The receipt
+still reports `remote_revision: "unknown"`, not a remote-code attestation.
 
 ## Next bounded increments
 

@@ -1,0 +1,26 @@
+{
+  "body_base64": "eyJncmFudF9yZXF1ZXN0X2VuZHBvaW50IjoiaHR0cHM6Ly9nbmFwLWRlbGVnYXRpb24uY2xldmVyYXBwcy5pby9nbmFwIiwiaW50ZXJhY3Rpb25fc3RhcnRfbW9kZXNfc3VwcG9ydGVkIjpbInJlZGlyZWN0IiwidXNlcl9jb2RlIiwidXNlcl9jb2RlX3VyaSJdLCJrZXlfcHJvb2ZzX3N1cHBvcnRlZCI6WyJodHRwc2lnIl0sImtleV9yb3RhdGlvbl9zdXBwb3J0ZWQiOmZhbHNlfQ==",
+  "body_sha256": "40d32b027555b726d87489b785ab738a6be1cad6848012347fc1cff2e9c6fb36",
+  "capture_origin": "live",
+  "captured_at_unix_utc": 1788712167,
+  "collector_config": {
+    "address_policy": "public-ipv4-pinned-v1",
+    "credentials": false,
+    "max_body_bytes": 32768,
+    "method": "OPTIONS",
+    "proxy": false,
+    "redirects": false,
+    "timeout_seconds": 5
+  },
+  "collector_config_sha256": "5da70f5b3062631cae0441aa79a36d762b605eba434bc7e3b09ccc6e054121e9",
+  "endpoint": "https://gnap-delegation.cleverapps.io/gnap",
+  "headers": [
+    [
+      "content-type",
+      "application/json"
+    ]
+  ],
+  "http_status": 200,
+  "remote_revision": "unknown",
+  "schema_version": 1
+}

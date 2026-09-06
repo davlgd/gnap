@@ -129,7 +129,9 @@ attempt budgets, request size, origin checks and malformed/unknown/expired codes
 Forced interleavings cover either side losing a concurrent storage write and a
 post-completion poll waiting until its consent decision has been published.
 
-This is local HTTP evidence, not automated rendering in two browser engines,
-a physical second device, real owner authentication, deployed TLS or
-independent-vendor interoperability. It does not supply the push and assertion
+Those tests supply local HTTP evidence. The [6 September validation](validation-2026-09-06.md)
+separately records two hosted HTTPS flows using independent cookie stores.
+Neither execution establishes automated rendering in two browser engines, a
+physical second device, real owner authentication or independent-vendor
+interoperability. The consumer does not supply the push and assertion
 capabilities required by the full C2 profile.
