@@ -1,0 +1,267 @@
+use axum::{
+    body::Body,
+    http::{Request, Version},
+    routing::get,
+    Router,
+};
+use gnap_biscuit_files::http::{self, Origin};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::sync::Semaphore;
+use tower::ServiceExt;
+
+#[tokio::test]
+async fn body_read_failures_have_distinct_statuses_and_release_admission() {
+    use axum::body::{to_bytes, Bytes};
+    use futures_util::stream;
+    let workers = Arc::new(Semaphore::new(1));
+    let origin = Origin::parse("http://127.0.0.1:18080").unwrap();
+    for (body, expected) in [
+        (Body::from(vec![0; gnap_biscuit_files::MAX_BODY + 1]), 413),
+        (
+            Body::from_stream(stream::iter([Err::<Bytes, _>(std::io::Error::other(
+                "private body read detail",
+            ))])),
+            400,
+        ),
+        (
+            Body::from_stream(stream::pending::<Result<Bytes, std::io::Error>>()),
+            408,
+        ),
+    ] {
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            http::dispatch(
+                Request::builder().uri("/probe").body(body).unwrap(),
+                &origin,
+                workers.clone(),
+                |_| panic!("a failed body read must not dispatch work"),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), expected);
+        assert!(to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(workers.available_permits(), 1);
+    }
+    let response = http::dispatch(
+        Request::builder()
+            .uri("/probe")
+            .body(Body::from(vec![0; gnap_biscuit_files::MAX_BODY]))
+            .unwrap(),
+        &origin,
+        workers.clone(),
+        |request| {
+            assert_eq!(request.body.unwrap().len(), gnap_biscuit_files::MAX_BODY);
+            http::answer(200, serde_json::json!({"ok":true}))
+        },
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(workers.available_permits(), 1);
+}
+
+#[tokio::test]
+async fn canonical_authority_handles_real_http_versions_and_ignores_forwarded() {
+    let router = http::guarded(
+        Router::new()
+            .route("/probe", get(|| async { "ok" }))
+            .route("/health", get(|| async { "ok" })),
+        Origin::parse("https://files.example").unwrap(),
+    );
+    for (target, host, version, expected) in [
+        ("/probe", Some("files.example"), Version::HTTP_11, 200),
+        ("/probe", Some("alias.example"), Version::HTTP_11, 421),
+        ("/probe", None, Version::HTTP_11, 400),
+        ("https://files.example/probe", None, Version::HTTP_2, 200),
+        ("http://files.example/probe", None, Version::HTTP_2, 200),
+        (
+            "https://alias.example/probe",
+            Some("files.example"),
+            Version::HTTP_2,
+            400,
+        ),
+        ("/probe", Some("files.example:bad"), Version::HTTP_11, 400),
+        ("/health", Some("alias.example"), Version::HTTP_11, 200),
+    ] {
+        let mut request = Request::builder()
+            .uri(target)
+            .version(version)
+            .header("forwarded", "host=files.example;proto=https");
+        if let Some(host) = host {
+            request = request.header("host", host);
+        }
+        let response = router
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(response.headers().get("location").is_none());
+        assert!(response.headers().get("set-cookie").is_none());
+    }
+    let request = Request::builder()
+        .uri("/probe")
+        .header("host", "files.example")
+        .header("host", "files.example")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(router.oneshot(request).await.unwrap().status(), 400);
+}
+
+#[tokio::test]
+async fn bracketed_ipv6_authorities_preserve_host_and_port_matching() {
+    let authority: axum::http::uri::Authority = "[::1]:18080".parse().unwrap();
+    // Authority::host retains the brackets; the guard's suffix begins after
+    // them. Do not remove or re-add brackets based on a different URL API.
+    assert_eq!(authority.host(), "[::1]");
+    for (origin, target, host, version, expected) in [
+        (
+            "http://[::1]:18080",
+            "/probe",
+            Some("[::1]:18080"),
+            Version::HTTP_11,
+            200,
+        ),
+        (
+            "http://[::1]:18080",
+            "http://[::1]:18080/probe",
+            None,
+            Version::HTTP_2,
+            200,
+        ),
+        (
+            "http://[::1]:18080",
+            "/probe",
+            Some("[::1]"),
+            Version::HTTP_11,
+            421,
+        ),
+        (
+            "http://[::1]:18080",
+            "http://[::1]:18080/probe",
+            Some("[::1]:18081"),
+            Version::HTTP_2,
+            400,
+        ),
+        (
+            "http://[::1]:18080",
+            "/probe",
+            Some("[::1]:bad"),
+            Version::HTTP_11,
+            400,
+        ),
+        (
+            "http://[::1]:18080",
+            "/probe",
+            Some("[::1]evil:18080"),
+            Version::HTTP_11,
+            400,
+        ),
+        (
+            "https://[::1]",
+            "/probe",
+            Some("[::1]"),
+            Version::HTTP_11,
+            200,
+        ),
+        (
+            "https://[::1]",
+            "https://[::1]/probe",
+            None,
+            Version::HTTP_2,
+            200,
+        ),
+    ] {
+        let router = http::guarded(
+            Router::new().route("/probe", get(|| async { "ok" })),
+            Origin::parse(origin).unwrap(),
+        );
+        let mut request = Request::builder().uri(target).version(version);
+        if let Some(host) = host {
+            request = request.header("host", host);
+        }
+        let response = router
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{origin} {target} {host:?}");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(response.headers().get("location").is_none());
+    }
+}
+
+#[tokio::test]
+async fn cancelled_http_waiter_does_not_release_running_cpu_worker() {
+    let workers = Arc::new(Semaphore::new(1));
+    let origin = Origin::parse("http://127.0.0.1:18080").unwrap();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+    let done = Arc::new(AtomicBool::new(false));
+    let worker_semaphore = workers.clone();
+    let job_done = done.clone();
+    let waiter = tokio::spawn(async move {
+        http::dispatch(
+            Request::builder()
+                .uri("/probe")
+                .body(Body::empty())
+                .unwrap(),
+            &origin,
+            worker_semaphore,
+            move |_| {
+                let _ = started_tx.send(());
+                finish_rx.recv().unwrap();
+                job_done.store(true, Ordering::SeqCst);
+                http::denied(400)
+            },
+        )
+        .await
+    });
+    started_rx.await.unwrap();
+    waiter.abort();
+    assert_eq!(workers.available_permits(), 0);
+    let refused = http::dispatch(
+        Request::builder()
+            .uri("/probe")
+            .body(Body::empty())
+            .unwrap(),
+        &Origin::parse("http://127.0.0.1:18080").unwrap(),
+        workers.clone(),
+        |_| panic!("full worker queue accepted work"),
+    )
+    .await;
+    assert_eq!(refused.status(), 503);
+    finish_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while workers.available_permits() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(done.load(Ordering::SeqCst));
+}
+
+#[test]
+fn origins_reject_remote_http_credentials_and_noncanonical_forms() {
+    for origin in [
+        "http://files.example",
+        "https://files.example/",
+        "https://user@files.example",
+        "https://FILES.example",
+        "https://files.example/path",
+        "https://files.example?query=1",
+    ] {
+        assert!(Origin::parse(origin).is_err());
+    }
+    assert!(Origin::parse("http://[::1]:18080").is_ok());
+}
