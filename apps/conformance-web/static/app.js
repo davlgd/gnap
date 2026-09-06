@@ -1,7 +1,9 @@
 'use strict';
 const byId = id => document.getElementById(id);
 let currentReport = null;
+let reportGeneration = 0;
 const kindHelp = {
+  as_discovery: 'Captured RFC 9635 section 9 discovery document. Declared endpoint and HTTP status are compared, never fetched. Announced capabilities are not tested in operation.',
   rs_discovery: 'AS metadata for resource servers at /.well-known/gnap-as-rs, not metadata about an RS itself. Announced capabilities are not tested in operation.',
   introspection_request: 'Shape only. The RS signs with its own key; proof describes the client proof and is recommended, not required. Never paste a private key or production token.',
   introspection_response: 'An active response requires access (possibly empty) and iss. Inactive responses contain active: false only. Neither state nor cryptographic binding is verified.',
@@ -16,13 +18,18 @@ const contextHelp = {
 };
 function updateKind() {
   const kind = byId('kind').value;
+  const discovery = kind === 'as_discovery';
   byId('kind-help').textContent = kindHelp[kind] || 'Select the message actually captured. Request and response checks are distinct.';
+  byId('discovery-context').hidden = !discovery;
+  byId('digest-context').hidden = discovery;
   byId('context-section').hidden = !contextHelp[kind];
   byId('context-help').textContent = contextHelp[kind] || '';
   byId('rs-context').value = '';
 }
 byId('kind').addEventListener('change', () => { clearReport(); updateKind(); });
-const clearReport = () => { currentReport = null; byId('report').replaceChildren(); byId('summary').textContent = ''; byId('download').disabled = true; };
+updateKind();
+// Clearing invalidates late results, not requests already sent to the server.
+const clearReport = () => { reportGeneration += 1; currentReport = null; byId('report').replaceChildren(); byId('summary').textContent = ''; byId('download').disabled = true; };
 function renderReport(report) {
   currentReport = report;
   const counts = { pass: 0, fail: 0, not_tested: 0 };
@@ -46,6 +53,7 @@ function renderReport(report) {
 }
 byId('analyze').addEventListener('click', async () => {
   clearReport();
+  const generation = reportGeneration;
   byId('analyze').disabled = true;
   try {
     const body = byId('body').value;
@@ -54,14 +62,23 @@ byId('analyze').addEventListener('click', async () => {
     if (byId('headers').value.trim()) {
       try { headers = JSON.parse(byId('headers').value); } catch { throw new Error('Headers must be valid JSON pairs.'); }
     }
-    const envelope = { kind: byId('kind').value, body, headers, content_digest: byId('digest').value || null };
-    if (contextHelp[envelope.kind] && byId('rs-context').value.trim()) {
+    const kind = byId('kind').value;
+    const discovery = kind === 'as_discovery';
+    const envelope = { kind, body, headers, content_digest: discovery ? null : byId('digest').value || null };
+    if (contextHelp[kind] && byId('rs-context').value.trim()) {
       try { envelope.rs_context = JSON.parse(byId('rs-context').value); } catch { throw new Error('Context must be a JSON object with fields appropriate to this message type.'); }
+    }
+    if (discovery) {
+      const httpStatus = byId('http-status').value !== '' ? Number(byId('http-status').value) : null;
+      if (httpStatus !== null && (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599)) throw new Error('HTTP status must be an integer from 100 to 599.');
+      envelope.queried_endpoint = byId('queried-endpoint').value || null;
+      envelope.http_status = httpStatus;
     }
     const response = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', credentials: 'omit', body: JSON.stringify(envelope), signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error(`Import rejected (HTTP ${response.status}). Check JSON, field and size limits.`);
-    renderReport(await response.json());
-  } catch (error) { byId('summary').textContent = error.name === 'TimeoutError' ? 'Request timed out.' : error.message; }
+    const report = await response.json();
+    if (generation === reportGeneration) renderReport(report);
+  } catch (error) { if (generation === reportGeneration) byId('summary').textContent = error.name === 'TimeoutError' ? 'Request timed out.' : error.message; }
   finally { byId('analyze').disabled = false; }
 });
 async function loadTargets() {
@@ -71,24 +88,28 @@ async function loadTargets() {
     const targets = await response.json();
     if (!targets.length) return;
     byId('target').replaceChildren();
-    for (const target of targets) { const option = document.createElement('option'); option.value = String(target.id); option.textContent = `${target.role.toUpperCase()} — ${target.url}`; byId('target').append(option); }
+    for (const target of targets) { const option = document.createElement('option'); option.value = String(target.id); option.dataset.role = target.role; option.textContent = `${target.role.toUpperCase()} — ${target.url}`; byId('target').append(option); }
     byId('target').disabled = false; byId('probe').disabled = false;
   } catch { /* Import analysis remains available when targets cannot load. */ }
 }
 byId('probe').addEventListener('click', async () => {
   clearReport();
+  const generation = reportGeneration;
   if (!byId('consent').checked) { byId('summary').textContent = 'Explicit consent is required.'; return; }
+  if (byId('operation').value === 'as_discovery' && byId('target').selectedOptions[0]?.dataset.role !== 'as') { byId('summary').textContent = 'Choose an AS target for discovery; RS discovery is not tested.'; return; }
   byId('probe').disabled = true;
   try {
-    const response = await fetch('/api/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', credentials: 'omit', body: JSON.stringify({ target_id: Number(byId('target').value), consent: true }), signal: AbortSignal.timeout(10000) });
+    const response = await fetch('/api/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', credentials: 'omit', body: JSON.stringify({ target_id: Number(byId('target').value), consent: true, operation: byId('operation').value }), signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error(response.status === 429 ? 'Global cooldown: wait 60 seconds before retrying.' : 'Probe inconclusive or unavailable. No protocol verdict; check target configuration, public DNS, TLS, deadline and size limits.');
-    renderReport(await response.json());
-  } catch (error) { byId('summary').textContent = error.name === 'TimeoutError' ? 'Probe timed out; result inconclusive.' : error.message; }
+    const report = await response.json();
+    if (generation === reportGeneration) renderReport(report);
+  } catch (error) { if (generation === reportGeneration) byId('summary').textContent = error.name === 'TimeoutError' ? 'Probe timed out; result inconclusive.' : error.message; }
   finally { byId('probe').disabled = false; byId('consent').checked = false; }
 });
 loadTargets();
 byId('fixture').addEventListener('click', () => { clearReport(); byId('kind').value = 'continue_request'; updateKind(); byId('body').value = '{"client":"must-not-be-repeated"}'; byId('headers').value = ''; byId('digest').value = ''; });
-byId('clear').addEventListener('click', () => { clearReport(); for (const id of ['body', 'headers', 'digest', 'rs-context']) byId(id).value = ''; });
+byId('discovery-fixture').addEventListener('click', () => { clearReport(); byId('kind').value = 'as_discovery'; updateKind(); byId('body').value = '{"grant_request_endpoint":"https://test-as.example/gnap","key_proofs_supported":["httpsig"],"key_rotation_supported":false}'; byId('headers').value = '[["Content-Type","application/json"]]'; byId('queried-endpoint').value = 'https://test-as.example/gnap'; byId('http-status').value = '200'; byId('digest').value = ''; });
+byId('clear').addEventListener('click', () => { clearReport(); for (const id of ['body', 'headers', 'digest', 'rs-context', 'queried-endpoint', 'http-status']) byId(id).value = ''; byId('consent').checked = false; });
 byId('download').addEventListener('click', () => {
   if (!currentReport) return;
   const url = URL.createObjectURL(new Blob([JSON.stringify(currentReport, null, 2)], { type: 'application/json' }));

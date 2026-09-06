@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
+pub mod discovery;
 pub mod probe;
 mod rs_import;
 pub use rs_import::{Binding as TokenBinding, Context as RsContext};
@@ -27,6 +28,7 @@ pub enum MessageKind {
     GrantRequest,
     GrantResponse,
     ContinueRequest,
+    AsDiscovery,
     RsDiscovery,
     IntrospectionRequest,
     IntrospectionResponse,
@@ -44,7 +46,11 @@ pub struct Import {
     pub body: String,
     pub headers: Option<Vec<(String, String)>>,
     pub content_digest: Option<String>,
+    /// Caller-declared comparison context for the RFC 9767 kinds only.
     pub rs_context: Option<RsContext>,
+    /// Captured discovery context only. This value is never fetched.
+    pub queried_endpoint: Option<String>,
+    pub http_status: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -117,6 +123,13 @@ fn check(
         "known-error-code" => "Compare the code with the current IANA GNAP Error Codes registry; this build's vendored snapshot may lag a new registration.",
         "error-response-json" => "Return application/json and a GNAP error field for rejected grant requests. Check reverse-proxy errors separately from AS errors.",
         "protected-resource-rejects-unauthenticated" => "Verify that this exact endpoint is intended to require authentication. If it is, reject credential-free access. A public resource is not an appropriate target for this policy test.",
+        "discovery-http-200" => "Configure the grant endpoint to answer OPTIONS successfully without credentials. HTTP 200 is this diagnostic profile's expectation, not an explicit status-code MUST in RFC 9635 section 9. Redirects are not followed.",
+        "discovery-media-type" => "Return exactly one Content-Type field with media type application/json. Check OPTIONS routing, authentication middleware and reverse-proxy error pages.",
+        "discovery-json-object" => "Return one JSON object, not an array, scalar, HTML page or malformed JSON.",
+        "discovery-endpoint" => "Provide a string grant_request_endpoint: an absolute HTTPS URL with a host and no fragment. Local HTTP development is not a normative exception.",
+        "discovery-endpoint-match" => "Advertise the exact URL queried by the client, including path and query. Do not normalize or substitute another endpoint.",
+        "discovery-key-rotation-type" => "When supplied, key_rotation_supported must be a JSON boolean, not a string or null. Omission means unsupported.",
+        "discovery-duplicate-members" => "Use unique top-level JSON member names. Ambiguous duplicate fields are rejected by this diagnostic profile; RFC 8259 recommends unique names.",
         _ => "Inspect the linked RFC section and the named SDK validation rule. No raw submitted values are included in this report.",
     });
     Check {
@@ -168,9 +181,42 @@ pub fn analyze(input: Import) -> Result<Report, &'static str> {
     {
         return Err("Content-Digest exceeds 4096 bytes.");
     }
+    if input
+        .queried_endpoint
+        .as_ref()
+        .is_some_and(|url| url.len() > 4096)
+        || input
+            .http_status
+            .is_some_and(|status| !(100..=599).contains(&status))
+    {
+        return Err(
+            "Discovery context requires an endpoint <=4096 bytes and HTTP status 100..599.",
+        );
+    }
+    if !matches!(input.kind, MessageKind::AsDiscovery)
+        && (input.queried_endpoint.is_some() || input.http_status.is_some())
+    {
+        return Err("queried_endpoint and http_status are only supported for kind as_discovery.");
+    }
     let mut checks = Vec::new();
     rs_import::validate_context(&input)?;
     match input.kind {
+        MessageKind::AsDiscovery => {
+            return Ok(Report {
+                schema_version: 1,
+                profile: "gnap-as-discovery-diagnostics-v1",
+                kind: input.kind,
+                certification: false,
+                independence: discovery::INDEPENDENCE,
+                observation: observation("import"),
+                checks: discovery::checks(
+                    input.body.as_bytes(),
+                    input.headers.as_deref(),
+                    input.http_status,
+                    input.queried_endpoint.as_deref(),
+                ),
+            });
+        }
         MessageKind::RsDiscovery
         | MessageKind::IntrospectionRequest
         | MessageKind::IntrospectionResponse
@@ -267,7 +313,7 @@ pub fn app_with_probes(probes: probe::Probes) -> Router {
         .route("/health", get(|| async { "ok" }))
         .route("/api/analyze", post(import_handler))
         .route("/api/targets", get(probe::targets))
-        .route("/api/probe", post(probe::run))
+        .route("/api/probe", post(probe::handler))
         .with_state(probes)
         .layer(DefaultBodyLimit::max(MAX_UPLOAD))
         .layer(middleware::from_fn(move |request: Request, next: Next| {
@@ -314,7 +360,7 @@ async fn import_handler(headers: axum::http::HeaderMap, body: Bytes) -> Response
             .into_response();
     }
     let Ok(input) = serde_json::from_slice::<Import>(&body) else {
-        return (StatusCode::BAD_REQUEST, "Invalid import envelope. Expected kind, body string, optional headers array, content_digest string and kind-specific rs_context object.").into_response();
+        return (StatusCode::BAD_REQUEST, "Invalid import envelope. Expected kind and body string, with optional headers array and content_digest string. Use queried_endpoint and http_status for as_discovery, or an applicable rs_context object for RFC 9767 messages.").into_response();
     };
     match analyze(input) {
         Ok(report) => Json(report).into_response(),
@@ -338,6 +384,8 @@ mod tests {
             headers: None,
             content_digest: None,
             rs_context: None,
+            queried_endpoint: None,
+            http_status: None,
         }
     }
     fn status(report: &Report, id: &str) -> Status {
