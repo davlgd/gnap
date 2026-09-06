@@ -98,7 +98,7 @@ impl Allowed {
 /// Holds only what the transitions need. Everything else — the requested
 /// access, the client's key, the tokens issued — lives outside: §1.5 leaves the
 /// means of managing state to the implementation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
     state: State,
     /// Whether the last response offered a continuation (§5).

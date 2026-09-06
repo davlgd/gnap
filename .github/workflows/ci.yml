@@ -65,6 +65,10 @@ jobs:
         # The transcript is the example's real output, and the sections listed
         # as unimplemented are the ones actually excluded.
         run: python3 tools/check_readme.py
+      - name: Normative source inventory and evidence accounting
+        run: |
+          python3 -B tools/conformance_ledger.py check
+          python3 -B tools/conformance_ledger.py run-tests
 
   msrv:
     name: Minimum supported Rust version
