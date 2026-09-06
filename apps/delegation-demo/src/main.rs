@@ -39,6 +39,7 @@ const FOLDER_READ: &str = "synthetic-folder:read";
 const ARCHIVE_READ: &str = "synthetic-archive:read";
 mod derivation;
 mod introspection;
+mod multiple;
 mod resource_registration;
 #[derive(Default)]
 struct ConsentRegistry {
@@ -48,7 +49,7 @@ struct ConsentRegistry {
 struct Consent {
     request: GrantRequest,
     interaction_reference: String,
-    allowed: bool,
+    allowed: multiple::Choice,
 }
 type Decisions = Arc<Mutex<ConsentRegistry>>;
 type As = AuthorizationServer<ConsentPolicy, KnownKeys, Arc<IndexedStorage>, OsNonces>;
@@ -341,15 +342,22 @@ fn requested_rights(
     request: &GrantRequest,
     resources: &gnap_as::MemoryResourceSetStore,
 ) -> Option<Vec<AccessItem>> {
-    use gnap_as::ResourceSetStore;
     if request.client.as_reference() == Some(introspection::RS_ID) {
         return None;
     }
-    let tokens = &request.access_token.as_ref()?.tokens;
-    if tokens.len() != 1 {
+    let tokens = request.access_token.as_ref()?;
+    if tokens.cardinality != gnap_types::token::Cardinality::Single || tokens.tokens.len() != 1 {
         return None;
     }
-    let rights = &tokens[0].access;
+    resolve_rights(&tokens.tokens[0].access, resources)
+}
+/// Resolves one token's requested rights to the leaves this AS understands:
+/// known leaves as they are, registered references to their leaves.
+fn resolve_rights(
+    rights: &[AccessItem],
+    resources: &gnap_as::MemoryResourceSetStore,
+) -> Option<Vec<AccessItem>> {
+    use gnap_as::ResourceSetStore;
     if rights.is_empty() || rights.len() > 2 || (rights.len() == 2 && rights[0] == rights[1]) {
         return None;
     }
@@ -386,49 +394,38 @@ impl Policy for ConsentPolicy {
         true
     }
     fn evaluate(&self, request: &GrantRequest) -> Decision {
-        if requested_rights(request, &self.1).is_some() {
+        if multiple::requested_slots(request, &self.1).is_some() {
             Decision::RequireInteraction
         } else {
             Decision::Deny(gnap_registry::ErrorCode::RequestDenied)
         }
     }
     fn evaluate_context(&self, request: &GrantRequest, context: EvaluationContext<'_>) -> Decision {
-        let Some(rights) = requested_rights(request, &self.1) else {
+        let (Some(slots), Some(shape)) = (
+            multiple::requested_slots(request, &self.1),
+            request
+                .access_token
+                .as_ref()
+                .map(|tokens| tokens.cardinality),
+        ) else {
             return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
         };
         match context {
             EvaluationContext::Initial => Decision::RequireInteraction,
+            // Within what is live for the same label: approved directly, as one
+            // replacement lot. Anything else goes back to the resource owner.
             EvaluationContext::Modification(snapshot) => {
-                let time = now();
-                let live_rights: Vec<_> = snapshot
-                    .aggregate
-                    .tokens
-                    .values()
-                    .filter(|t| t.is_valid_at(time))
-                    .flat_map(|t| t.token.access.iter().flatten())
-                    .collect();
-                if rights.iter().all(|r| live_rights.contains(&r)) {
-                    Decision::Approve {
-                        access: rights,
-                        subject: None,
-                    }
-                } else {
-                    Decision::RequireInteraction
-                }
+                multiple::modification(shape, &slots, snapshot)
             }
             EvaluationContext::AfterInteraction(snapshot) => {
                 let choices = self.0.lock().unwrap();
                 match choices.grants.get(&snapshot.id) {
                     Some(choice)
-                        if choice.allowed
-                            && choice.request == *request
+                        if choice.request == *request
                             && snapshot.aggregate.record.interact_ref.as_deref()
                                 == Some(&choice.interaction_reference) =>
                     {
-                        Decision::Approve {
-                            access: rights,
-                            subject: None,
-                        }
+                        multiple::decision(shape, &slots, &choice.allowed)
                     }
                     _ => Decision::Deny(gnap_registry::ErrorCode::UserDenied),
                 }
@@ -480,7 +477,10 @@ impl HttpTransport for Network {
                 || url.path().starts_with("/token/")
                 || matches!(
                     url.path(),
-                    "/resource/folder" | "/resource/archive" | derivation::RS1_PATH
+                    "/resource/folder"
+                        | "/resource/archive"
+                        | derivation::RS1_PATH
+                        | multiple::REPORTS_PATH
                 ));
         if !allowed {
             return Err("Network transport refused an endpoint outside this demo's fixed origin/path allow-list".into());
@@ -530,9 +530,11 @@ struct App {
     admission: Arc<tokio::sync::Semaphore>,
     resource_admission: Arc<tokio::sync::Semaphore>,
     metadata_admission: Arc<tokio::sync::Semaphore>,
+    reports_admission: Arc<tokio::sync::Semaphore>,
     rs_registration: Arc<introspection::Registration>,
     resource_client: Arc<introspection::ResourceClient>,
     metadata_client: Arc<introspection::ResourceClient>,
+    reports_client: Arc<introspection::ResourceClient>,
     bootstrap: resource_registration::Bootstrap,
 }
 struct Command {
@@ -548,19 +550,24 @@ struct BrowserSession<'a> {
     operations: usize,
     state: &'static str,
     events: Vec<String>,
-    retired_token: Option<gnap_types::token::TokenValue>,
+    /// The token retired last, with the label it was managed under.
+    retired: Option<multiple::Retired>,
     folder: Option<Value>,
     next_continuation: u64,
     continuation_open: bool,
     requested_rights: Vec<AccessItem>,
+    /// What the current request asks for, slot by slot, as consent shows it.
+    requested: Vec<multiple::Slot>,
     last_resource_status: Option<u16>,
+    /// The flow this session started; actions select tokens by label in a lot.
+    mode: multiple::Mode,
 }
 
 impl BrowserSession<'_> {
     fn received(
         &mut self,
         step: &gnap_client::Step,
-        before: Option<TokenValue>,
+        before: Option<multiple::Retired>,
     ) -> Result<(), String> {
         let response = step.response();
         self.continuation_open = response.r#continue.is_some();
@@ -582,13 +589,17 @@ impl BrowserSession<'_> {
             self.state = "approved";
         }
         if response.access_token.is_some() {
-            self.retired_token = before;
+            // A replacement lot retires the primary token under its own label,
+            // or nothing when the previous lot had no such token.
+            self.retired = before;
             self.folder = None;
         }
         Ok(())
     }
 }
 
+/// The single-flow shorthand the existing tests use: everything or nothing.
+#[cfg(test)]
 fn consent_finish(
     server: &As,
     storage: &IndexedStorage,
@@ -597,6 +608,25 @@ fn consent_finish(
     grant: GrantId,
     handle: &str,
     allowed: bool,
+) -> Result<String, String> {
+    let choice = if allowed {
+        multiple::Choice::All
+    } else {
+        multiple::Choice::Denied
+    };
+    consent_finish_choice(server, storage, decisions, client, grant, handle, choice)
+}
+
+/// Records the resource owner's choice for a pending grant: everything, a
+/// named part of a lot, or nothing.
+fn consent_finish_choice(
+    server: &As,
+    storage: &IndexedStorage,
+    decisions: &Decisions,
+    client: &str,
+    grant: GrantId,
+    handle: &str,
+    allowed: multiple::Choice,
 ) -> Result<String, String> {
     let snapshot = storage
         .lookup(GrantSelector::Interaction(handle))
@@ -637,7 +667,7 @@ fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
         .flatten()
         .flat_map(|t| t.access.iter().flatten())
         .collect();
-    json!({"state":session.state, "events":session.events, "rights":rights, "requested_rights":session.requested_rights, "token_present":tokens.is_some(), "resource_available":true, "retired_token_present":session.retired_token.is_some(), "folder":session.folder, "last_resource_status":session.last_resource_status, "interaction_uri":format!("{origin}/interact/{}",session.handle), "continuation_open":session.continuation_open, "continuation_wait_seconds":session.next_continuation.saturating_sub(now())})
+    json!({"state":session.state, "mode":session.mode.name(), "events":session.events, "rights":rights, "tokens":multiple::view(tokens.as_ref()), "requested_rights":session.requested_rights, "requested_tokens":multiple::slots_view(&session.requested), "token_present":tokens.is_some(), "resource_available":true, "retired_token_present":session.retired.is_some(), "retired_token_label":session.retired.as_ref().and_then(|retired| retired.label.clone()), "folder":session.folder, "last_resource_status":session.last_resource_status, "interaction_uri":format!("{origin}/interact/{}",session.handle), "continuation_open":session.continuation_open, "continuation_wait_seconds":session.next_continuation.saturating_sub(now())})
 }
 
 fn client_worker(
@@ -675,7 +705,7 @@ fn client_worker(
             Err(_) => break,
         };
         let result = (|| -> Result<Value, String> {
-            if command.action == "start" {
+            if multiple::is_start(&command.action) {
                 // The HTTP front door creates a fresh identity for every start.
                 // Reject an internal duplicate before changing consent or AS state.
                 if sessions.contains_key(&command.session) {
@@ -692,9 +722,18 @@ fn client_worker(
                 let mut client =
                     Session::new(&transport, signer.as_ref(), format!("{origin}/gnap"))
                         .supporting(&["redirect"]);
+                let mode = if command.action == "start-multiple" {
+                    multiple::Mode::Multiple
+                } else {
+                    multiple::Mode::Single
+                };
+                let access_token = match mode {
+                    multiple::Mode::Single => json!({"access": [&references.both]}),
+                    multiple::Mode::Multiple => multiple::lot(&references, true),
+                };
                 let grant: GrantRequest = serde_json::from_value(json!({
                     "client": command.session,
-                    "access_token": {"access": [&references.both]},
+                    "access_token": access_token,
                     "interact": {"start": ["redirect"], "finish": {"method":"redirect", "uri":format!("{origin}/callback"), "nonce":fresh_nonce().map_err(|e| e.to_string())?}}
                 })).map_err(|e| e.to_string())?;
                 let step = client.start(&grant, now()).map_err(|e| e.to_string())?;
@@ -726,11 +765,15 @@ fn client_worker(
                         events: vec![
                             "Signed POST /gnap over HTTP: AS requests explicit consent.".into()
                         ],
-                        retired_token: None,
+                        retired: None,
                         folder: None,
                         continuation_open: true,
-                        requested_rights: resource_registration::leaves(true),
+                        requested_rights: multiple::requested_leaves(&multiple::requested(
+                            mode, true,
+                        )),
+                        requested: multiple::requested(mode, true),
                         last_resource_status: None,
+                        mode,
                         next_continuation: now()
                             + step
                                 .response()
@@ -744,25 +787,41 @@ fn client_worker(
             let session = sessions
                 .get_mut(&command.session)
                 .ok_or("Session missing or expired; start again")?;
-            if command.action != "status" && command.action != "start" {
+            if command.action != "status" && !multiple::is_start(&command.action) {
                 session.operations += 1;
                 if session.operations > 40 {
                     return Err("Demo limit: 40 actions per session".into());
                 }
             }
             match command.action.as_str() {
-                "approve" | "deny" => {
+                "approve" | "deny" | "approve-reports" => {
                     if session.state != "pending" {
                         return Err("Consent already completed".into());
                     }
-                    let uri = consent_finish(
+                    let choice = multiple::Choice::from_action(&command.action)
+                        .ok_or("Unknown consent choice")?;
+                    if command.action == "approve-reports" {
+                        // Checked before the interaction is completed, so a
+                        // refusal here consumes nothing.
+                        if session.mode != multiple::Mode::Multiple {
+                            return Err("A partial approval needs a two-token request; this grant asked for one token".into());
+                        }
+                        if !session
+                            .requested
+                            .iter()
+                            .any(|slot| slot.label.as_deref() == Some(multiple::REPORTS))
+                        {
+                            return Err("The current request does not ask for a reports token; approve or deny it as a whole".into());
+                        }
+                    }
+                    let uri = consent_finish_choice(
                         &server,
                         &storage,
                         &decisions,
                         &command.session,
                         session.grant_id,
                         &session.handle,
-                        command.action == "approve",
+                        choice,
                     )?;
                     session.events.push(format!(
                         "Resource owner explicitly chose {}. AS returns a bound callback.",
@@ -785,10 +844,8 @@ fn client_worker(
                     session.events.push("Client validated the interaction callback hash; continuation is now available.".into());
                 }
                 "continue" => {
-                    let before = session
-                        .client
-                        .usable_tokens(now())
-                        .and_then(|t| t.first().map(|t| t.value.clone()));
+                    let before =
+                        multiple::primary(session.client.usable_tokens(now()), session.mode);
                     let step = match session.client.continue_grant(now()) {
                         Ok(s) => s,
                         Err(e) => {
@@ -813,16 +870,17 @@ fn client_worker(
                         return Err("An open approved grant is required for this change".into());
                     }
                     let both = command.action == "expand";
-                    let rights = vec![if both {
-                        &references.both
-                    } else {
-                        &references.folder
-                    }];
-                    let changes: ContinueRequest = serde_json::from_value(json!({"access_token":{"access":rights}, "interact":{"start":["redirect"],"finish":{"method":"redirect","uri":format!("{origin}/callback"),"nonce":fresh_nonce().map_err(|_| "Interaction randomness unavailable")?}}})).map_err(|_| "Modification encoding failed")?;
-                    let before = session
-                        .client
-                        .usable_tokens(now())
-                        .and_then(|t| t.first().map(|t| t.value.clone()));
+                    let access_token = match session.mode {
+                        multiple::Mode::Single => json!({"access": [if both {
+                            &references.both
+                        } else {
+                            &references.folder
+                        }]}),
+                        multiple::Mode::Multiple => multiple::lot(&references, both),
+                    };
+                    let changes: ContinueRequest = serde_json::from_value(json!({"access_token":access_token, "interact":{"start":["redirect"],"finish":{"method":"redirect","uri":format!("{origin}/callback"),"nonce":fresh_nonce().map_err(|_| "Interaction randomness unavailable")?}}})).map_err(|_| "Modification encoding failed")?;
+                    let before =
+                        multiple::primary(session.client.usable_tokens(now()), session.mode);
                     let step = session
                         .client
                         .modify_grant(&changes, now())
@@ -832,77 +890,103 @@ fn client_worker(
                             "AS refused this modification; existing rights are unchanged".into(),
                         );
                     }
-                    session.requested_rights = resource_registration::leaves(both);
+                    session.requested = multiple::requested(session.mode, both);
+                    session.requested_rights = multiple::requested_leaves(&session.requested);
                     session.received(&step, before)?;
                     session.events.push(if session.state == "pending" { "Signed PATCH requested additional rights. A new interaction is required; previous tokens remain live while consent is pending." } else { "Signed PATCH reduced access to a subset of live approved rights. New tokens replaced the entire previous set without another consent prompt." }.into());
                 }
-                "rotate" => {
-                    let before = session
-                        .client
-                        .usable_tokens(now())
-                        .and_then(|t| t.first().map(|t| t.value.clone()))
-                        .ok_or("No token to rotate")?;
+                "rotate" | "rotate-reports" => {
+                    let purpose = if command.action == "rotate-reports" {
+                        multiple::REPORTS
+                    } else {
+                        multiple::DOCUMENTS
+                    };
+                    let held = session.client.usable_tokens(now()).unwrap_or_default();
+                    let before = multiple::held(&held, session.mode, purpose)?.value.clone();
+                    let label = multiple::label_for(session.mode, purpose);
                     let token = session
                         .client
-                        .rotate_token(None, now())
+                        .rotate_token(label, now())
                         .map_err(|e| e.to_string())?;
                     if token.value == before {
                         return Err("Rotation did not replace token value".into());
                     }
-                    session.retired_token = Some(before);
+                    session.retired = Some(multiple::Retired {
+                        value: before,
+                        label: label.map(str::to_owned),
+                    });
                     session.folder = None;
-                    session.events.push("Signed management POST over HTTP: access and management token values rotated.".into());
+                    session.events.push(match label {
+                        Some(label) => format!("Signed management POST over HTTP: the {label} token's access and management values rotated; its sibling is untouched."),
+                        None => "Signed management POST over HTTP: access and management token values rotated.".into(),
+                    });
                 }
-                "revoke" => {
-                    let retiring = session
-                        .client
-                        .usable_tokens(now())
-                        .and_then(|t| t.first().map(|t| t.value.clone()));
+                "revoke" | "revoke-reports" => {
+                    let purpose = if command.action == "revoke-reports" {
+                        multiple::REPORTS
+                    } else {
+                        multiple::DOCUMENTS
+                    };
+                    let held = session.client.usable_tokens(now()).unwrap_or_default();
+                    let retiring = multiple::held(&held, session.mode, purpose)?.value.clone();
+                    let label = multiple::label_for(session.mode, purpose);
                     session
                         .client
-                        .revoke_token(None, now())
+                        .revoke_token(label, now())
                         .map_err(|e| e.to_string())?;
-                    session.retired_token = retiring;
-                    if !matches!(session.state, "pending" | "awaiting_callback" | "ready") {
+                    session.retired = Some(multiple::Retired {
+                        value: retiring,
+                        label: label.map(str::to_owned),
+                    });
+                    if !matches!(session.state, "pending" | "awaiting_callback" | "ready")
+                        && session.client.usable_tokens(now()).is_none()
+                    {
                         session.state = "revoked";
                     }
                     session.folder = None;
-                    session.events.push(
-                        "Signed management DELETE over HTTP: AS confirmed revocation (204).".into(),
-                    );
+                    session.events.push(match label {
+                        Some(label) => format!("Signed management DELETE over HTTP: AS confirmed revocation of the {label} token (204); its sibling keeps its own lifecycle."),
+                        None => "Signed management DELETE over HTTP: AS confirmed revocation (204).".into(),
+                    });
                 }
                 "revoke-grant" => {
-                    let retiring = session
-                        .client
-                        .usable_tokens(now())
-                        .and_then(|t| t.first().map(|t| t.value.clone()));
+                    let retiring =
+                        multiple::primary(session.client.usable_tokens(now()), session.mode);
                     session
                         .client
                         .revoke_grant(now())
                         .map_err(|_| "Grant revocation refused or AS unavailable")?;
-                    session.retired_token = retiring;
+                    session.retired = retiring;
                     session.continuation_open = false;
                     session.state = "grant_revoked";
                     session.folder = None;
                     session.events.push("Signed DELETE on continuation revoked the grant and all its tokens atomically (204).".into());
                 }
-                "read" | "read-archive" | "read-metadata" | "check-retired" => {
-                    let token = if command.action != "check-retired" {
-                        session
-                            .client
-                            .usable_tokens(now())
-                            .and_then(|t| t.first().map(|t| t.value.clone()))
-                            .ok_or("No usable resource token")?
+                "read" | "read-archive" | "read-metadata" | "read-reports" | "check-retired" => {
+                    let retired = session.retired.clone();
+                    let purpose = if command.action == "read-reports"
+                        || (command.action == "check-retired"
+                            && retired.as_ref().is_some_and(|retired| {
+                                retired.label.as_deref() == Some(multiple::REPORTS)
+                            })) {
+                        multiple::REPORTS
                     } else {
-                        session
-                            .retired_token
-                            .clone()
+                        multiple::DOCUMENTS
+                    };
+                    let token = if command.action == "check-retired" {
+                        retired
+                            .map(|retired| retired.value)
                             .ok_or("Rotate or revoke a token first")?
+                    } else {
+                        let held = session.client.usable_tokens(now()).unwrap_or_default();
+                        multiple::held(&held, session.mode, purpose)?.value.clone()
                     };
                     let path = if command.action == "read-metadata" {
                         derivation::RS1_PATH
                     } else if command.action == "read-archive" {
                         "/resource/archive"
+                    } else if purpose == multiple::REPORTS {
+                        multiple::REPORTS_PATH
                     } else {
                         "/resource/folder"
                     };
@@ -925,7 +1009,7 @@ fn client_worker(
                                 response.status
                             ));
                         }
-                        session.events.push("A fresh valid signature with the retired token was rejected by the RS (401).".into());
+                        session.events.push(format!("A fresh valid signature with the retired {} token was rejected at {path} (401).", session.retired.as_ref().and_then(|retired| retired.label.as_deref()).unwrap_or("access")));
                     } else {
                         if !matches!(response.status, 200 | 401) {
                             return Err(format!(
@@ -943,7 +1027,8 @@ fn client_worker(
                         });
                     }
                 }
-                "start" | "status" => {}
+                "status" => {}
+                action if multiple::is_start(action) => {}
                 action if action.starts_with("interaction:") => {
                     if action[12..] != session.handle || session.state != "pending" {
                         return Err("Unknown interaction for this browser session".into());
@@ -953,7 +1038,9 @@ fn client_worker(
             }
             Ok(browser_view(session, &origin))
         })();
-        if result.is_err() && command.action == "start" && !sessions.contains_key(&command.session)
+        if result.is_err()
+            && multiple::is_start(&command.action)
+            && !sessions.contains_key(&command.session)
         {
             decisions.lock().unwrap().clients.remove(&command.session);
         }
@@ -1032,6 +1119,18 @@ fn read_resource_with_clock(
         )?;
         return Ok(json!({"source":"synthetic-archive","document_count":1}));
     }
+    if request.url == format!("{}{}", app.origin, multiple::REPORTS_PATH) && request.method == "GET"
+    {
+        app.reports_client.authorize_profile(
+            request,
+            multiple::REPORTS_READ,
+            introspection::Profile::Reports,
+            clock,
+        )?;
+        return Ok(
+            json!({"reports":"synthetic-quarterly-summary","entries":[{"period":"Q1","status":"synthetic"}],"granted_right":multiple::REPORTS_READ,"decision_source":"authenticated AS introspection by the reports RS and local client proof"}),
+        );
+    }
     let right = match request.url.strip_prefix(&app.origin) {
         Some("/resource/folder") if request.method == "GET" => FOLDER_READ,
         Some("/resource/archive") if request.method == "GET" => ARCHIVE_READ,
@@ -1051,6 +1150,8 @@ async fn resource(
 ) -> Response {
     let admission = if uri.path() == derivation::RS2_PATH {
         &app.metadata_admission
+    } else if uri.path() == multiple::REPORTS_PATH {
+        &app.reports_admission
     } else {
         &app.resource_admission
     };
@@ -1127,12 +1228,17 @@ async fn action(
         "read-archive",
         "read-metadata",
         "revoke-grant",
+        "start-multiple",
+        "approve-reports",
+        "read-reports",
+        "rotate-reports",
+        "revoke-reports",
     ]
     .contains(&action)
     {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let session = if action == "start" {
+    let session = if multiple::is_start(action) {
         if !matches!(app.bootstrap.get(), Some(Ok(_))) {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -1158,7 +1264,7 @@ async fn action(
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({"error":e}))).into_response(),
     };
-    if action == "start" && response.status().is_success() {
+    if multiple::is_start(action) && response.status().is_success() {
         let secure = if app.origin.starts_with("https:") {
             "; Secure"
         } else {
@@ -1321,6 +1427,10 @@ async fn main() {
         Ps256Signer::generate(2048, "delegation-demo-metadata-rs")
             .expect("OS randomness and RSA generation"),
     );
+    let reports_signer = Arc::new(
+        Ps256Signer::generate(2048, "delegation-demo-reports-rs")
+            .expect("OS randomness and RSA generation"),
+    );
     let decisions: Decisions = Arc::default();
     let storage = Arc::new(IndexedStorage::default());
     let resources = resource_registration::store();
@@ -1353,6 +1463,7 @@ async fn main() {
     let rs_registration = Arc::new(introspection::Registration {
         key: introspection::public_key(&rs_signer),
         metadata_key: introspection::public_key(&metadata_signer),
+        reports_key: introspection::public_key(&reports_signer),
         client_key: introspection::public_key(&signer),
         decisions: decisions.clone(),
         nonces: MemoryStorage::default(),
@@ -1375,6 +1486,14 @@ async fn main() {
         }),
         nonces: MemoryStorage::default(),
     });
+    let reports_client = Arc::new(introspection::ResourceClient {
+        origin: origin.clone(),
+        signer: reports_signer,
+        transport: Arc::new(introspection::Http {
+            origin: origin.clone(),
+        }),
+        nonces: MemoryStorage::default(),
+    });
     let app = App {
         origin: origin.clone(),
         server: server.clone(),
@@ -1388,9 +1507,11 @@ async fn main() {
         admission: Arc::new(tokio::sync::Semaphore::new(16)),
         resource_admission: Arc::new(tokio::sync::Semaphore::new(4)),
         metadata_admission: Arc::new(tokio::sync::Semaphore::new(4)),
+        reports_admission: Arc::new(tokio::sync::Semaphore::new(4)),
         rs_registration,
         resource_client,
         metadata_client,
+        reports_client,
         bootstrap: Arc::default(),
     };
     let worker_storage = storage.clone();
@@ -1459,6 +1580,7 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/resource/archive", get(resource))
         .route(derivation::RS1_PATH, get(resource))
         .route(derivation::RS2_PATH, get(resource))
+        .route(multiple::REPORTS_PATH, get(resource))
         .route("/continue/{handle}", axum::routing::any(protocol))
         .route("/token/{handle}", axum::routing::any(protocol))
         .route("/app.js", get(|| async { ([("content-type", "text/javascript")], include_str!("../static/app.js")) }))
@@ -1842,6 +1964,7 @@ mod tests {
         let signer = Arc::new(Ps256Signer::generate(2048, "test-client").unwrap());
         let rs_signer = Arc::new(Ps256Signer::generate(2048, "test-rs").unwrap());
         let metadata_signer = Arc::new(Ps256Signer::generate(2048, "test-metadata-rs").unwrap());
+        let reports_signer = Arc::new(Ps256Signer::generate(2048, "test-reports-rs").unwrap());
         let storage = Arc::new(IndexedStorage::default());
         let resources = resource_registration::store();
         let bootstrap = Arc::new(std::sync::OnceLock::new());
@@ -1881,6 +2004,7 @@ mod tests {
         let rs_registration = Arc::new(introspection::Registration {
             key: introspection::public_key(&rs_signer),
             metadata_key: introspection::public_key(&metadata_signer),
+            reports_key: introspection::public_key(&reports_signer),
             client_key: introspection::public_key(&signer),
             decisions: decisions.clone(),
             nonces: MemoryStorage::default(),
@@ -1906,6 +2030,14 @@ mod tests {
             }),
             nonces: MemoryStorage::default(),
         });
+        let reports_client = Arc::new(introspection::ResourceClient {
+            origin: origin.into(),
+            signer: reports_signer,
+            transport: Arc::new(introspection::Http {
+                origin: origin.into(),
+            }),
+            nonces: MemoryStorage::default(),
+        });
         App {
             origin: origin.into(),
             server,
@@ -1917,9 +2049,11 @@ mod tests {
             admission: Arc::new(tokio::sync::Semaphore::new(2)),
             resource_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             metadata_admission: Arc::new(tokio::sync::Semaphore::new(2)),
+            reports_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             rs_registration,
             resource_client,
             metadata_client,
+            reports_client,
             bootstrap,
         }
     }
@@ -2367,6 +2501,8 @@ mod tests {
 mod derivation_tests;
 #[cfg(test)]
 mod introspection_tests;
+#[cfg(test)]
+mod multiple_tests;
 #[cfg(test)]
 mod ongoing_tests;
 #[cfg(test)]

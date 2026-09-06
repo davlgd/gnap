@@ -209,7 +209,7 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
                 (
                     consent.request.clone(),
                     consent.interaction_reference.clone(),
-                    consent.allowed,
+                    consent.allowed.clone(),
                 ),
             )
         })

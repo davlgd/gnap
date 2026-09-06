@@ -16,12 +16,15 @@ use gnap_types::{
 pub(super) const RS_ID: &str = "delegation-demo-rs";
 pub(super) const RS2_ID: &str = "delegation-demo-metadata-rs";
 pub(super) const RS2_OWNER: &str = "demo-metadata-owner";
+pub(super) const RS3_ID: &str = "delegation-demo-reports-rs";
+pub(super) const RS3_OWNER: &str = "demo-reports-owner";
 const MAX_RESPONSE: usize = 8192;
 type Transport = dyn HttpTransport<Error = &'static str> + Send + Sync;
 
 pub(super) struct Registration {
     pub key: KeyObject,
     pub metadata_key: KeyObject,
+    pub reports_key: KeyObject,
     pub client_key: KeyObject,
     pub decisions: Decisions,
     pub nonces: MemoryStorage,
@@ -48,6 +51,10 @@ impl ResourceServerResolver for Registration {
             RS2_ID => Some(ResolvedResourceServer {
                 id: RsId(RS2_OWNER.into()),
                 key: self.metadata_key.clone(),
+            }),
+            RS3_ID => Some(ResolvedResourceServer {
+                id: RsId(RS3_OWNER.into()),
+                key: self.reports_key.clone(),
             }),
             _ => None,
         }
@@ -88,6 +95,33 @@ impl IntrospectionPolicy for Registration {
                 IntrospectionDecision::Active {
                     access: expected,
                     key: Some(self.key.clone()),
+                }
+            } else {
+                IntrospectionDecision::Inactive
+            };
+        }
+        if rs.as_reference() == Some(RS3_ID) {
+            // The reports RS knows one right. A token of the documents RS,
+            // whatever its label, is not active here; nor is a derived child.
+            let expected = vec![AccessItem::Reference(multiple::REPORTS_READ.into())];
+            let registered = self
+                .decisions
+                .lock()
+                .map(|registry| registry.clients.contains(&client_id(&token.client)))
+                .unwrap_or(false);
+            let accepted = token.derivation.is_none()
+                && registered
+                && token.token.access.as_ref() == Some(&expected)
+                && token
+                    .token
+                    .key
+                    .as_ref()
+                    .is_none_or(|key| key.as_value() == Some(&self.client_key))
+                && minimum.is_none_or(|rights| rights == expected);
+            return if accepted {
+                IntrospectionDecision::Active {
+                    access: expected,
+                    key: Some(self.client_key.clone()),
                 }
             } else {
                 IntrospectionDecision::Inactive
@@ -141,17 +175,19 @@ pub(super) struct ResourceClient {
 pub(super) enum Profile {
     Documents,
     Metadata,
+    Reports,
 }
 impl Profile {
     fn rs_id(self) -> &'static str {
         match self {
             Self::Documents => RS_ID,
             Self::Metadata => RS2_ID,
+            Self::Reports => RS3_ID,
         }
     }
     fn accepts_lifetime(self, duration: Option<u64>) -> bool {
         match self {
-            Self::Documents => duration == Some(1200),
+            Self::Documents | Self::Reports => duration == Some(1200),
             Self::Metadata => duration.is_some_and(|seconds| (1..=60).contains(&seconds)),
         }
     }
@@ -159,6 +195,7 @@ impl Profile {
         match self {
             Self::Documents => access.len() <= 2 && access.iter().all(|right| matches!(right, AccessItem::Reference(value) if matches!(value.as_str(), FOLDER_READ | ARCHIVE_READ))),
             Self::Metadata => access == [AccessItem::Reference(derivation::METADATA_READ.into())],
+            Self::Reports => access == [AccessItem::Reference(multiple::REPORTS_READ.into())],
         }
     }
 }
