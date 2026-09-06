@@ -211,7 +211,7 @@ fn two_token_scenario(app: App, origin: String) {
         "RS1 does not derive from a token that is not its own"
     );
     assert!(
-        derivation::issue(&app.resource_client, &reports.value).is_err(),
+        derivation::issue(&app.resource_client, &reports.value, now()).is_err(),
         "the AS refuses to derive from the reports token for RS1"
     );
     assert_eq!(
@@ -234,7 +234,7 @@ fn two_token_scenario(app: App, origin: String) {
     assert_eq!(status(multiple::REPORTS_PATH, &reports.value), 401);
     assert_eq!(status(multiple::REPORTS_PATH, &rotated.value), 200);
     assert_eq!(status("/resource/folder", &documents.value), 200);
-    let child = derivation::issue(&app.resource_client, &documents.value).unwrap();
+    let child = derivation::issue(&app.resource_client, &documents.value, now()).unwrap();
     assert!(stored(&app, &child.value));
     session
         .revoke_token(Some(multiple::REPORTS), now())

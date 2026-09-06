@@ -1131,7 +1131,7 @@ fn read_resource_with_clock(
     clock: impl Fn() -> u64,
 ) -> Result<Value, ResourceError> {
     if request.url == format!("{}{}", app.origin, derivation::RS1_PATH) && request.method == "GET" {
-        return derivation::read(&app.resource_client, request);
+        return derivation::read(&app.resource_client, request, clock);
     }
     if request.url == format!("{}{}", app.origin, derivation::RS2_PATH) && request.method == "GET" {
         app.metadata_client.authorize_profile(

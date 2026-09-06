@@ -14,7 +14,7 @@ steps, and key-bound requests and tokens as the default.
 > full grant between them — request, signature, interaction, callback,
 > continuation, token — with both roles implemented here, and the token it
 > issues can be rotated and revoked (§6). The application examples add a real
-> HTTP client/AS flow, a co-located protected resource, a separated Biscuit file
+> HTTP client/AS flow, a co-located protected resource, a separate Biscuit file
 > application, and a diagnostic workbench. The co-located resource server uses
 > authenticated HTTP introspection rather than reading the AS store. These are
 > experimental consumers, not a complete conformance suite or a complete
@@ -282,15 +282,22 @@ tokens through distinct RS roles over HTTP. The workbench can compare labels
 in a caller-declared request/response pair. These checks do not infer an audience
 from a label or establish interoperability with another implementation.
 
+Bound-key rotation (§6.1.1) is opt-in. The AS verifies the linked HTTP signatures
+of §7.3.1.1 and reserves both proof nonces atomically. The client supplies public
+PS256 JWKs by value and keeps the current signer for resource access. The Biscuit
+application exercises two successive key changes across separate local
+processes, including rejection of previous-key proofs and retired tokens.
+Initially explicit token bindings and derived-token rebinding remain outside
+the client flow; see the [support matrix](docs/support-matrix.md) for the exact
+boundary. These tests do not establish hosted or independent-vendor interoperability.
+
 These parts of the specification are **not** implemented, and nothing here
 should be read as covering them:
 
 | Section | What is missing |
 |---|---|
 | §3.5 | Dynamically issuing a client instance identifier |
-| §6.1.1 | Binding a **new key** while rotating a token; it needs the two simultaneous proofs of §7.3.1.1, and the AS answers `key_rotation_not_supported` as §6.1.1-M08 provides for |
 | §7.3.2–§7.3.4 | The `mtls`, `jwsd` and `jws` key proofing methods |
-| §7.3.1.1 | Key rotation, and with it the `gnap-rotate` signature tag |
 | §9.1 | Resource-server-first discovery |
 | RFC 9767 §§3.3–4 | Biscuit introspection and downstream profiles beyond the selected one-hop opaque flow |
 
@@ -299,8 +306,8 @@ polling. `app`, `user_code` and `user_code_uri` are modelled in `gnap-types` but
 no AS in this workspace starts them.
 
 The AS answers OPTIONS at its grant endpoint with the discovery document from
-§9. It announces only its implemented proof method and lack of bound-key
-rotation; deployment-dependent capability lists are omitted. Public discovery
+§9. It announces HTTP signatures and the configured bound-key rotation setting;
+other deployment-dependent capability lists are omitted. Public discovery
 requires HTTPS. Local HTTP loopback is an explicit development-only opt-in,
 labelled in the response; it is not a protocol exception. No client-side
 discovery helper is supplied yet.
@@ -419,7 +426,8 @@ the adapter's responsibility.
 | ✅ | `gnap-client` — the client instance role, §2 through §5 |
 | ✅ | `gnap-as` — the authorization server role, §2 through §5 |
 | ✅ | `gnap-as` and `gnap-client` — token management (§6): rotate and revoke |
-| ⬜ | Key rotation (§6.1.1, §7.3.1.1) and the remaining key proofing methods |
+| 🚧 | Bound-key rotation (§6.1.1, §7.3.1.1) through linked PS256 proofs; the selected client profile and remaining binding limits are described above |
+| ⬜ | The remaining key proofing methods (§7.3.2–§7.3.4) |
 | 🚧 | RFC 9767 — RS-facing discovery, opaque-token introspection, immutable resource registration and one-hop downstream delegation; broader profiles remain open |
 | 🚧 | HTTP application acceptance tests and bounded web diagnostics; full network conformance harness remains open |
 

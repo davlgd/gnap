@@ -186,7 +186,17 @@ pub async fn dispatch(
     let bytes =
         match tokio::time::timeout(Duration::from_secs(3), to_bytes(body, crate::MAX_BODY)).await {
             Ok(Ok(b)) => b,
-            _ => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+            Ok(Err(error)) => {
+                let oversized = std::error::Error::source(&error)
+                    .is_some_and(|source| source.is::<http_body_util::LengthLimitError>());
+                return if oversized {
+                    StatusCode::PAYLOAD_TOO_LARGE
+                } else {
+                    StatusCode::BAD_REQUEST
+                }
+                .into_response();
+            }
+            Err(_) => return StatusCode::REQUEST_TIMEOUT.into_response(),
         };
     let mut headers = Vec::new();
     for (name, value) in &parts.headers {

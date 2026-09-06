@@ -80,6 +80,7 @@ fn parent_value(request: &HttpRequest) -> Result<TokenValue, ResourceError> {
 pub(super) fn issue(
     client: &introspection::ResourceClient,
     parent: &TokenValue,
+    time: u64,
 ) -> Result<AccessToken, ResourceError> {
     let body = GrantRequest {
         client: Client::ByReference(introspection::RS_ID.into()),
@@ -103,7 +104,7 @@ pub(super) fn issue(
         .headers
         .push(("content-type".into(), "application/json".into()));
     request.body = Some(serde_json::to_vec(&body).map_err(|_| ResourceError::Unavailable)?);
-    let request = sign_request(request, client.signer.as_ref(), None, now())
+    let request = sign_request(request, client.signer.as_ref(), None, time)
         .map_err(|_| ResourceError::Unavailable)?;
     let response = client
         .transport
@@ -169,6 +170,7 @@ pub(super) fn issue(
 pub(super) fn revoke(
     client: &introspection::ResourceClient,
     token: &AccessToken,
+    time: u64,
 ) -> Result<(), ResourceError> {
     let manage = token.manage.as_ref().ok_or(ResourceError::Unavailable)?;
     if !management_destination(&client.origin, &manage.uri) {
@@ -178,7 +180,7 @@ pub(super) fn revoke(
         HttpRequest::new("DELETE", &manage.uri),
         client.signer.as_ref(),
         Some(&manage.access_token.value),
-        now(),
+        time,
     )
     .map_err(|_| ResourceError::Unavailable)?;
     let response = client
@@ -195,16 +197,17 @@ pub(super) fn revoke(
 pub(super) fn read(
     client: &introspection::ResourceClient,
     request: &HttpRequest,
+    clock: impl Fn() -> u64,
 ) -> Result<Value, ResourceError> {
     let started = Instant::now();
-    client.authorize(request, FOLDER_READ, now)?;
-    let child = issue(client, &parent_value(request)?)?;
+    client.authorize(request, FOLDER_READ, &clock)?;
+    let child = issue(client, &parent_value(request)?, clock())?;
     let result = (|| {
         let request = sign_request(
             HttpRequest::new("GET", format!("{}{}", client.origin, RS2_PATH)),
             client.signer.as_ref(),
             Some(&child.value),
-            now(),
+            clock(),
         )
         .map_err(|_| ResourceError::Unavailable)?;
         let response = client
@@ -224,7 +227,7 @@ pub(super) fn read(
     })();
     // One attempt even when RS2 refuses or is unavailable; never retry a grant
     // or conceal failed cleanup. Finite expiry and parent cascade remain bounds.
-    let cleanup = revoke(client, &child);
+    let cleanup = revoke(client, &child, clock());
     // This checks completed-work latency, not cancellation of blocking calls.
     if started.elapsed() > Duration::from_secs(12) {
         return Err(ResourceError::Unavailable);
