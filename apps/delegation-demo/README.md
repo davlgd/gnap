@@ -134,7 +134,9 @@ no constant-time lookup claim is made. The page never redirects to a client.
 This is still a fictional owner, not account authentication: anyone using the
 sandbox may play that role. The code is a locator, not proof of identity.
 Loopback addresses work only on the machine running the app. A physical second
-device needs a reachable HTTPS deployment; these changes have not been deployed.
+device needs a reachable HTTPS deployment. The [6 September hosted validation](../../docs/validation-2026-09-06.md)
+exercised this flow with two HTTP cookie stores over HTTPS, not a physical device
+or a browser engine.
 Polling here is not the full C2 profile, which also needs other capabilities.
 
 Owner state is limited to 64 sessions with a fixed ten-minute lifetime. Each
