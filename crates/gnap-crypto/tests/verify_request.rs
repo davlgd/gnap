@@ -464,6 +464,45 @@ fn additional_policy_continues_to_a_signature_with_a_nonce() {
 }
 
 #[test]
+fn policy_failure_describes_nonce_absence_without_guessing_the_policy_reason() {
+    let message = Message {
+        method: "POST",
+        target_uri: URL,
+        content_digest: None,
+        authorization: None,
+        other: vec![],
+    };
+    for (nonce, requires_nonce) in [(None, true), (None, false), (Some("do-not-echo"), false)] {
+        let headers = forge(
+            &input(vec![Component::Method, Component::TargetUri], nonce),
+            &message,
+            "candidate",
+        );
+        let request = SignedRequest {
+            method: "POST",
+            target_uri: URL,
+            headers: &headers,
+            body: None,
+        };
+        let error = verify_request_with_policy(
+            &request,
+            &signer().verifier(),
+            &expectations(),
+            &|_: &str, _: u64| panic!("policy rejection cannot consume a nonce"),
+            &|params| requires_nonce && params.nonce.is_some(),
+        )
+        .unwrap_err();
+        let expected = if nonce.is_none() {
+            "signature parameters do not meet the verifier's additional policy (no nonce parameter was presented)"
+        } else {
+            "signature parameters do not meet the verifier's additional policy"
+        };
+        assert_eq!(error, VerifyError::Rejected(expected.into()));
+        assert!(!error.to_string().contains("do-not-echo"));
+    }
+}
+
+#[test]
 fn policy_rejections_do_not_spend_nonces_or_verify_signatures() {
     struct NeverVerify;
     impl Verifier for NeverVerify {

@@ -216,6 +216,8 @@ pub fn verify_request(
 /// # Errors
 /// Returns the same errors as [`verify_request`], also rejecting candidates
 /// whose parameters do not meet the additional policy.
+/// A policy-refusal diagnostic notes nonce absence without inferring why the
+/// predicate rejected the candidate or authenticating its parameters.
 pub fn verify_request_with_policy(
     request: &SignedRequest<'_>,
     verifier: &dyn Verifier,
@@ -269,7 +271,14 @@ fn accept_signature(
     let params = parse_signature_params(raw).map_err(|e| e.to_string())?;
     check_parameters(&params, verifier, expectations)?;
     if !policy(&params) {
-        return Err("signature parameters do not meet the verifier's additional policy".into());
+        let hint = if params.nonce.is_none() {
+            " (no nonce parameter was presented)"
+        } else {
+            ""
+        };
+        return Err(format!(
+            "signature parameters do not meet the verifier's additional policy{hint}"
+        ));
     }
 
     let components = parse_covered_components(raw).map_err(|e| e.to_string())?;
