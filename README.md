@@ -282,25 +282,36 @@ tokens through distinct RS roles over HTTP. The workbench can compare labels
 in a caller-declared request/response pair. These checks do not infer an audience
 from a label or establish interoperability with another implementation.
 
+Bound-key rotation (§6.1.1) is opt-in. The AS verifies the linked HTTP signatures
+of §7.3.1.1 and reserves both proof nonces atomically. The client supplies public
+PS256 JWKs by value and keeps the current signer for resource access. The Biscuit
+application exercises two successive key changes across separate local
+processes, including rejection of previous-key proofs and retired tokens.
+Initially explicit token bindings and derived-token rebinding remain outside
+the client flow; see the [support matrix](docs/support-matrix.md) for the exact
+boundary. These tests do not establish hosted or independent-vendor interoperability.
+
 These parts of the specification are **not** implemented, and nothing here
 should be read as covering them:
 
 | Section | What is missing |
 |---|---|
 | §3.5 | Dynamically issuing a client instance identifier |
-| §6.1.1 | Binding a **new key** while rotating a token; it needs the two simultaneous proofs of §7.3.1.1, and the AS answers `key_rotation_not_supported` as §6.1.1-M08 provides for |
 | §7.3.2–§7.3.4 | The `mtls`, `jwsd` and `jws` key proofing methods |
-| §7.3.1.1 | Key rotation, and with it the `gnap-rotate` signature tag |
 | §9.1 | Resource-server-first discovery |
 | RFC 9767 §§3.3–4 | Biscuit introspection and downstream profiles beyond the selected one-hop opaque flow |
 
-The interaction modes the AS drives are `redirect` and, with no finish method,
-polling. `app`, `user_code` and `user_code_uri` are modelled in `gnap-types` but
-no AS in this workspace starts them.
+The AS supports `redirect` and opt-in [`user_code` and `user_code_uri`
+starts](docs/secondary-device-interaction.md). The code modes have SDK lifecycle
+tests; their web entry page, consent flow and attempt limits still need a
+consumer. The `app` start is modelled but not served. With no finish method,
+the client polls for completion; polling is not a separate interaction start.
 
 The AS answers OPTIONS at its grant endpoint with the discovery document from
-§9. It announces only its implemented proof method and lack of bound-key
-rotation; deployment-dependent capability lists are omitted. Public discovery
+§9. It announces HTTP signatures, the configured bound-key rotation setting,
+and `redirect`, plus both code modes when enabled. These engine capabilities
+do not establish that a deployment's interaction pages or push callbacks are
+reachable. Other deployment-dependent capability lists are omitted. Public discovery
 requires HTTPS. Local HTTP loopback is an explicit development-only opt-in,
 labelled in the response; it is not a protocol exception. No client-side
 discovery helper is supplied yet.

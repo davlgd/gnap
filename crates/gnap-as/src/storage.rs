@@ -32,6 +32,9 @@ pub struct GrantRecord {
     /// It is spent by the completion that uses it, which is the one-time-use
     /// §4-M04 requires of any interaction the AS starts.
     pub interact_handle: Option<String>,
+    /// Optional canonical human code, indexed separately from credentials.
+    /// A completion through any offered mode removes both code and handle.
+    pub user_code: Option<String>,
     /// When the interaction stops being usable, in seconds since the epoch.
     ///
     /// §4-M04 asks the AS to "apply suitable timeouts to any interaction start
@@ -294,6 +297,20 @@ pub trait DerivedGrantStore: GrantStore {
     ) -> Result<GrantSnapshot, StoreError>;
 }
 
+/// Optional user-code index, updated atomically with the entire grant.
+///
+/// Implementations must reject active code collisions and remove old mappings
+/// on replacement, completion, revocation and maintenance. A code is a request
+/// locator, not a credential or resource-owner authentication. Ordinary stores
+/// need not implement this capability; enabling it on an AS requires this trait.
+pub trait UserCodeStore: GrantStore {
+    /// Reads a consistent snapshot for an already normalized, canonical code.
+    /// This lookup neither checks expiry nor consumes the interaction.
+    /// # Errors
+    /// Storage failure must be distinguished from an unknown code.
+    fn lookup_user_code(&self, code: &str) -> Result<Option<GrantSnapshot>, StoreError>;
+}
+
 /// Signature replay state may use a separate, short-lived shared store.
 pub trait NonceStore {
     /// Atomically remembers a nonce at `now`, or returns false for replay/failure.
@@ -367,6 +384,11 @@ macro_rules! forward_storage {
                 (**self).create_derived(parent, revision, value, child, clock)
             }
         }
+        impl<T: UserCodeStore + ?Sized> UserCodeStore for $pointer {
+            fn lookup_user_code(&self, code: &str) -> Result<Option<GrantSnapshot>, StoreError> {
+                (**self).lookup_user_code(code)
+            }
+        }
         impl<T: NonceStore + ?Sized> NonceStore for $pointer {
             fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
                 (**self).remember_nonce(nonce, now)
@@ -393,6 +415,7 @@ const NONCE_MEMORY: u64 = 2 * MAX_CLOCK_SKEW;
 struct Indices {
     continuation: HashMap<String, GrantId>,
     interaction: HashMap<String, GrantId>,
+    user_codes: HashMap<String, GrantId>,
     management: HashMap<String, GrantId>,
     values: HashMap<String, GrantId>,
     identifiers: HashMap<Vec<u8>, GrantId>,
@@ -423,6 +446,7 @@ impl Indices {
         if aggregate.revoked
             && (aggregate.record.continuation_token.is_some()
                 || aggregate.record.interact_handle.is_some()
+                || aggregate.record.user_code.is_some()
                 || !aggregate.tokens.is_empty())
         {
             return Err(StoreError::Invalid);
@@ -441,6 +465,17 @@ impl Indices {
                 return Err(StoreError::Invalid);
             }
             indices.interaction.insert(key.clone(), id);
+        }
+        if let Some(code) = &aggregate.record.user_code {
+            if !crate::user_code::is_canonical(code)
+                || aggregate.record.interact_handle.is_none()
+                || aggregate.record.interact_expires_at.is_none()
+                || aggregate.record.grant.state() != gnap_core::State::Pending
+                || aggregate.record.interaction_completed
+            {
+                return Err(StoreError::Invalid);
+            }
+            indices.user_codes.insert(code.clone(), id);
         }
         for (handle, token) in &aggregate.tokens {
             if handle.is_empty()
@@ -493,6 +528,7 @@ impl Indices {
         }
         if collides(&self.continuation, &candidate.continuation, own_id)
             || collides(&self.interaction, &candidate.interaction, own_id)
+            || collides(&self.user_codes, &candidate.user_codes, own_id)
             || collides(&self.management, &candidate.management, own_id)
             || collides(&self.values, &candidate.values, own_id)
             || collides(&self.identifiers, &candidate.identifiers, own_id)
@@ -510,12 +546,14 @@ impl Indices {
     fn replace(&mut self, id: GrantId, candidate: Self) {
         self.continuation.retain(|_, owner| *owner != id);
         self.interaction.retain(|_, owner| *owner != id);
+        self.user_codes.retain(|_, owner| *owner != id);
         self.management.retain(|_, owner| *owner != id);
         self.values.retain(|_, owner| *owner != id);
         self.identifiers.retain(|_, owner| *owner != id);
         self.credentials.retain(|_, (owner, _)| *owner != id);
         self.continuation.extend(candidate.continuation);
         self.interaction.extend(candidate.interaction);
+        self.user_codes.extend(candidate.user_codes);
         self.management.extend(candidate.management);
         self.values.extend(candidate.values);
         self.identifiers.extend(candidate.identifiers);
@@ -589,6 +627,7 @@ impl State {
                 let record = &mut child.aggregate.record;
                 record.continuation_token = None;
                 record.interact_handle = None;
+                record.user_code = None;
                 record.interact_ref = None;
                 record.as_nonce = None;
                 record.interact_expires_at = None;
@@ -648,6 +687,18 @@ impl MemoryStorage {
             .lock()
             .map_err(|_| StoreError::Unavailable)?
             .len())
+    }
+}
+
+impl UserCodeStore for MemoryStorage {
+    fn lookup_user_code(&self, code: &str) -> Result<Option<GrantSnapshot>, StoreError> {
+        let state = self.state.lock().map_err(|_| StoreError::Unavailable)?;
+        Ok(state
+            .indices
+            .user_codes
+            .get(code)
+            .and_then(|id| state.grants.get(id))
+            .cloned())
     }
 }
 
@@ -808,6 +859,7 @@ impl DerivedGrantStore for MemoryStorage {
             || child.record.grant.state() != gnap_core::State::Approved
             || child.record.continuation_token.is_some()
             || child.record.interact_handle.is_some()
+            || child.record.user_code.is_some()
             || child.record.interact_ref.is_some()
             || child.record.interact_expires_at.is_some()
             || child.record.as_nonce.is_some()
@@ -922,6 +974,7 @@ mod tests {
             request: serde_json::from_str(r#"{"client":"client"}"#).unwrap(),
             continuation_token: Some("continuation".into()),
             as_nonce: None,
+            user_code: None,
             interact_handle: None,
             interact_expires_at: None,
             interact_ref: None,

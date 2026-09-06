@@ -127,6 +127,7 @@ fn revocation_wins(allow_rotation: bool) {
         request: serde_json::from_str(r#"{"client":"client"}"#).unwrap(),
         continuation_token: None,
         as_nonce: None,
+        user_code: None,
         interact_handle: None,
         interact_expires_at: None,
         interact_ref: None,

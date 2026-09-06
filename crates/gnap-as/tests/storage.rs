@@ -14,6 +14,7 @@ fn pending(token: &str, handle: &str) -> GrantAggregate {
         continuation_token: Some(token.into()),
         as_nonce: Some("as-nonce".into()),
         interact_handle: Some(handle.into()),
+        user_code: None,
         interact_expires_at: None,
         interact_ref: None,
         interaction_completed: false,
@@ -149,6 +150,7 @@ fn two_callers_cannot_complete_the_same_interaction() {
         let storage = Arc::clone(&storage);
         std::thread::spawn(move || {
             snapshot.aggregate.record.interact_handle = None;
+            snapshot.aggregate.record.user_code = None;
             snapshot.aggregate.record.interact_ref = Some("reference".into());
             snapshot.aggregate.record.interaction_completed = true;
             storage.compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate)
@@ -380,6 +382,7 @@ fn revocation_is_terminal_and_clears_all_aliases() {
     let mut revoked = original.aggregate.clone();
     revoked.record.continuation_token = None;
     revoked.record.interact_handle = None;
+    revoked.record.user_code = None;
     revoked.tokens.clear();
     revoked.revoked = true;
     let terminal = storage
@@ -426,6 +429,7 @@ fn normal_closure_preserves_token_management() {
     let mut closed = original.aggregate;
     closed.record.continuation_token = None;
     closed.record.interact_handle = None;
+    closed.record.user_code = None;
     closed.record.grant.withhold_continuation();
     let closed = storage
         .compare_exchange(original.id, original.revision, closed)
@@ -604,6 +608,7 @@ fn a_finalized_core_state_cannot_be_reopened() {
         .unwrap();
     closed.record.continuation_token = None;
     closed.record.interact_handle = None;
+    closed.record.user_code = None;
     let original = storage.create(closed).unwrap();
     assert!(matches!(
         storage.compare_exchange(original.id, original.revision, populated("new")),
