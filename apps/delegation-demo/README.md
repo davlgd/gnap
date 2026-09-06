@@ -70,7 +70,8 @@ one token
 ([§3.2.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.2.2)). The
 grant is approved or refused as a whole; there is no pending state per label.
 Each issued token carries its requested label, its own rights and its own
-management endpoint. Rotating or revoking one token leaves its sibling in
+management endpoint. The consent display keeps the requested label even when
+only one slot remains. Rotating or revoking one token leaves its sibling in
 place, and a token works only at its own RS: the reports token is refused by
 the documents RS, by the downstream metadata path and by the AS as a source
 for derivation. Every action names the token it targets; nothing falls back to
@@ -92,6 +93,7 @@ fresh valid signatures.
 
 ```sh
 cargo test --manifest-path apps/delegation-demo/Cargo.toml --locked
+node --test apps/delegation-demo/tests/ui/requested_rights.test.mjs
 python3 tools/smoke_ecosystem.py --demo http://127.0.0.1:8080
 ```
 

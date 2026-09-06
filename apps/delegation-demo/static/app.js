@@ -5,7 +5,7 @@ function render(data) {
   error.textContent = '';
   document.querySelector('#state').textContent = data.state || 'unknown';
   const slots = (data.requested_tokens || []).map(t => `${t.label || 'token'}: ${(t.rights || []).join(', ')}`);
-  document.querySelector('#requested-rights').textContent = (slots.length > 1 ? slots.join(' | ') : (data.requested_rights || []).join(', ')) || 'Start a request to choose rights.';
+  document.querySelector('#requested-rights').textContent = (data.mode === 'multiple' || slots.length > 1 ? slots.join(' | ') : (data.requested_rights || []).join(', ')) || 'Start a request to choose rights.';
   document.querySelector('[data-action="check-retired"]').textContent = data.retired_token_label ? `Prove the retired ${data.retired_token_label} token is refused` : 'Prove the retired token is refused';
   document.querySelector('#current-rights').textContent = (data.rights || []).join(', ') || 'No live token.';
   document.querySelector('#tokens').textContent = (data.tokens || []).map(t => `${t.label || 'unlabelled'}: ${(t.rights || []).join(', ')}`).join(' | ') || 'None';
