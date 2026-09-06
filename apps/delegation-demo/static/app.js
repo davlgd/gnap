@@ -12,9 +12,13 @@ function render(data) {
   const events = document.querySelector('#events'); events.replaceChildren();
   for (const event of data.events || []) { const item = document.createElement('li'); item.textContent = event; events.append(item); }
   document.querySelector('#resource').textContent = data.folder ? JSON.stringify(data.folder, null, 2) : 'No resource has been read with the current token.';
+  const codes = Boolean(data.user_code_uri);
+  document.querySelector('#device-code').hidden = !codes;
+  document.querySelector('#code-uri').textContent = data.user_code_uri?.uri || '';
+  document.querySelector('#user-code').textContent = data.user_code_uri?.code || '';
   const wait = data.continuation_wait_seconds || 0;
-  const continuable = data.continuation_open && ['ready', 'approved', 'revoked'].includes(data.state);
-  document.querySelector('[data-action="continue"]').textContent = continuable && wait > 0 ? `Continue in ${wait}s` : data.state === 'approved' ? 'Poll without reissuing tokens' : 'Continue after callback';
+  const continuable = data.continuation_open && (['ready', 'approved', 'revoked'].includes(data.state) || (codes && data.state === 'pending'));
+  document.querySelector('[data-action="continue"]').textContent = continuable && wait > 0 ? `Continue in ${wait}s` : data.state === 'approved' ? 'Poll without reissuing tokens' : codes ? 'Poll for the owner’s decision' : 'Continue after callback';
   const changeable = ['approved', 'revoked'].includes(data.state) && data.continuation_open && wait === 0;
   const lot = data.mode === 'multiple';
   const has = label => (data.tokens || []).some(t => t.label === label);
@@ -22,7 +26,7 @@ function render(data) {
   const reports = lot && has('reports');
   const complete = lot ? has('documents') && has('reports') && (data.rights || []).includes('synthetic-archive:read') : (data.rights || []).includes('synthetic-archive:read');
   const startable = !['starting', 'failed'].includes(data.state);
-  const enabled = {start: startable, 'start-multiple': startable, approve: data.state === 'pending', 'approve-reports': data.state === 'pending' && lot && (data.requested_tokens || []).some(t => t.label === 'reports'), deny: data.state === 'pending', continue: continuable && wait === 0, read: documents, 'read-archive': documents, 'read-metadata': documents, 'read-reports': reports, rotate: documents, revoke: documents, 'rotate-reports': reports, 'revoke-reports': reports, 'revoke-grant': data.continuation_open && wait === 0, downscope: changeable && (lot ? (reports || (data.rights || []).includes('synthetic-archive:read')) : (data.rights || []).length > 1), expand: changeable && !complete, 'check-retired':data.retired_token_present};
+  const enabled = {start: startable, 'start-multiple': startable, 'start-code': startable, approve: data.state === 'pending' && !codes, 'approve-reports': data.state === 'pending' && lot && (data.requested_tokens || []).some(t => t.label === 'reports'), deny: data.state === 'pending' && !codes, continue: continuable && wait === 0, read: documents, 'read-archive': documents, 'read-metadata': documents, 'read-reports': reports, rotate: documents, revoke: documents, 'rotate-reports': reports, 'revoke-reports': reports, 'revoke-grant': data.continuation_open && wait === 0, downscope: changeable && (lot ? (reports || (data.rights || []).includes('synthetic-archive:read')) : (data.rights || []).length > 1), expand: changeable && !complete, 'check-retired':data.retired_token_present};
   for (const button of document.querySelectorAll('[data-action]')) button.disabled = !enabled[button.dataset.action];
   if (data.state === 'starting' || (data.continuation_open && wait > 0)) setTimeout(() => fetch('/api/status').then(r => r.json()).then(render).catch(e => {error.textContent = e.message;}), 1000);
 }

@@ -2,10 +2,12 @@
 
 The SDK implements the `user_code` and `user_code_uri` start modes from
 [RFC 9635 §§3.3.3–3.3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.3.3).
-This is an SDK foundation, not a completed web application or a claim to the
-Secondary Device interoperability profile. The browser entry component,
-resource-owner authentication, consent screen, admission limits and actual
-push delivery remain application work.
+The [delegation demo](../apps/delegation-demo/README.md#secondary-device-flow)
+consumes these APIs through a code-entry page, separate owner sessions, explicit
+consent and bounded attempts. It polls without a finish callback and uses only
+synthetic resources. Neither the SDK nor this example claims the full Secondary
+Device interoperability profile. Owner authentication and actual push delivery
+remain outside this consumer.
 
 ## Configure the AS
 
@@ -86,7 +88,7 @@ it does not rerun authorization policy. A failed modification preserves the
 previous grant and its code. Applications must handle an inconclusive response
 without assuming that retry is idempotent.
 
-## What the web consumer must still supply
+## Admission and owner identity
 
 The code is a request locator, not proof of the resource owner's identity. A
 public entry page must limit both per-session and aggregate attempts, bound
@@ -117,9 +119,17 @@ force collisions immediately before creation and replacement, force both
 completion readers to reach compare-and-exchange, and check index failure,
 invalid candidates, adapter forwarding and revocation.
 
-These exchanges use the actual client and AS SDKs with an in-memory transport.
-They do not exercise a second browser, a public code-entry form, rate limits,
-real owner authentication, deployed TLS or independent-vendor interoperability.
-The delivery remains incomplete until a consumer exercises those applicable
-application boundaries. In particular, this work alone does not supply the
-push and assertion capabilities required by the full C2 profile.
+These SDK exchanges use an in-memory transport. Separately, the
+[consumer tests](../apps/delegation-demo/src/secondary_device/tests.rs) run the
+actual HTTP router and client worker with two independent HTTP sessions: one
+starts and polls, the other submits the code and chooses allow or deny. They
+verify a poll while consent is being read, then approval and a protected RS
+read, or final refusal. Other tests cover cookie separation, form tickets,
+attempt budgets, request size, origin checks and malformed/unknown/expired codes.
+Forced interleavings cover either side losing a concurrent storage write and a
+post-completion poll waiting until its consent decision has been published.
+
+This is local HTTP evidence, not automated rendering in two browser engines,
+a physical second device, real owner authentication, deployed TLS or
+independent-vendor interoperability. It does not supply the push and assertion
+capabilities required by the full C2 profile.
