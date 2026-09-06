@@ -404,6 +404,39 @@ fn either_missing_proof_or_removed_content_preserves_every_token_and_nonce() {
 }
 
 #[test]
+fn oversized_rotation_hints_do_not_fall_back_to_value_rotation_or_spend_nonces() {
+    use gnap_crypto::rotation::MAX_ROTATION_SIGNATURE_BYTES;
+    for capability in [false, true] {
+        let server = server(capability, true);
+        let tokens = grant(&server);
+        let before = snapshot(&server, &tokens[0]);
+        let manage = tokens[0].manage.as_ref().unwrap();
+        let clean = sign_request(
+            HttpRequest::new("POST", &manage.uri),
+            old_key(),
+            Some(&manage.access_token.value),
+            NOW + 1,
+        )
+        .unwrap();
+        let mut oversized = clean.clone();
+        oversized.headers.push((
+            "Signature-Input".into(),
+            format!(
+                "unmatched=(\"@method\");tag=\"gnap-rotate\";nonce=\"{}\"",
+                "x".repeat(MAX_ROTATION_SIGNATURE_BYTES)
+            ),
+        ));
+        assert_eq!(
+            error_code(&server.handle(&oversized, NOW + 1)),
+            "invalid_rotation"
+        );
+        unchanged(&server, &tokens[0], &before);
+        // The unchanged ordinary request still succeeds: no proof nonce was spent.
+        single(&server.handle(&clean, NOW + 1));
+    }
+}
+
+#[test]
 fn capability_permission_and_proof_parameters_have_distinct_refusals() {
     for (capability, permission) in [(false, true), (true, false)] {
         let server = server(capability, permission);

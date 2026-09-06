@@ -235,12 +235,33 @@ fn unsupported() -> HttpResponse {
 
 /// An unauthenticated routing hint, never evidence of possession or permission.
 pub(super) fn has_rotation_proof(request: &HttpRequest) -> bool {
+    if !request.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("signature-input") && value.contains("gnap-rotate")
+    }) {
+        return false;
+    }
+    // Bound allocation and parsing of a possible rotation hint. Oversized hints
+    // route to refusal, never to bodyless value rotation; they are not proofs.
+    // Ordinary requests without this hint keep their existing verification path.
+    let mut size = 0_usize;
+    for field in ["signature", "signature-input"] {
+        for (index, (_, value)) in request
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case(field))
+            .enumerate()
+        {
+            size = size
+                .saturating_add(value.len())
+                .saturating_add(usize::from(index > 0) * 2);
+            if size > gnap_crypto::rotation::MAX_ROTATION_SIGNATURE_BYTES {
+                return true;
+            }
+        }
+    }
     let Some(input) = request.combined_header_value("signature-input") else {
         return false;
     };
-    if !input.contains("gnap-rotate") {
-        return false;
-    }
     let Some(signature) = request.combined_header_value("signature") else {
         return false;
     };
@@ -267,5 +288,57 @@ fn required_proof(key: &ResolvedTokenKey, now: u64) -> RotationProof<'_> {
                 .as_deref()
                 .is_some_and(|nonce| !nonce.is_empty())
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gnap_crypto::rotation::MAX_ROTATION_SIGNATURE_BYTES;
+
+    #[test]
+    fn rotation_hint_size_includes_both_fields_and_repeated_field_separators() {
+        for field in ["SiGnAtUrE", "SiGnAtUrE-InPuT"] {
+            for split in [false, true] {
+                let mut request = HttpRequest::new("POST", "https://as.example/manage");
+                request.headers = vec![
+                    (
+                        "Signature-Input".into(),
+                        "unmatched=();tag=\"gnap-rotate\"".into(),
+                    ),
+                    ("Signature".into(), "invalid".into()),
+                ];
+                let index = if split {
+                    request.headers.push((field.into(), String::new()));
+                    2
+                } else {
+                    usize::from(field.eq_ignore_ascii_case("signature"))
+                };
+                let used: usize = request.headers.iter().map(|(_, value)| value.len()).sum();
+                let separators = usize::from(split) * 2;
+                request.headers[index]
+                    .1
+                    .push_str(&" ".repeat(MAX_ROTATION_SIGNATURE_BYTES - used - separators));
+                assert!(
+                    !has_rotation_proof(&request),
+                    "at the limit, malformed proofs are parsed"
+                );
+                request.headers[index].1.push(' ');
+                assert!(
+                    has_rotation_proof(&request),
+                    "above the limit, parsing is bypassed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_ordinary_fields_are_not_rotation_hints() {
+        let mut request = HttpRequest::new("POST", "https://as.example/manage");
+        request.headers.push((
+            "Signature-Input".into(),
+            "x".repeat(MAX_ROTATION_SIGNATURE_BYTES + 1),
+        ));
+        assert!(!has_rotation_proof(&request));
     }
 }
