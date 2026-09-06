@@ -48,15 +48,15 @@ QUOTE = re.compile(r'"([^"]{20,})"')
 RFC_NEAR = re.compile(r"RFC (9635|9767|9421|9530|9651|3986|7517|9493)|§")
 
 def rust_sources(root):
-    """Yield selected Rust source/test/example files, recursively and deterministically.
+    """Parcourt les sources, tests et exemples Rust de façon récursive et déterministe.
 
-    Package roots are immediate children of crates/ and apps/. Sources outside
-    their src/, tests/ and examples/ trees (e.g. build.rs) are outside this scope.
-    Neither directory nor file symlinks are followed, even within the checkout.
-    No directory name inside a source root establishes generated/foreign code.
+    Les paquets sont les enfants directs de crates/ et apps/. Les sources hors
+    de leurs arbres src/, tests/ et examples/ (comme build.rs) sont hors périmètre.
+    Aucun lien symbolique, de fichier ou de dossier, n'est suivi, même en interne.
+    Un nom de dossier dans ces arbres ne suffit pas à désigner du code généré ou tiers.
     """
     def walk_error(error):
-        raise error  # An unreadable source tree must not silently pass.
+        raise error  # Un arbre source illisible ne doit pas passer silencieusement.
 
     for category in ("crates", "apps"):
         collection = root / category

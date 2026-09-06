@@ -369,8 +369,8 @@ selects `.rs` files beneath `crates/*/{src,tests,examples}` and
 Usual Cargo outputs in repository-level or package-level `target` directories
 are outside those roots and are not traversed. A custom build output inside a
 source root is not automatically recognised or excluded.
-Non-Rust inputs and files outside those roots (such
-as package-level `build.rs` or fixture directories) are outside its scope.
+Non-Rust inputs and files outside those roots, such as `apps/demo/build.rs`
+or `apps/demo/fixtures/input.rs`, are outside its scope.
 Rust modules inside source roots remain covered even under names such as
 `fixtures`, `target`, `vendor` or `external`; directory names alone do not
 establish generated code or third-party authorship. It downloads missing RFCs

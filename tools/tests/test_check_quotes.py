@@ -1,6 +1,7 @@
 """Offline regressions of source selection and quotation checking, not GNAP evidence."""
 
 import contextlib
+import errno
 import importlib.util
 import io
 from pathlib import Path
@@ -95,11 +96,18 @@ class QuoteTests(unittest.TestCase):
     def test_does_not_follow_file_directory_package_or_source_symlinks(self):
         external = self.write("outside/source.rs")
         self.write("crates/real/src/main.rs")
-        (self.root / "crates/real/src/linked.rs").symlink_to(external)
-        (self.root / "crates/real/src/linked-dir").symlink_to(external.parent, target_is_directory=True)
-        (self.root / "crates/linked-package").symlink_to(self.root / "crates/real", target_is_directory=True)
-        (self.root / "crates/real/tests").symlink_to(external.parent, target_is_directory=True)
-        (self.root / "apps").symlink_to(self.root / "crates", target_is_directory=True)
+        try:
+            (self.root / "crates/real/src/linked.rs").symlink_to(external)
+            (self.root / "crates/real/src/linked-dir").symlink_to(external.parent, target_is_directory=True)
+            (self.root / "crates/linked-package").symlink_to(self.root / "crates/real", target_is_directory=True)
+            (self.root / "crates/real/tests").symlink_to(external.parent, target_is_directory=True)
+            (self.root / "apps").symlink_to(self.root / "crates", target_is_directory=True)
+        except NotImplementedError as error:
+            self.skipTest(f"Symlink creation is unavailable: {error}")
+        except OSError as error:
+            if error.errno in (errno.EPERM, errno.EACCES, errno.ENOSYS, errno.ENOTSUP) or getattr(error, "winerror", None) == 1314:
+                self.skipTest(f"Symlink creation is unavailable: {error}")
+            raise
         self.assertEqual(self.selected(), ["crates/real/src/main.rs"])
 
     def test_unreadable_walk_is_not_silently_ignored(self):
