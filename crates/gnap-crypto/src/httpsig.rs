@@ -274,6 +274,52 @@ impl Message<'_> {
         self
     }
 
+    /// Resolves covered Dictionary members from the received field instances.
+    ///
+    /// Instances are combined in message order. RFC 9421 §2.1.2 requires the
+    /// selected Item or Inner List to be serialized canonically, without its
+    /// Dictionary key. In particular, the old signature's covered input during
+    /// key rotation is not necessarily its original wire representation.
+    /// Ordinary fields are still populated by [`Self::with_fields`].
+    ///
+    /// # Errors
+    /// Returns an error for an absent field/member or an invalid Dictionary.
+    pub fn with_dictionary_fields<'h, I>(
+        mut self,
+        components: &[Component],
+        header_values: impl Fn(&str) -> I,
+    ) -> Result<Self, ProofError>
+    where
+        I: IntoIterator<Item = &'h str>,
+    {
+        for component in components {
+            let Component::DictionaryMember { field, key } = component else {
+                continue;
+            };
+            let combined = header_values(field)
+                .into_iter()
+                .map(|value| value.trim_matches([' ', '\t']))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let dictionary: sfv::Dictionary =
+                sfv::Parser::new(&combined).parse().map_err(|error| {
+                    ProofError::Base(format!("invalid {field} Dictionary: {error}"))
+                })?;
+            let member = dictionary.get(key.as_str()).ok_or_else(|| {
+                ProofError::Base(format!("{field} has no Dictionary member {key}"))
+            })?;
+            // A one-member List serializes precisely the Item or Inner List,
+            // including its parameters, without a Dictionary key or comma.
+            let mut serializer = sfv::ListSerializer::new();
+            serializer.members([member]);
+            let value = serializer.finish().ok_or_else(|| {
+                ProofError::Base("a covered Dictionary member could not be serialized".into())
+            })?;
+            self.other.push((component.identifier(), value));
+        }
+        Ok(self)
+    }
+
     fn value_of(&self, c: &Component) -> Result<String, ProofError> {
         let missing = |what: &str, why: &str| {
             ProofError::Base(format!(
