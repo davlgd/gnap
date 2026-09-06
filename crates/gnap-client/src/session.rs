@@ -43,6 +43,7 @@ use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse
 use gnap_types::token::{AccessToken, AccessTokenRequest, Cardinality, TokenManage, TokenValue};
 use gnap_types::user::SubjectResponse;
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 /// Where a grant stands after a round trip with the AS.
@@ -72,6 +73,7 @@ impl Step {
 struct InteractionWindow {
     received_at: u64,
     expires_at: Option<u128>,
+    client_limited: bool,
 }
 impl InteractionWindow {
     fn new(received_at: u64, expires_in: Option<u64>) -> Self {
@@ -81,6 +83,29 @@ impl InteractionWindow {
         Self {
             received_at,
             expires_at,
+            client_limited: false,
+        }
+    }
+
+    fn limit(&mut self, seconds: NonZeroU64) {
+        let maximum = u128::from(self.received_at) + u128::from(seconds.get());
+        if self.expires_at.is_none_or(|end| maximum < end) {
+            self.expires_at = Some(maximum);
+            self.client_limited = true;
+        }
+    }
+
+    fn refusal(&self, now: u64) -> Option<&'static str> {
+        if now < self.received_at {
+            Some("the callback clock precedes receipt of the interaction response")
+        } else if self.expires_at.is_some_and(|end| u128::from(now) >= end) {
+            Some(if self.client_limited {
+                "the client-configured interaction finish timeout has elapsed"
+            } else {
+                "the AS-advertised interaction lifetime has elapsed (RFC 9635 §3.3)"
+            })
+        } else {
+            None
         }
     }
 }
@@ -94,6 +119,8 @@ pub struct Session<'a, T, S> {
     /// The interaction start modes this client can actually drive (§2.5).
     /// `None` leaves that check to the caller; see [`Session::supporting`].
     supported_modes: Option<Vec<String>>,
+    /// Local finish-wait policy, independent of the AS's protocol state.
+    finish_timeout: Option<NonZeroU64>,
     /// Signers of tokens whose key was rotated (§6.1.1), by token value.
     ///
     /// Kept outside [`SessionState`] so that an unusable response still rolls
@@ -198,8 +225,33 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                 interaction_window: None,
             },
             supported_modes: None,
+            finish_timeout: None,
             rotated: HashMap::new(),
         }
+    }
+
+    /// Bounds interaction-finish acceptance by a local duration in seconds.
+    ///
+    /// RFC 9635 §4 recommends suitable finish timeouts. By default the session
+    /// uses only the AS's optional `interact.expires_in`; this policy also
+    /// bounds a window when that field is absent, and never extends it when
+    /// the AS announces a shorter duration. Each window starts at the `now`
+    /// supplied to the operation that received the interaction response.
+    ///
+    /// Calling this after an interaction response can only shorten its current
+    /// window, measured from the original start, not restart or extend it.
+    /// The new positive setting applies to later interaction windows. A
+    /// callback accepted earlier remains usable.
+    ///
+    /// This is not a transport timeout, polling limit, session lifetime or
+    /// token expiry. Applications still own those separate policies.
+    #[must_use]
+    pub fn with_finish_timeout(mut self, seconds: NonZeroU64) -> Self {
+        self.finish_timeout = Some(seconds);
+        if let Some(window) = &mut self.protocol.interaction_window {
+            window.limit(seconds);
+        }
+        self
     }
 
     /// Subject information, tied to the AS that stated it (§3.4-M15).
@@ -447,12 +499,12 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// lifetime (§3.3) starts at the `now` supplied when its response was
     /// received. Callbacks at or after that deadline, or before receipt, are
     /// refused without changing the stored reference. RFC 9635 §4 recommends
-    /// suitable finish timeouts (SHOULD); this enforces the AS's advertised
-    /// duration, not an additional client timeout when the duration is absent.
+    /// suitable finish timeouts (SHOULD); [`Session::with_finish_timeout`]
+    /// supplies an optional client maximum, including when the AS omits one.
     ///
     /// # Errors
     ///
-    /// Fails when no finish was negotiated, its advertised lifetime has ended,
+    /// Fails when no finish was negotiated, either finish deadline has passed,
     /// the clock precedes receipt, the hash is invalid, or a valid callback was
     /// already accepted. A refused callback does not replace a validated one.
     pub fn accept_callback(
@@ -469,20 +521,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                     .into(),
             ));
         };
-        if self
+        if let Some(reason) = self
             .protocol
             .interaction_window
             .as_ref()
-            .is_some_and(|window| {
-                now < window.received_at
-                    || window
-                        .expires_at
-                        .is_some_and(|deadline| u128::from(now) >= deadline)
-            })
+            .and_then(|window| window.refusal(now))
         {
-            return Err(ClientError::Interaction(
-                "the interaction response has expired or the clock precedes its receipt (RFC 9635 §3.3; finish timeout recommendation in §4)".into(),
-            ));
+            return Err(ClientError::Interaction(reason.into()));
         }
 
         let input = InteractionHashInput {
@@ -1302,10 +1347,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         self.check_tokens(&response)?;
         self.check_interaction(&response)?;
 
-        let interaction_window = response
-            .interact
-            .as_ref()
-            .map(|interaction| InteractionWindow::new(now, interaction.expires_in));
+        let interaction_window = response.interact.as_ref().map(|interaction| {
+            let mut window = InteractionWindow::new(now, interaction.expires_in);
+            if let Some(seconds) = self.finish_timeout {
+                window.limit(seconds);
+            }
+            window
+        });
 
         // The AS decides the state; the client infers it from what came back.
         let event = if response.access_token.is_some() || response.subject.is_some() {

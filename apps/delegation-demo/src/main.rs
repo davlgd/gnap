@@ -35,6 +35,7 @@ use std::{
 const MAX_SESSIONS: usize = 64;
 const MAX_GRANTS: usize = 256;
 const SESSION_LIFETIME: Duration = Duration::from_secs(1200);
+const FINISH_TIMEOUT: NonZeroU64 = NonZeroU64::new(300).unwrap();
 const FOLDER_READ: &str = "synthetic-folder:read";
 const ARCHIVE_READ: &str = "synthetic-archive:read";
 mod derivation;
@@ -684,6 +685,16 @@ fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
     json!({"state":session.state, "mode":session.mode.name(), "events":session.events, "rights":rights, "tokens":multiple::view(tokens.as_ref()), "requested_rights":session.requested_rights, "requested_tokens":multiple::slots_view(&session.requested), "token_present":tokens.is_some(), "resource_available":true, "retired_token_present":session.retired.is_some(), "retired_token_label":session.retired.as_ref().and_then(|retired| retired.label.clone()), "folder":session.folder, "last_resource_status":session.last_resource_status, "interaction_uri":format!("{origin}/interact/{}",session.handle), "continuation_open":session.continuation_open, "continuation_wait_seconds":session.next_continuation.saturating_sub(now())})
 }
 
+fn client_session<'a>(
+    transport: &'a Network,
+    signer: &'a Ps256Signer,
+    origin: &str,
+) -> Session<'a, Network, Ps256Signer> {
+    Session::new(transport, signer, format!("{origin}/gnap"))
+        .supporting(&["redirect"])
+        .with_finish_timeout(FINISH_TIMEOUT)
+}
+
 fn client_worker(
     origin: String,
     signer: Arc<Ps256Signer>,
@@ -733,9 +744,7 @@ fn client_worker(
                     .unwrap()
                     .clients
                     .insert(command.session.clone());
-                let mut client =
-                    Session::new(&transport, signer.as_ref(), format!("{origin}/gnap"))
-                        .supporting(&["redirect"]);
+                let mut client = client_session(&transport, signer.as_ref(), &origin);
                 let mode = if command.action == "start-multiple" {
                     multiple::Mode::Multiple
                 } else {
@@ -2513,6 +2522,8 @@ mod tests {
 
 #[cfg(test)]
 mod derivation_tests;
+#[cfg(test)]
+mod finish_timeout_tests;
 #[cfg(test)]
 mod introspection_tests;
 #[cfg(test)]

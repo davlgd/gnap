@@ -18,6 +18,14 @@ allows a real protected resource to reuse exactly the AS's signature checks.
 
 ## Reproducible friction and application workarounds
 
+Callback lifetimes also need a client-side policy: an AS can omit its optional
+duration or announce one longer than the application wants to wait.
+`Session::with_finish_timeout` now gives this consumer a positive five-minute
+maximum without extending an earlier AS deadline. A real HTTP grant test uses
+the same configured session constructor as the browser worker, then advances
+the callback clock across the local limit. This is distinct from the worker's
+twenty-minute session cleanup; the SDK does not cancel remote grants on timeout.
+
 | Task | Public API friction | Application workaround / suggested SDK work |
 | --- | --- | --- |
 | Keep grants across browser requests | `Session<'a,T,S>` borrows its transport and signer; a normal self-contained app state cannot own all three without a self-reference | One owning worker holds shared signer/transport and a map of borrowed sessions; document an owned-session or snapshot/resume pattern |

@@ -260,6 +260,20 @@ must work; there is no loopback proxy bypass for a public HTTPS deployment.
 
 ## Security and lifecycle limits
 
+- The client accepts interaction callbacks for at most five minutes from each
+  interaction response, or less if the AS announces a shorter duration. This
+  local policy is separate from the AS's ten-minute interaction lifetime and
+  the browser's twenty-minute session. It does not discard an already validated
+  reference, revoke a grant or add a polling fallback after a refused callback.
+  Start a fresh request if the finish window has elapsed. The callback HTTP
+  handler keeps its generic error response rather than reflecting untrusted
+  callback data. The SDK distinguishes client timeout, AS expiry and a callback
+  clock value preceding the interaction response. It does not detect every
+  intervening clock change; clock reliability remains the caller's responsibility.
+  The [consumer regression](src/finish_timeout_tests.rs) uses the worker's
+  session constructor and a real HTTP grant response; it advances the explicit
+  callback clock to test acceptance at 299 seconds and refusal at 300. It does
+  not wait five real minutes or exercise a browser callback over HTTP.
 - One ephemeral 2048-bit RSA key represents the client application; browser sessions
   are isolated client references, not independent cryptographic client owners.
   Three further, distinct ephemeral RSA keys identify RS1, RS2 and the reports

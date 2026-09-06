@@ -12,6 +12,9 @@ use gnap_types::interact::InteractCallback;
 use gnap_types::message::{ContinueRequest, GrantRequest};
 use std::cell::RefCell;
 
+#[path = "flow/finish_timeout.rs"]
+mod finish_timeout;
+
 const RSA_PKCS1: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
 const ENDPOINT: &str = "https://server.example.com/gnap";
 const CLIENT_NONCE: &str = "VJLO6A4CATR0KRO";
