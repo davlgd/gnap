@@ -65,7 +65,8 @@ The two-token button starts a request for several access tokens
 under one consent: a `documents` token for the registered document rights and a
 `reports` token for `synthetic-reports:read`, served at `/resource/reports` by a
 third RS with its own key. The resource owner may allow the whole request or
-only the reports token; the AS then issues an array containing one token
+only the reports token; in the latter case, the AS issues an array containing
+one token
 ([§3.2.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.2.2)). The
 grant is approved or refused as a whole; there is no pending state per label.
 Each issued token carries its requested label, its own rights and its own
@@ -267,7 +268,7 @@ must work; there is no loopback proxy bypass for a public HTTPS deployment.
   Restart invalidates all keys, grants and tokens. No token values appear in
   the browser or application logs.
 - The visitor plays the resource owner; there is no real login, user directory,
-  private document upload or identity assurance. Only two parent read rights
+  private document upload or identity assurance. Only two document read rights
   exist: `synthetic-folder:read` at `/resource/folder` and
   `synthetic-archive:read` at `/resource/archive`. The separate derived
   `archive-metadata:read` right exposes only a synthetic document count, and

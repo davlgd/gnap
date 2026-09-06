@@ -58,14 +58,56 @@ a stale compare-and-exchange cannot restore it.
 
 ## Current implementation boundaries
 
+The [reference application](../apps/delegation-demo/README.md) now exposes both
+the original single-token flow and a two-token flow. Its resource-server roles
+use distinct keys to authenticate introspection, but remain in one process:
+
+| Token | Resource-server role | Key proving the resource request |
+| --- | --- | --- |
+| `documents` | RS1: document reads and the operation that obtains downstream metadata | Original client key |
+| `reports` | RS3: the synthetic reports summary | Original client key |
+| Derived metadata token, without a label | RS2: archive metadata only | RS1's own key |
+
+Consent can approve both requested tokens or only `reports`. The browser keeps
+its multiple-token mode even when only one token is held. Actions select by
+label and fail locally when that token is missing; they never fall back to a
+sibling. A PATCH is compared against each live token with the same label,
+not the union of all the grant's rights. Requesting a previously omitted slot
+therefore requires fresh consent. These are application policy decisions.
+
+The socket-based [consumer tests](../apps/delegation-demo/src/multiple_tests.rs)
+exercise the real client, AS, RS roles and browser worker. They cover full and
+partial approval, cross-audience refusals, sibling management, derivation
+cascades, consent after expansion and grant revocation. The browser's retired
+token is stored together with its label so its check addresses the intended RS;
+an audience refusal at another RS would not demonstrate retirement.
+
+The client session retains the requested labels and rejects unknown or
+contradictory response labels. It accepts partial and reordered responses.
+Management by label selects a held token; omitting the label is allowed only
+when exactly one token is held, including a labelled singleton.
+
+During rotation the session preserves an omitted label and compares flags as
+an unordered set. It refuses a new resource token whose value repeats either
+the previous resource value or the credential used for that management call;
+the latter comparison is explicitly required by RFC 9635 §6.1. Its key-binding
+comparison is conservative: both key fields
+must be absent or both must contain the same explicit representation. The
+session cannot establish equivalence between an implicit client key and an
+explicit key, or resolve two key references. A matching `kid` is not enough:
+different keys can share that identifier. A representation change may therefore
+be refused even when an external resolver could establish the same key. This
+is a documented session limitation, not a new GNAP requirement.
+
 All tokens in a selected batch use the requesting client's key and the common
 lifetime returned by the policy. This path does not issue bearer or durable
 tokens, select different keys for individual tokens, or infer resource-server
 audiences from labels. The deployment still has to authorize each token's
 rights and enforce its intended audience.
 
-The signed AS tests cover selection, partial approval, singleton cardinality,
+The signed AS tests also cover selection, partial approval, singleton cardinality,
 credential and native-identifier collisions, encoder failure, targeted token
 management, reapproval and exact-parent derivation cascades. They are local
-protocol tests, not evidence of interoperability with another implementation
-or of a deployed multi-resource application.
+protocol tests. The consumer adds co-located HTTP execution, not evidence of
+interoperability with another implementation or of a separately deployed
+multi-resource application.

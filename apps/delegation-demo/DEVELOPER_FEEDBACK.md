@@ -92,7 +92,7 @@ lot, a partial approval of the reports token, cross-RS refusals of each token,
 per-label rotation and revocation with the sibling and its derived child left
 in place, a narrowing PATCH approved without consent, a widening PATCH that
 returns to the owner and replaces the lot, a partial approval refused when the
-current request asks for one label only, the retired-token check naming and
+current request does not request reports, the retired-token check naming and
 targeting the right token after a rotation followed by a PATCH, and grant
 revocation. Policy tests cover slot resolution, refusals of other labels,
 rights, shapes and flags, and the per-label modification comparison. The two

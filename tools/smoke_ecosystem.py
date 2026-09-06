@@ -277,6 +277,102 @@ def ongoing_demo(base, outcomes):
     action("check-retired")
 
 
+def multiple_demo(base, outcomes):
+    """Use labelled tokens through the browser adapter, never exposing values."""
+    browser = client()
+    documents = {"synthetic-folder:read", "synthetic-archive:read"}
+    reports = {"synthetic-reports:read"}
+
+    def action(name, expected_status=200):
+        status, _, body, elapsed = request(browser, base, "/api/" + name, "POST", {}, base)
+        expect(status == expected_status and isinstance(body, dict),
+               "Multiple-token action returned an unexpected status: " + name)
+        outcomes.append({"check": "multiple-" + name, "status": "pass", "elapsed_ms": elapsed})
+        return body
+
+    def tokens(body):
+        items = body.get("tokens")
+        expect(isinstance(items, list) and body.get("mode") == "multiple",
+               "Browser lost the explicit multiple-token mode")
+        expect(all(isinstance(item, dict) and set(item) == {"label", "rights"}
+                   and isinstance(item["label"], str) and isinstance(item["rights"], list)
+                   for item in items), "Browser token summary exposed unexpected fields")
+        expect(len({item["label"] for item in items}) == len(items), "Repeated browser token label")
+        return {item["label"]: set(item["rights"]) for item in items}
+
+    def approve(choice="approve"):
+        callback = urllib.parse.urlsplit(action(choice).get("redirect", ""))
+        expected = urllib.parse.urlsplit(base)
+        expect((callback.scheme, callback.netloc, callback.path)
+               == (expected.scheme, expected.netloc, "/callback") and not callback.fragment,
+               "Multiple-token callback left the configured origin/path")
+        status, _, _, _ = request(browser, base, callback.path + "?" + callback.query)
+        expect(status == 303, "Multiple-token callback was refused")
+        wait_for_continuation(browser, base)
+        result = action("continue")
+        expect(result.get("state") == "approved", "Multiple-token consent did not approve a grant")
+        return result
+
+    def retired(label):
+        result = action("check-retired")
+        expect(result.get("retired_token_label") == label
+               and result.get("last_resource_status") == 401,
+               "Retired-token check lost its label or did not refuse access")
+
+    action("start-multiple")
+    expect(tokens(approve()) == {"documents": documents, "reports": reports},
+           "Full approval mixed the two tokens' rights")
+    expect(action("read-reports").get("last_resource_status") == 200, "Reports read was refused")
+    check_metadata(action("read-metadata"))
+    action("rotate-reports")
+    retired("reports")
+    wait_for_continuation(browser, base)
+    reduced = action("downscope")
+    expect(tokens(reduced) == {"documents": {"synthetic-folder:read"}},
+           "Downscope did not replace the complete token set")
+    # This sequence previously retained the reports label with a documents
+    # value, testing an audience refusal instead of the intended retirement.
+    retired("documents")
+    check_metadata(action("read-metadata"))
+    wait_for_continuation(browser, base)
+    expanded = action("expand")
+    expect(expanded.get("state") == "pending"
+           and tokens(expanded) == {"documents": {"synthetic-folder:read"}},
+           "Expansion changed authority before fresh consent")
+    expect(tokens(approve()) == {"documents": documents, "reports": reports},
+           "Fresh consent did not restore both independently labelled tokens")
+    remaining = action("revoke-reports")
+    expect(tokens(remaining) == {"documents": documents}, "Revoking reports changed documents")
+    retired("reports")
+    check_metadata(action("read-metadata"))
+    action("revoke")
+    retired("documents")
+    wait_for_continuation(browser, base)
+    revoked = action("revoke-grant")
+    expect(tokens(revoked) == {} and revoked.get("continuation_open") is False,
+           "Grant deletion retained client authority")
+
+    # A fresh session requests both slots but grants only the second one.
+    browser = client()
+    action("start-multiple")
+    expect(tokens(approve("approve-reports")) == {"reports": reports},
+           "Partial consent did not retain only the requested reports token")
+    action("read", 400)
+    expect(action("read-reports").get("last_resource_status") == 200,
+           "A partial approval's reports token is not usable")
+    wait_for_continuation(browser, base)
+    pending = action("expand")
+    expect(pending.get("state") == "pending" and tokens(pending) == {"reports": reports},
+           "Requesting a previously omitted token skipped consent")
+    expect(tokens(approve()) == {"documents": documents, "reports": reports},
+           "Reapproval of the partial grant did not replace its token set")
+    wait_for_continuation(browser, base)
+    revoked = action("revoke-grant")
+    expect(tokens(revoked) == {} and revoked.get("continuation_open") is False,
+           "Deleting the reapproved grant left tokens held")
+    retired("documents")
+
+
 def demo_alias(base, alias, outcomes):
     """Check an explicitly supplied alias without following its redirects."""
     browser = client()
@@ -294,6 +390,8 @@ def demo_alias(base, alias, outcomes):
 
     for method, path in (
         ("POST", "/api/start"),
+        ("POST", "/api/start-multiple"),
+        ("POST", "/api/approve-reports"),
         ("GET", "/api/status"),
         ("POST", "/gnap"),
         ("OPTIONS", "/gnap"),
@@ -303,6 +401,7 @@ def demo_alias(base, alias, outcomes):
         ("GET", "/resource/folder"),
         ("GET", "/resource/folder-metadata"),
         ("GET", "/resource/archive-metadata"),
+        ("GET", "/resource/reports"),
     ):
         status, headers, _, _ = request(browser, alias, path, method, browser_origin=base)
         expect(status == 421, "Noncanonical API or protocol request was not rejected")
@@ -493,6 +592,50 @@ def derivation_imports(base, outcomes):
                          "status": "pass", "elapsed_ms": elapsed})
 
 
+def token_exchange_imports(base, outcomes):
+    """Compare a declared pair; never treat label matching as issuance evidence."""
+    browser = client()
+    requested = [{"label": "documents", "access": ["read"]},
+                 {"label": "reports", "access": ["reports"]}]
+    issued = {"label": "reports", "value": "synthetic-token-secret", "access": ["reports"]}
+    cases = [
+        ("partial", requested, [issued], {"label-correspondence": "pass"}),
+        ("unknown-label", requested, [issued | {"label": "never-echo-this-label"}],
+         {"label-correspondence": "fail"}),
+        ("wrong-cardinality", requested, issued,
+         {"cardinality": "fail", "label-correspondence": "not_tested"}),
+        ("duplicate-label", requested, [issued, issued],
+         {"response-labels": "fail", "label-correspondence": "not_tested"}),
+        ("empty-response", requested, [],
+         {"response-shape": "pass", "label-correspondence": "not_tested"}),
+        ("singleton-label-added", {"access": ["reports"]}, issued,
+         {"label-correspondence": "pass"}),
+    ]
+    for label, wanted, answered, expected in cases:
+        pair = {"request": {"access_token": wanted}, "response": {"access_token": answered}}
+        status, headers, result, elapsed = request(
+            browser, base, "/api/analyze", "POST",
+            {"kind": "token_exchange", "body": json.dumps(pair)})
+        expect(status == 200 and isinstance(result, dict)
+               and result.get("certification") is False
+               and result.get("profile") == "gnap-token-exchange-import-v1",
+               "Token pair import failed or claimed certification: " + label)
+        expect(headers.get("cache-control") == "no-store", "Token pair import is cacheable")
+        checks = {item["id"]: item["status"] for item in result["checks"]}
+        for name, expected_status in expected.items():
+            expect(checks.get("token-exchange-" + name) == expected_status,
+                   "Wrong token pair diagnostic: " + label + "/" + name)
+        expect(all(checks.get("token-exchange-" + name) == "not_tested"
+                   for name in ("authenticity", "authority", "lifecycle")),
+               "A declared pair was mistaken for authenticated lifecycle evidence")
+        rendered = json.dumps(result)
+        expect(all(value not in rendered for value in
+                   ("synthetic-token-secret", "never-echo-this-label")),
+               "Token pair report reflected an imported value")
+        outcomes.append({"check": "workbench-token-pair-" + label,
+                         "status": "pass", "elapsed_ms": elapsed})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", type=origin)
@@ -509,6 +652,7 @@ def main():
             ready(args.demo, registration=True)
             demo(args.demo, outcomes)
             ongoing_demo(args.demo, outcomes)
+            multiple_demo(args.demo, outcomes)
             if args.demo_alias:
                 demo_alias(args.demo, args.demo_alias, outcomes)
         if args.workbench:
@@ -516,6 +660,7 @@ def main():
             workbench(args.workbench, outcomes)
             rs_imports(args.workbench, outcomes)
             derivation_imports(args.workbench, outcomes)
+            token_exchange_imports(args.workbench, outcomes)
     except (AssertionError, OSError, ValueError, TypeError, KeyError) as error:
         # Do not render arbitrary transport/parser errors, which may contain a
         # URL with a callback secret. Assertions above contain only fixed text.
