@@ -171,8 +171,27 @@ pub trait Policy {
     ///
     /// The default allows it, because an AS that hands out a `manage` field is
     /// offering the two actions §6 defines.
+    /// A key change also needs [`Self::may_rotate_key`] permission. Both checks
+    /// follow proof verification; a denial does not release consumed nonces.
     fn may_rotate(&self, _token: &AccessToken) -> bool {
         true
+    }
+
+    /// Whether this token may be rebound to a proven public key (§6.1.1).
+    ///
+    /// The server must also opt into key rotation. The default denies it;
+    /// possession of the old key alone is not a deployment's permission to
+    /// change a binding. A key change also replaces the token value and needs
+    /// permission from [`Self::may_rotate`]. Denial by either policy method
+    /// is `key_rotation_not_supported` for a key-change request.
+    /// These checks follow both valid proofs and their atomic nonce reservation;
+    /// a refused request needs fresh proofs before it can be tried again.
+    fn may_rotate_key(
+        &self,
+        _token: &crate::TokenRecord,
+        _replacement: &gnap_types::key::KeyObject,
+    ) -> bool {
+        false
     }
 
     /// Whether the AS recognises a user reference the client passed (§2.4.1).
@@ -207,4 +226,56 @@ pub trait Policy {
 pub trait KeyResolver {
     /// The verifier for this client's key, if the AS accepts it.
     fn resolve(&self, client: &Client) -> Option<Box<dyn Verifier>>;
+
+    /// Resolves a token's binding together with its public proof metadata.
+    ///
+    /// `binding: None` selects the original client's key. An explicit binding
+    /// selects the token's key instead, without changing client identity.
+    /// The default accepts public PS256 JWKs by value with parameterless
+    /// `httpsig`; a client or key reference needs an explicit resolver override.
+    /// It never treats a kid as public key material.
+    ///
+    /// An override must validate public key material and return a verifier for
+    /// exactly the returned key, including for references. For a by-value key,
+    /// it must preserve the presented key and proof metadata. This method
+    /// resolves possession, not permission to rotate or authorization to issue.
+    /// A successful key change stores and returns the resolved public key by
+    /// value, even when the request used a reference. Later token management
+    /// therefore does not follow changes to that reference's resolution.
+    fn resolve_token_key(
+        &self,
+        client: &Client,
+        binding: Option<&gnap_types::key::Key>,
+    ) -> Option<ResolvedTokenKey> {
+        let key = binding
+            .or_else(|| client.as_value().map(|value| &value.key))?
+            .as_value()?;
+        key.validate().ok()?;
+        if key.proof.method().as_str() != "httpsig" || !parameterless_proof(&key.proof) {
+            return None;
+        }
+        let verifier = gnap_crypto::Ps256Verifier::from_public_jwk(key.jwk.as_ref()?).ok()?;
+        Some(ResolvedTokenKey {
+            key: key.clone(),
+            verifier: Box::new(verifier),
+        })
+    }
+}
+
+/// Public key metadata and the verifier for exactly that key.
+///
+/// The AS uses the metadata to check proof-method continuity, and verifies
+/// possession with `verifier`. Matching identifiers alone establishes neither.
+pub struct ResolvedTokenKey {
+    /// The resolved public key, never private or symmetric key material.
+    pub key: gnap_types::key::KeyObject,
+    /// The cryptographic verifier for `key`.
+    pub verifier: Box<dyn Verifier>,
+}
+
+pub(crate) fn parameterless_proof(proof: &gnap_types::key::Proof) -> bool {
+    match proof {
+        gnap_types::polymorphic::MethodOrObject::Named(_) => true,
+        gnap_types::polymorphic::MethodOrObject::Detailed { params, .. } => params.is_empty(),
+    }
 }

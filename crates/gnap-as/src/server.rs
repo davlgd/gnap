@@ -6,6 +6,7 @@
 //! network lets a client and a server be wired straight together.
 
 mod issuance;
+mod key_rotation;
 
 use crate::encoding::{
     EncodedToken, OpaqueTokenEncoder, TokenEncoder, TokenEncodingContext, TokenEncodingError,
@@ -15,8 +16,8 @@ use crate::policy::{
     Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround,
 };
 use crate::storage::{
-    DerivedGrantStore, GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot, Storage,
-    StoreError, TokenRecord,
+    DerivedGrantStore, GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot,
+    RotationNonceStore, Storage, StoreError, TokenRecord,
 };
 use gnap_core::{Event, Grant, State};
 use gnap_crypto::hash::{interaction_hash_named, InteractionHashInput};
@@ -162,8 +163,14 @@ pub struct AuthorizationServer<P, K, S, N, E = OpaqueTokenEncoder> {
     nonces: N,
     endpoints: Endpoints,
     development_http_discovery: bool,
+    /// The store's atomic nonce-pair reservation, captured by
+    /// [`Self::with_key_rotation`]; `None` means key rotation is disabled.
+    key_rotation: Option<NoncePairReservation<S>>,
     encoder: E,
 }
+
+/// The [`RotationNonceStore::remember_nonce_pair`] of the server's own store.
+type NoncePairReservation<S> = fn(&S, Option<&str>, Option<&str>, u64) -> bool;
 
 /// All newly generated credentials are chosen before invoking the encoder.
 struct PreparedToken {
@@ -494,6 +501,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
             nonces,
             endpoints,
             development_http_discovery: false,
+            key_rotation: None,
             encoder: OpaqueTokenEncoder,
         }
     }
@@ -517,6 +525,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             nonces: self.nonces,
             endpoints: self.endpoints,
             development_http_discovery: self.development_http_discovery,
+            key_rotation: self.key_rotation,
             encoder,
         }
     }
@@ -531,6 +540,50 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     #[must_use]
     pub const fn with_development_http_discovery(mut self) -> Self {
         self.development_http_discovery = true;
+        self
+    }
+
+    /// Opts the token-management endpoint into linked HTTP-signature key rotation.
+    ///
+    /// Disabled by default. Enabling it also advertises the capability through
+    /// discovery, but [`Policy::may_rotate_key`] still decides for each token.
+    /// The key resolver must resolve both bindings, and the encoder and RS must
+    /// honor explicit token keys. Turning the capability off does not erase
+    /// already stored token bindings.
+    /// Both proofs must carry nonempty nonces under this SDK's replay policy.
+    ///
+    /// The store must implement [`RotationNonceStore`]: the two proof nonces of
+    /// a rotation are reserved together or not at all, and that reservation is
+    /// captured here. A store without the capability cannot enable rotation:
+    ///
+    /// ```
+    /// use gnap_as::{AuthorizationServer, KeyResolver, Nonces, Policy, RotationNonceStore, Storage};
+    /// # #[allow(dead_code)]
+    /// fn enable<P: Policy, K: KeyResolver, S: Storage + RotationNonceStore, N: Nonces>(
+    ///     server: AuthorizationServer<P, K, S, N>,
+    /// ) -> AuthorizationServer<P, K, S, N> {
+    ///     server.with_key_rotation(true)
+    /// }
+    /// ```
+    ///
+    /// The same code with a plain [`Storage`] bound does not compile:
+    ///
+    /// ```compile_fail,E0277
+    /// use gnap_as::{AuthorizationServer, KeyResolver, Nonces, Policy, Storage};
+    /// # #[allow(dead_code)]
+    /// fn enable<P: Policy, K: KeyResolver, S: Storage, N: Nonces>(
+    ///     server: AuthorizationServer<P, K, S, N>,
+    /// ) -> AuthorizationServer<P, K, S, N> {
+    ///     server.with_key_rotation(true)
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn with_key_rotation(mut self, enabled: bool) -> Self
+    where
+        S: RotationNonceStore,
+    {
+        let reserve: NoncePairReservation<S> = <S as RotationNonceStore>::remember_nonce_pair;
+        self.key_rotation = if enabled { Some(reserve) } else { None };
         self
     }
 
@@ -586,7 +639,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             key_proofs_supported: Some(vec![gnap_registry::KeyProofingMethod::Httpsig]),
             sub_id_formats_supported: None,
             assertion_formats_supported: None,
-            key_rotation_supported: Some(false),
+            key_rotation_supported: Some(self.key_rotation.is_some()),
             extra: serde_json::Map::new(),
         };
         let validity = if self.development_http_discovery {
@@ -737,9 +790,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
 
     /// A call to the token management API (§6).
     ///
-    /// §6 defines two actions and nothing else: POST rotates the token's value
-    /// (§6.1), DELETE revokes it (§6.2). "Other actions are undefined by this
-    /// specification", so nothing else is answered.
+    /// §6 defines two actions: POST rotates the token's value (§6.1) and may
+    /// bind a new key when enabled (§6.1.1); DELETE revokes it (§6.2). "Other
+    /// actions are undefined by this specification", so nothing else is answered.
     ///
     /// `now` is the current time in seconds since the Unix epoch; see
     /// [`unix_now`](gnap_types::unix_now).
@@ -784,28 +837,61 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             return invalid_management_credentials();
         }
 
+        // Decide on the request shape before ordinary verification consumes a
+        // nonce. A key-rotation body must never fall through to value rotation,
+        // including when one of its two signatures is absent or invalid.
+        if rotating
+            && (request.body.as_ref().is_some_and(|body| !body.is_empty())
+                || key_rotation::has_rotation_proof(request))
+        {
+            return self.rotate_bound_key(snapshot, handle, request, now);
+        }
+
         // §6-M03 — "The AS MUST validate the proof and ensure that it is
-        // associated with the token management access token." The key is the
-        // client's, and the record is what identifies the client.
-        let Some(verifier) = self.keys.resolve(&record.client) else {
+        // associated with the token management access token." The record names
+        // its current binding, which may differ from the original grant key.
+        let resolved_binding = if let Some(binding) = record.token.key.as_ref() {
+            let Some(resolved) = self.keys.resolve_token_key(&record.client, Some(binding)) else {
+                return invalid_management_credentials();
+            };
+            if !key_rotation::resolved_binding_matches(binding, &resolved) {
+                return misconfigured("the token key resolver changed a stored binding");
+            }
+            Some(resolved)
+        } else {
+            None
+        };
+        let verifier = match resolved_binding.as_ref() {
+            Some(_) => None,
+            None => self.keys.resolve(&record.client),
+        };
+        let verifier = resolved_binding
+            .as_ref()
+            .map(|resolved| resolved.verifier.as_ref())
+            .or(verifier.as_deref());
+        let Some(verifier) = verifier else {
             return error(
                 ErrorCode::InvalidClient,
                 "the client instance is not recognised",
             );
         };
-        let presented_kid = match presented_key(&record.client) {
+        let presented_kid = match resolved_binding
+            .as_ref()
+            .map(|resolved| &resolved.key)
+            .or_else(|| presented_key(&record.client))
+        {
             None => None,
-            Some(key) => match check_presented_key(key, verifier.as_ref()) {
+            Some(key) => match check_presented_key(key, verifier) {
                 Ok(kid) => kid,
                 Err(r) => return r,
             },
         };
-        if let Err(r) = self.verify_signature(request, verifier.as_ref(), presented_kid, now) {
+        if let Err(r) = self.verify_signature(request, verifier, presented_kid, now) {
             return r;
         }
 
         if rotating {
-            self.rotate_token(snapshot, handle, request, now)
+            self.replace_token(snapshot, handle, now, None)
         } else {
             // §6.2-M02 — "the AS MUST invalidate the access token, if possible,
             // and return an HTTP response code 204."
@@ -821,37 +907,49 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         }
     }
 
-    /// Value rotation is bodyless; key rotation is explicitly unsupported.
-    fn validate_rotation_content(request: &HttpRequest) -> Result<(), HttpResponse> {
-        if request.body.as_ref().is_none_or(Vec::is_empty) {
-            return Ok(());
-        }
-        require_json_content(request)?;
-        let body = Self::parse::<serde_json::Map<String, serde_json::Value>>(request)?;
-        if body.contains_key("key") {
+    /// Checks renewal time and value permission after request authentication.
+    fn check_rotation_policy(
+        &self,
+        record: &TokenRecord,
+        now: u64,
+        key_change: bool,
+    ) -> Result<(), HttpResponse> {
+        // §6.1 — "If the AS is unable or unwilling to rotate the value of the
+        // access token, the AS responds with an invalid_rotation error." The
+        // client then "MUST consider the access token to not have changed its
+        // state", so a refusal performs no storage write.
+        // SDK policy, not an RFC requirement: an expired or not-yet-issued
+        // value cannot be renewed. A clock rollback or an unrepresentable new
+        // deadline must not extend it either. Keep all original metadata.
+        if !rotation_permitted_at(record, now) {
             return Err(error(
-                ErrorCode::KeyRotationNotSupported,
-                "this server does not rotate the key bound to an access token (RFC 9635 §6.1.1)",
+                ErrorCode::InvalidRotation,
+                "token lifetime prevents rotation (RFC 9635 §6.1)",
             ));
         }
-        Err(error(
-            ErrorCode::InvalidRequest,
-            "value rotation has no message content; binding a new key requires a key field (RFC 9635 §6.1, §6.1.1)",
-        ))
+        if !self.policy.may_rotate(&record.token) {
+            // A key change also replaces the value, so both permissions are
+            // required. Use the key-specific refusal for that request (§6.1.1).
+            return Err(error(
+                if key_change {
+                    ErrorCode::KeyRotationNotSupported
+                } else {
+                    ErrorCode::InvalidRotation
+                },
+                "server policy prevents rotation",
+            ));
+        }
+        Ok(())
     }
 
-    /// Rotates the value of a managed access token (§6.1).
-    fn rotate_token(
+    /// Publishes a replacement value, optionally with a newly proven binding.
+    fn replace_token(
         &self,
         mut snapshot: GrantSnapshot,
         handle: &str,
-        request: &HttpRequest,
         now: u64,
+        binding: Option<gnap_types::key::Key>,
     ) -> HttpResponse {
-        if let Err(response) = Self::validate_rotation_content(request) {
-            return response;
-        }
-
         // Work on the authenticated snapshot. Publication is a single CAS;
         // the original stays visible while policy and encoding run.
         let Some(record) = snapshot.aggregate.tokens.get(handle).cloned() else {
@@ -860,19 +958,8 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 "no access token is managed at this URI (RFC 9635 §6)",
             );
         };
-
-        // §6.1 — "If the AS is unable or unwilling to rotate the value of the
-        // access token, the AS responds with an invalid_rotation error." The
-        // client then "MUST consider the access token to not have changed its
-        // state", so a refusal performs no storage write.
-        // SDK policy, not an RFC requirement: an expired or not-yet-issued
-        // value cannot be renewed. A clock rollback or an unrepresentable new
-        // deadline must not extend it either. Keep all original metadata.
-        if !rotation_permitted_at(&record, now) || !self.policy.may_rotate(&record.token) {
-            return error(
-                ErrorCode::InvalidRotation,
-                "token lifetime or server policy prevents rotation (RFC 9635 §6.1)",
-            );
+        if let Err(response) = self.check_rotation_policy(&record, now, binding.is_some()) {
+            return response;
         }
 
         let (Ok(candidate), Ok(management_token)) = (
@@ -889,11 +976,15 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // token, with the same rights and properties as the original token,
         // apart from an updated token value and expiration time." §6.1-M05
         // makes the rights explicit: they "MUST be included in the response and
-        // MUST be the same as the token before rotation", which is why only the
-        // value and the management API are replaced here.
+        // MUST be the same as the token before rotation". Even a key change
+        // preserves the rights, label and flags of the original token.
         let rotated_handle = self.nonces.next();
+        let mut rotated = record.clone();
+        if let Some(binding) = binding {
+            rotated.token.key = Some(binding);
+        }
         let Ok(encoded) = self.encode_rotated_token(
-            &record,
+            &rotated,
             &snapshot.aggregate,
             now,
             &candidate,
@@ -906,7 +997,6 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         };
         // Keep the original until the replacement is fully validated. A failed
         // rotation leaves the existing token unchanged (§6.1).
-        let mut rotated = record.clone();
         rotated.issued_at = now;
         rotated.token.value = encoded.value;
         rotated.identifier = encoded.identifier;
@@ -1535,6 +1625,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         }
         self.encode_access_token(
             &record.client,
+            record.token.key.as_ref(),
             record.token.access.as_deref().unwrap_or_default(),
             now,
             record.token.expires_in,
@@ -1596,7 +1687,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             ));
         }
         let encoded = self
-            .encode_access_token(&request.client, access, now, expires_in, &candidate)
+            .encode_access_token(&request.client, None, access, now, expires_in, &candidate)
             .map_err(|_| misconfigured("unable to encode an access token"))?;
         if encoded.value == management_token
             || continuation.as_ref() == Some(&encoded.value)
@@ -1631,6 +1722,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     fn encode_access_token(
         &self,
         client: &Client,
+        binding: Option<&gnap_types::key::Key>,
         access: &[AccessItem],
         issued_at: u64,
         expires_in: Option<u64>,
@@ -1639,6 +1731,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         let encoded = self.encoder.encode(&TokenEncodingContext {
             issuer: &self.endpoints.grant,
             client,
+            binding,
             access,
             issued_at,
             expires_in,

@@ -521,6 +521,22 @@ fn ordinary_verification_still_requires_gnap_and_shares_nonce_state() {
 }
 
 #[test]
+fn stripping_the_body_cannot_turn_the_old_proof_into_a_value_rotation() {
+    let request = Request::signed();
+    let stripped = SignedRequest {
+        body: None,
+        ..request.view()
+    };
+    let spent = Cell::new(false);
+    let remember = |_: &str, _: u64| {
+        spent.set(true);
+        true
+    };
+    assert!(verify_request(&stripped, &old_key().verifier(), &expectations(), &remember).is_err());
+    assert!(!spent.get());
+}
+
+#[test]
 fn resource_limits_and_clock_mismatch_fail_before_crypto() {
     struct Unused;
     impl Verifier for Unused {

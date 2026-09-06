@@ -11,7 +11,7 @@ use axum::{
 use gnap_as::{
     AuthorizationServer, Decision, DerivedGrantStore, Endpoints, EvaluationContext, Finish,
     GrantAggregate, GrantId, GrantSelector, GrantSnapshot, GrantStore, KeyResolver, MemoryStorage,
-    NonceStore, OsNonces, Policy, Revision, StoreError,
+    NonceStore, OsNonces, Policy, Revision, RotationNonceStore, StoreError,
 };
 use gnap_client::{sign_request, HttpRequest, HttpResponse, HttpTransport, Session};
 use gnap_crypto::{httpsig::fresh_nonce, proof::Verifier, ps256::Ps256Signer};
@@ -337,6 +337,17 @@ impl DerivedGrantStore for IndexedStorage {
 impl NonceStore for IndexedStorage {
     fn remember_nonce(&self, nonce: &str, now: u64) -> bool {
         self.nonces.remember_nonce(nonce, now)
+    }
+}
+
+impl RotationNonceStore for IndexedStorage {
+    fn remember_nonce_pair(
+        &self,
+        previous: Option<&str>,
+        replacement: Option<&str>,
+        now: u64,
+    ) -> bool {
+        self.nonces.remember_nonce_pair(previous, replacement, now)
     }
 }
 

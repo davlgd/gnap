@@ -221,7 +221,8 @@
 //! Implement [`GrantStore::create`], [`GrantStore::lookup`],
 //! [`GrantStore::compare_exchange`] and [`GrantStore::remove`] as transactions.
 //! Downstream derivation is a separate, opt-in capability: only stores that
-//! also implement [`DerivedGrantStore`] can serve the derivation handler.
+//! also implement [`DerivedGrantStore`] can serve the derivation handler, and
+//! only stores implementing [`RotationNonceStore`] can enable key rotation.
 //! A lookup returns one [`GrantSnapshot`], including its [`Revision`]. Authenticate
 //! and prepare changes from that snapshot, then replace the whole aggregate
 //! against that revision. All continuation, interaction, management, access-value
@@ -270,7 +271,8 @@ pub use encoding::{
 };
 pub use nonce::{Nonces, OsNonces};
 pub use policy::{
-    Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround, TokenApproval,
+    Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, ResolvedTokenKey,
+    SubjectGround, TokenApproval,
 };
 pub use resource_sets::{
     MemoryResourceSetStore, ResourceSet, ResourceSetError, ResourceSetLimits, ResourceSetStore,
@@ -285,5 +287,6 @@ pub use server::{
 };
 pub use storage::{
     DerivedGrantStore, GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantSnapshot,
-    GrantStore, MemoryStorage, NonceStore, Revision, Storage, StoreError, TokenRecord,
+    GrantStore, MemoryStorage, NonceStore, Revision, RotationNonceStore, Storage, StoreError,
+    TokenRecord,
 };

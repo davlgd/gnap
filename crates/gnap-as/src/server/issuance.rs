@@ -241,6 +241,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             let encoded = self
                 .encode_access_token(
                     &request.client,
+                    None,
                     &approval.access,
                     now,
                     expires_in,
