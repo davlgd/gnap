@@ -479,17 +479,6 @@ struct FaultyStorage {
     reads: Cell<usize>,
 }
 impl GrantStore for FaultyStorage {
-    fn create_derived(
-        &self,
-        parent: GrantId,
-        revision: Revision,
-        value: &gnap_types::token::TokenValue,
-        child: GrantAggregate,
-        clock: &dyn Fn() -> u64,
-    ) -> Result<GrantSnapshot, StoreError> {
-        self.base
-            .create_derived(parent, revision, value, child, clock)
-    }
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
         self.base.create(aggregate)
     }

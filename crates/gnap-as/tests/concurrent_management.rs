@@ -80,17 +80,6 @@ struct PausedRead {
     release: Arc<Gate>,
 }
 impl GrantStore for PausedRead {
-    fn create_derived(
-        &self,
-        parent: GrantId,
-        revision: Revision,
-        value: &gnap_types::token::TokenValue,
-        child: GrantAggregate,
-        clock: &dyn Fn() -> u64,
-    ) -> Result<GrantSnapshot, StoreError> {
-        self.inner
-            .create_derived(parent, revision, value, child, clock)
-    }
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
         self.inner.create(aggregate)
     }
@@ -241,17 +230,6 @@ struct PausedCas {
     release: Arc<Gate>,
 }
 impl GrantStore for PausedCas {
-    fn create_derived(
-        &self,
-        parent: GrantId,
-        revision: Revision,
-        value: &gnap_types::token::TokenValue,
-        child: GrantAggregate,
-        clock: &dyn Fn() -> u64,
-    ) -> Result<GrantSnapshot, StoreError> {
-        self.inner
-            .create_derived(parent, revision, value, child, clock)
-    }
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
         self.inner.create(aggregate)
     }

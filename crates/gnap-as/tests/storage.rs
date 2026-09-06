@@ -1,8 +1,8 @@
 //! Atomic aggregate publication, independent of protocol and cryptographic work.
 
 use gnap_as::{
-    GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantStore, MemoryStorage, NonceStore,
-    Revision, Storage, StoreError, TokenRecord,
+    DerivedGrantStore, GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantStore,
+    MemoryStorage, NonceStore, Revision, Storage, StoreError, TokenRecord,
 };
 use gnap_core::Grant;
 use std::sync::Arc;
@@ -216,10 +216,14 @@ fn abandoned_and_stale_candidates_write_nothing() {
 #[test]
 fn a_shared_store_is_the_store_itself() {
     fn accepts<S: Storage>(_: &S) {}
+    fn derives<S: DerivedGrantStore>(_: &S) {}
     let shared = Arc::new(MemoryStorage::new());
     let borrowed: &MemoryStorage = &shared;
     accepts(&shared);
     accepts(&borrowed);
+    // The shared forms keep the optional derivation capability as well.
+    derives(&shared);
+    derives(&borrowed);
     let original = shared.create(populated("one")).unwrap();
     let mut candidate = borrowed
         .lookup(GrantSelector::Management("handle-one"))

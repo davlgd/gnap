@@ -9,9 +9,9 @@ use axum::{
     Json, Router,
 };
 use gnap_as::{
-    AuthorizationServer, Decision, Endpoints, EvaluationContext, Finish, GrantAggregate, GrantId,
-    GrantSelector, GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore, OsNonces,
-    Policy, Revision, StoreError,
+    AuthorizationServer, Decision, DerivedGrantStore, Endpoints, EvaluationContext, Finish,
+    GrantAggregate, GrantId, GrantSelector, GrantSnapshot, GrantStore, KeyResolver, MemoryStorage,
+    NonceStore, OsNonces, Policy, Revision, StoreError,
 };
 use gnap_client::{sign_request, HttpRequest, HttpResponse, HttpTransport, Session};
 use gnap_crypto::{httpsig::fresh_nonce, proof::Verifier, ps256::Ps256Signer};
@@ -268,25 +268,6 @@ impl IndexedStorage {
     }
 }
 impl GrantStore for IndexedStorage {
-    fn create_derived(
-        &self,
-        parent: GrantId,
-        revision: Revision,
-        parent_value: &TokenValue,
-        child: GrantAggregate,
-        clock: &dyn Fn() -> u64,
-    ) -> Result<GrantSnapshot, StoreError> {
-        let mut state = self.lock()?;
-        if state.continuation_deadlines.len() >= MAX_GRANTS {
-            return Err(StoreError::Unavailable);
-        }
-        let deadline = clock().checked_add(60).ok_or(StoreError::Exhausted)?;
-        let snapshot = state
-            .base
-            .create_derived(parent, revision, parent_value, child, clock)?;
-        state.continuation_deadlines.insert(snapshot.id, deadline);
-        Ok(snapshot)
-    }
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
         let mut state = self.lock()?;
         let now = now();
@@ -328,6 +309,28 @@ impl GrantStore for IndexedStorage {
         state.base.remove(id, revision)?;
         state.continuation_deadlines.remove(&id);
         Ok(())
+    }
+}
+
+impl DerivedGrantStore for IndexedStorage {
+    fn create_derived(
+        &self,
+        parent: GrantId,
+        revision: Revision,
+        parent_value: &TokenValue,
+        child: GrantAggregate,
+        clock: &dyn Fn() -> u64,
+    ) -> Result<GrantSnapshot, StoreError> {
+        let mut state = self.lock()?;
+        if state.continuation_deadlines.len() >= MAX_GRANTS {
+            return Err(StoreError::Unavailable);
+        }
+        let deadline = clock().checked_add(60).ok_or(StoreError::Exhausted)?;
+        let snapshot = state
+            .base
+            .create_derived(parent, revision, parent_value, child, clock)?;
+        state.continuation_deadlines.insert(snapshot.id, deadline);
+        Ok(snapshot)
     }
 }
 impl NonceStore for IndexedStorage {
