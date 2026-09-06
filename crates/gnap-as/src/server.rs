@@ -17,14 +17,14 @@ use crate::policy::{
 };
 use crate::storage::{
     DerivedGrantStore, GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot,
-    RotationNonceStore, Storage, StoreError, TokenRecord,
+    RotationNonceStore, Storage, StoreError, TokenRecord, UserCodeStore,
 };
 use gnap_core::{Event, Grant, State};
 use gnap_crypto::hash::{interaction_hash_named, InteractionHashInput};
 use gnap_crypto::verify::{verify_request, Expectations, SignedRequest};
 use gnap_registry::{ErrorCode, InteractionFinishMethod};
 use gnap_types::http::{HttpRequest, HttpResponse};
-use gnap_types::interact::{InteractCallback, InteractFinish, InteractResponse};
+use gnap_types::interact::{InteractCallback, InteractFinish, InteractResponse, UserCodeUri};
 use gnap_types::message::{AsDiscovery, Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{AccessToken, AccessTokenResponse, BoundToken, TokenManage, TokenValue};
 use gnap_types::GnapError;
@@ -166,6 +166,7 @@ pub struct AuthorizationServer<P, K, S, N, E = OpaqueTokenEncoder> {
     /// The store's atomic nonce-pair reservation, captured by
     /// [`Self::with_key_rotation`]; `None` means key rotation is disabled.
     key_rotation: Option<NoncePairReservation<S>>,
+    user_codes: Option<crate::user_code::Configuration<S>>,
     encoder: E,
 }
 
@@ -424,6 +425,7 @@ impl<P: Policy, K: KeyResolver, S: Storage + DerivedGrantStore, N: Nonces>
             request: stored_request,
             continuation_token: None,
             as_nonce: None,
+            user_code: None,
             interact_handle: None,
             interact_expires_at: None,
             interact_ref: None,
@@ -502,6 +504,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
             endpoints,
             development_http_discovery: false,
             key_rotation: None,
+            user_codes: None,
             encoder: OpaqueTokenEncoder,
         }
     }
@@ -526,8 +529,103 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             endpoints: self.endpoints,
             development_http_discovery: self.development_http_discovery,
             key_rotation: self.key_rotation,
+            user_codes: self.user_codes,
             encoder,
         }
+    }
+
+    /// Enables both human-code start modes at a stable web-entry URI.
+    ///
+    /// The adapter must serve that URI, obtain consent and limit guessing. Codes
+    /// identify requests; they do not authenticate the resource owner. This
+    /// profile uses eight Crockford base32 symbols and the interaction lifetime.
+    /// A dedicated draw from the trusted [`Nonces`] source feeds each code.
+    ///
+    /// The URI is fixed, at most 256 bytes, HTTPS or HTTP loopback, without
+    /// userinfo, query, fragment or percent encoding. These are profile bounds,
+    /// not all URI forms allowed by GNAP. Prefer a manually typable URI; RFC
+    /// 9635 §4.1.3 recommends 20 characters or fewer. Code-only clients know it
+    /// out of band; `user_code_uri` clients receive it unchanged.
+    ///
+    /// [`UserCodeStore`] keeps this capability optional for ordinary adapters.
+    /// Discovery announces the start modes after this opt-in, not completion
+    /// of the Secondary Device interoperability profile.
+    ///
+    /// A store with the optional capability can enable the modes:
+    ///
+    /// ```
+    /// use gnap_as::{AuthorizationServer, InteractionError, KeyResolver, Nonces, Policy, Storage, UserCodeStore};
+    /// # #[allow(dead_code)]
+    /// fn enable<P: Policy, K: KeyResolver, S: Storage + UserCodeStore, N: Nonces>(
+    ///     server: AuthorizationServer<P, K, S, N>,
+    /// ) -> Result<AuthorizationServer<P, K, S, N>, InteractionError> {
+    ///     server.with_user_code_uri("https://as.example/code")
+    /// }
+    /// ```
+    ///
+    /// A plain storage bound is insufficient for that opt-in:
+    ///
+    /// ```compile_fail,E0277
+    /// use gnap_as::{AuthorizationServer, InteractionError, KeyResolver, Nonces, Policy, Storage};
+    /// # #[allow(dead_code)]
+    /// fn enable<P: Policy, K: KeyResolver, S: Storage, N: Nonces>(
+    ///     server: AuthorizationServer<P, K, S, N>,
+    /// ) -> Result<AuthorizationServer<P, K, S, N>, InteractionError> {
+    ///     server.with_user_code_uri("https://as.example/code")
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    /// Refuses an invalid URI without reflecting configuration values.
+    pub fn with_user_code_uri(mut self, uri: impl Into<String>) -> Result<Self, InteractionError>
+    where
+        S: UserCodeStore,
+    {
+        let uri = uri.into();
+        if !crate::user_code::valid_uri(&uri) {
+            return Err(InteractionError::Misconfigured(
+                "invalid user-code entry URI",
+            ));
+        }
+        self.user_codes = Some(crate::user_code::Configuration {
+            uri,
+            lookup: S::lookup_user_code,
+        });
+        Ok(self)
+    }
+
+    /// Resolves a human-entered code to the pending request's opaque handle.
+    ///
+    /// This neither authenticates the resource owner nor approves or consumes
+    /// anything. The interaction component must enforce admission limits and
+    /// obtain consent before calling [`Self::complete_interaction`]. Keep the
+    /// returned handle inside that trusted component, not in the entry URI.
+    /// Invalid or expired codes must display an error, never a client redirect.
+    /// Show the same generic message for unknown and expired codes and count
+    /// both against admission limits; the SDK's distinction is diagnostic only.
+    /// # Errors
+    /// Refuses disabled, malformed, unknown, expired or completed interactions;
+    /// reports storage failure separately without reflecting the supplied code.
+    pub fn resolve_user_code(&self, input: &str, now: u64) -> Result<String, InteractionError> {
+        let configuration = self
+            .user_codes
+            .as_ref()
+            .ok_or(InteractionError::UnknownInteraction)?;
+        let code = crate::normalize_user_code(input).ok_or(InteractionError::UnknownInteraction)?;
+        let snapshot = (configuration.lookup)(&self.storage, &code)
+            .map_err(InteractionError::Storage)?
+            .ok_or(InteractionError::UnknownInteraction)?;
+        let record = &snapshot.aggregate.record;
+        if record.grant.state() != State::Pending || record.interaction_completed {
+            return Err(InteractionError::UnknownInteraction);
+        }
+        if record.interact_expires_at.is_none_or(|end| now >= end) {
+            return Err(InteractionError::Expired);
+        }
+        record
+            .interact_handle
+            .clone()
+            .ok_or(InteractionError::UnknownInteraction)
     }
 
     /// Explicitly permits HTTP-loopback discovery for local development only.
@@ -615,9 +713,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     /// Answers OPTIONS discovery at the exact configured grant endpoint (§9).
     ///
     /// No grant, key resolution, signature check or nonce consumption occurs.
-    /// Only fixed engine capabilities are announced: `httpsig` and lack of
-    /// token-bound key rotation. Optional interaction/subject fields are omitted
-    /// because their availability depends on policy and HTTP adapter behavior;
+    /// Engine capabilities include `httpsig`, the key-rotation setting,
+    /// redirect start and, after explicit configuration, both user-code starts.
+    /// Other interaction/subject fields are omitted because their availability
+    /// depends on policy and HTTP adapter behavior;
     /// a registry enum is not a deployment's capability catalogue.
     /// This is discovery, not a CORS preflight policy: it adds no cross-origin
     /// permission headers. An HTTP adapter must define any such policy separately.
@@ -632,9 +731,16 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         if !request.method.eq_ignore_ascii_case("OPTIONS") {
             return method_not_allowed("POST, OPTIONS");
         }
+        let mut starts = vec![gnap_registry::InteractionStartMode::Redirect];
+        if self.user_codes.is_some() {
+            starts.extend([
+                gnap_registry::InteractionStartMode::UserCode,
+                gnap_registry::InteractionStartMode::UserCodeUri,
+            ]);
+        }
         let discovery = AsDiscovery {
             grant_request_endpoint: self.endpoints.grant.clone(),
-            interaction_start_modes_supported: None,
+            interaction_start_modes_supported: Some(starts),
             interaction_finish_methods_supported: None,
             key_proofs_supported: Some(vec![gnap_registry::KeyProofingMethod::Httpsig]),
             sub_id_formats_supported: None,
@@ -774,6 +880,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             request: body,
             continuation_token: None,
             as_nonce: None,
+            user_code: None,
             interact_handle: None,
             interact_expires_at: None,
             interact_ref: None,
@@ -1112,6 +1219,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         }
         if aggregate.record.continuation_token.is_none() {
             aggregate.record.interact_handle = None;
+            aggregate.record.user_code = None;
             aggregate.record.interact_ref = None;
             aggregate.record.interact_expires_at = None;
             aggregate.record.grant.withhold_continuation();
@@ -1294,6 +1402,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             record.interact_ref = None;
             record.as_nonce = None;
             record.interact_handle = None;
+            record.user_code = None;
             record.interact_expires_at = None;
         }
         let after_interaction = record.interaction_completed && (returning || !expects_reference);
@@ -1369,6 +1478,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     ) -> Result<Finish, InteractionError> {
         // §4.2 — the AS MUST NOT follow the finish method when "The ongoing
         // grant request has been canceled or otherwise blocked".
+        if record.interaction_completed {
+            return Err(InteractionError::UnknownInteraction);
+        }
         if record.grant.state() != State::Pending {
             return Err(InteractionError::NotPending(record.grant.state()));
         }
@@ -1433,6 +1545,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             // the client instance, which is polling the continuation endpoint.
             record.interaction_completed = true;
             record.interact_handle = None;
+            record.user_code = None;
             return Ok(Finish::SendTheUserBack);
         };
 
@@ -1476,6 +1589,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         record.interact_ref = Some(interact_ref);
         // §4.2 — the interaction is spent; a second completion finds nothing.
         record.interact_handle = None;
+        record.user_code = None;
         Ok(directive)
     }
 
@@ -1923,6 +2037,28 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         ok(&response)
     }
 
+    /// Generates a code not currently indexed, with a bounded collision budget.
+    /// Publication still checks uniqueness atomically; a race is not retried.
+    fn next_user_code(&self) -> Result<Option<String>, HttpResponse> {
+        let Some(configuration) = &self.user_codes else {
+            return Ok(None);
+        };
+        for _ in 0..3 {
+            let code = crate::user_code::generate(&self.nonces)
+                .ok_or_else(|| misconfigured("user-code randomness unavailable"))?;
+            if !configuration.uri.to_ascii_uppercase().contains(&code)
+                && (configuration.lookup)(&self.storage, &code)
+                    .map_err(storage_failure)?
+                    .is_none()
+            {
+                return Ok(Some(code));
+            }
+        }
+        Err(misconfigured(
+            "user-code generation exhausted its collision budget",
+        ))
+    }
+
     /// Answers `pending`: somewhere to send the end user, and a way back (§3.3).
     fn offer_interaction(
         &self,
@@ -1938,8 +2074,12 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
 
         // §3.3 — never answer with a mode the client did not offer.
         let mut handle = None;
+        let mut user_code = None;
         if let Some(i) = &request.interact {
             let offers = |m: &str| i.start.iter().any(|s| s.method().as_str() == m);
+            if offers("user_code") || offers("user_code_uri") {
+                user_code = self.next_user_code()?;
+            }
             if offers("redirect") {
                 // §4.2 has to find this grant again once the RO is done, and
                 // the interaction URI is all the AS will see at that point;
@@ -1955,6 +2095,26 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 // rather than left to guess at the timeout §4-M04 asks for.
                 interact.expires_in = Some(INTERACTION_LIFETIME);
             }
+            if let Some(code) = &user_code {
+                if handle.is_none() {
+                    handle = Some(self.nonces.next());
+                }
+                if offers("user_code") {
+                    interact.user_code = Some(code.clone());
+                }
+                if offers("user_code_uri") {
+                    interact.user_code_uri = Some(UserCodeUri {
+                        code: code.clone(),
+                        uri: self
+                            .user_codes
+                            .as_ref()
+                            .expect("configured code source")
+                            .uri
+                            .clone(),
+                    });
+                }
+                interact.expires_in = Some(INTERACTION_LIFETIME);
+            }
             if i.finish.is_some() {
                 interact.finish = Some(nonce.clone());
             }
@@ -1964,7 +2124,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // AS can drive, and the AS has no way to reach the RO on its own, it
         // MUST say so. Answering `pending` with an empty `interact` would leave
         // the client polling a grant that can never advance.
-        if interact.redirect.is_none() && interact.app.is_none() {
+        if interact.redirect.is_none() && interact.app.is_none() && user_code.is_none() {
             return Err(error(
                 ErrorCode::InvalidInteraction,
                 "interaction is required, the client instance offers no mechanism this AS \
@@ -1996,6 +2156,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         record.continuation_token = Some(token);
         record.as_nonce = Some(nonce);
         record.interact_handle = handle;
+        record.user_code = user_code;
         record.interact_expires_at = Some(now.saturating_add(INTERACTION_LIFETIME));
         record.interact_ref = None;
         record.interaction_completed = false;

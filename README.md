@@ -301,13 +301,17 @@ should be read as covering them:
 | §9.1 | Resource-server-first discovery |
 | RFC 9767 §§3.3–4 | Biscuit introspection and downstream profiles beyond the selected one-hop opaque flow |
 
-The interaction modes the AS drives are `redirect` and, with no finish method,
-polling. `app`, `user_code` and `user_code_uri` are modelled in `gnap-types` but
-no AS in this workspace starts them.
+The AS supports `redirect` and opt-in [`user_code` and `user_code_uri`
+starts](docs/secondary-device-interaction.md). The code modes have SDK lifecycle
+tests; their web entry page, consent flow and attempt limits still need a
+consumer. The `app` start is modelled but not served. With no finish method,
+the client polls for completion; polling is not a separate interaction start.
 
 The AS answers OPTIONS at its grant endpoint with the discovery document from
-§9. It announces HTTP signatures and the configured bound-key rotation setting;
-other deployment-dependent capability lists are omitted. Public discovery
+§9. It announces HTTP signatures, the configured bound-key rotation setting,
+and `redirect`, plus both code modes when enabled. These engine capabilities
+do not establish that a deployment's interaction pages or push callbacks are
+reachable. Other deployment-dependent capability lists are omitted. Public discovery
 requires HTTPS. Local HTTP loopback is an explicit development-only opt-in,
 labelled in the response; it is not a protocol exception. No client-side
 discovery helper is supplied yet.

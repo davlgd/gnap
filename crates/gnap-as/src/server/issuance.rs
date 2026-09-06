@@ -308,6 +308,7 @@ pub(super) fn complete_approval(
 ) {
     response.subject = subject.map(|released| *released.subject);
     record.interact_handle = None;
+    record.user_code = None;
     record.interact_ref = None;
     record.interact_expires_at = None;
     if let Some(continuation) = continuation {

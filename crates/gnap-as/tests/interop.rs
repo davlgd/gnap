@@ -42,6 +42,7 @@ fn install_token(storage: &MemoryStorage, handle: &str, token: gnap_as::TokenRec
             request: serde_json::from_value(serde_json::json!({"client": token.client})).unwrap(),
             continuation_token: None,
             as_nonce: None,
+            user_code: None,
             interact_handle: None,
             interact_expires_at: None,
             interact_ref: None,
@@ -171,6 +172,7 @@ fn options_discovery_returns_only_known_engine_capabilities_without_grant_state(
         actual,
         serde_json::json!({
             "grant_request_endpoint": GRANT,
+            "interaction_start_modes_supported": ["redirect"],
             "key_proofs_supported": ["httpsig"],
             "key_rotation_supported": false
         })

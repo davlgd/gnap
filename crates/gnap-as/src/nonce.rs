@@ -9,6 +9,9 @@
 ///
 /// A trait rather than a function so tests can be deterministic; §11.28 is a
 /// reminder that the real implementation needs a real random source.
+/// The optional user-code profile takes a separate draw of 1–512 bytes and
+/// hashes it to an eight-symbol code. That hash preserves no security if this
+/// source is predictable; counter implementations belong only in tests.
 pub trait Nonces {
     /// A fresh value, unguessable by an attacker.
     ///

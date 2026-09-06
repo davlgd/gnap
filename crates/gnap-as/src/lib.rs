@@ -163,6 +163,19 @@
 //! input limits return `invalid_request`. Trusted owner/candidate metadata and a
 //! record budget too small for that metadata remain infrastructure failures.
 //!
+//! # Human-code interaction
+//!
+//! [`AuthorizationServer::with_user_code_uri`] enables `user_code` and
+//! `user_code_uri` using a stable entry URI and an optional [`UserCodeStore`].
+//! [`normalize_user_code`] implements this profile's bounded, case-insensitive
+//! input rules. Resolution returns a pending request's handle, not an approval
+//! or an authenticated owner. The interaction component must serve its page,
+//! limit guessing and obtain consent before completing that handle.
+//! Both code and redirect handle are retired in the same grant transaction.
+//! Existing [`GrantRecord`] literals need the new `user_code: None` field;
+//! ordinary stores do not need to implement the optional lookup trait.
+//! This SDK capability does not implement the complete C2 profile or a web UI.
+//!
 //! # Continuing an approved grant
 //!
 //! [`Policy::keep_grant_open`] opts into returning `continue` after approval
@@ -264,6 +277,11 @@ pub mod resource_sets;
 pub mod rs;
 pub mod server;
 pub mod storage;
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "Implementation helpers stay crate-private; unreachable_pub rejects pub in this module"
+)]
+mod user_code;
 
 pub use derivation::{DerivationPolicy, DerivedAccess, DerivedToken, ParentToken};
 pub use encoding::{
@@ -288,5 +306,6 @@ pub use server::{
 pub use storage::{
     DerivedGrantStore, GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantSnapshot,
     GrantStore, MemoryStorage, NonceStore, Revision, RotationNonceStore, Storage, StoreError,
-    TokenRecord,
+    TokenRecord, UserCodeStore,
 };
+pub use user_code::normalize_user_code;

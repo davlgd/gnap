@@ -249,6 +249,7 @@ impl RetainedGrants {
                 if clear_continuation {
                     candidate.record.continuation_token = None;
                     candidate.record.interact_handle = None;
+                    candidate.record.user_code = None;
                     candidate.record.interact_ref = None;
                     candidate.record.interact_expires_at = None;
                 }
@@ -1689,7 +1690,10 @@ mod tests {
         let discovery: gnap_types::message::AsDiscovery = serde_json::from_slice(&body).unwrap();
         assert_eq!(discovery.validate_for("https://demo.example/gnap"), Ok(()));
         assert_eq!(discovery.key_rotation_supported, Some(false));
-        assert!(discovery.interaction_start_modes_supported.is_none());
+        assert_eq!(
+            discovery.interaction_start_modes_supported,
+            Some(vec![gnap_registry::InteractionStartMode::Redirect])
+        );
         let response = router
             .oneshot(
                 Request::builder()
@@ -2099,6 +2103,7 @@ mod tests {
             request: serde_json::from_value(json!({"client":"test-client"})).unwrap(),
             continuation_token: None,
             as_nonce: None,
+            user_code: None,
             interact_handle: None,
             interact_expires_at: None,
             interact_ref: None,

@@ -475,6 +475,7 @@ fn a_modification_is_compared_to_the_live_token_of_the_same_label() {
             request,
             continuation_token: None,
             as_nonce: None,
+            user_code: None,
             interact_handle: None,
             interact_expires_at: None,
             interact_ref: None,
