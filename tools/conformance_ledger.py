@@ -23,6 +23,7 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 SCHEMA = 1
 KEYWORDS = {
     "MUST": ("obligation", "positive"),
@@ -276,8 +277,11 @@ def decision_states(root: Path, inventory: dict) -> dict[str, dict]:
     return states
 
 
-def validate_run(root: Path, run: dict) -> dict[str, str]:
-    fields(run, {"schema_version", "runner", "scope", "started_at_unix_utc", "finished_at_unix_utc", "source_revision", "working_tree_dirty", "source_files", "discovered_cases", "results"}, "execution receipt")
+def validate_run(root: Path, run: dict, *, published: bool = False) -> dict[str, str]:
+    expected = {"schema_version", "runner", "scope", "started_at_unix_utc", "finished_at_unix_utc", "source_revision", "working_tree_dirty", "source_files", "discovered_cases", "results"}
+    if isinstance(run, dict) and "observation" in run:
+        expected.add("observation")
+    fields(run, expected, "execution receipt")
     require(run["schema_version"] == SCHEMA and run["runner"] == "python-unittest-v1", "Unsupported execution receipt")
     require(isinstance(run["scope"], str) and run["scope"] in {"tooling", "gnap-scenarios"}, "Unknown execution scope")
     require(isinstance(run["source_revision"], str) and (run["source_revision"] == "unknown" or re.fullmatch(r"[0-9a-f]{40,64}", run["source_revision"])), "Invalid source revision")
@@ -328,7 +332,57 @@ def validate_run(root: Path, run: dict) -> dict[str, str]:
         require(isinstance(item["status"], str) and item["status"] in {"pass", "fail", "error", "skipped", "expected_failure", "unexpected_success"}, "Invalid case outcome")
         results[identifier] = item["status"]
     require(set(results) == set(discovered), "Discovered tests were not all accounted for")
+    if "observation" in run:
+        validate_discovery_observation(root, run)
+    elif ("conformance/scenarios/test_as_discovery.py" in run["source_files"]
+          or any(module == "test_as_discovery" or module.endswith(".test_as_discovery")
+                 for module in (case.rsplit(".", 2)[0] for case in discovered))):
+        raise LedgerError("Discovery scenarios require capture provenance")
+    if published:
+        require("observation" in run and run["observation"]["execution_mode"] == "capture_replay",
+                "Published discovery receipts must be offline capture replays")
+        require(run["source_revision"] != "unknown" and run["working_tree_dirty"] is False,
+                "Published receipt requires a known clean source commit")
+        committed_inputs = dict(run["source_files"])
+        capture_path = run["observation"]["capture_path"]
+        require(not local_path(root, capture_path).is_relative_to((root / "conformance/runs").resolve()),
+                "Published receipt cannot depend on an ignored local capture")
+        committed_inputs[capture_path] = run["observation"]["capture_sha256"]
+        for relative, expected_hash in committed_inputs.items():
+            try:
+                committed = subprocess.check_output(["git", "show", f"{run['source_revision']}:{relative}"], cwd=root, stderr=subprocess.DEVNULL)
+            except subprocess.CalledProcessError as error:
+                raise LedgerError("Published receipt source commit cannot be verified") from error
+            require(digest(committed) == expected_hash, "Published source/capture hash differs from declared commit")
     return results
+
+
+def validate_discovery_observation(root: Path, run: dict) -> None:
+    from conformance.discovery import read_capture, CaptureError
+    observation = run["observation"]
+    fields(observation, {"kind", "execution_mode", "capture_origin", "capture_path", "capture_sha256",
+                         "endpoint", "captured_at_unix_utc", "remote_revision", "collector_config_sha256"}, "discovery observation")
+    require(observation["kind"] == "as-discovery-v1" and isinstance(observation["execution_mode"], str) and observation["execution_mode"] in {"capture_replay", "live"}, "Unknown discovery observation mode")
+    require(run["scope"] == "gnap-scenarios", "Discovery observations are GNAP scenarios")
+    require("conformance/discovery.py" in run["source_files"] and "conformance/scenarios/test_as_discovery.py" in run["source_files"], "Discovery helper and scenario hashes are required")
+    path = local_path(root, observation["capture_path"])
+    require(run["source_files"].get(observation["capture_path"]) == observation["capture_sha256"],
+            "Capture hash must also be bound in source_files")
+    require(any(path.is_relative_to((root / folder).resolve()) for folder in ("conformance/fixtures", "conformance/captures", "conformance/runs")), "Capture must be under an approved data directory")
+    require(path.is_file() and path.stat().st_size <= 100_000 and digest(path.read_bytes()) == observation["capture_sha256"], "Capture changed or disappeared")
+    try:
+        capture = read_capture(path)
+    except (CaptureError, OSError) as error:
+        raise LedgerError("Invalid discovery capture") from error
+    for field in ("capture_origin", "endpoint", "captured_at_unix_utc", "remote_revision", "collector_config_sha256"):
+        require(observation[field] == capture[field], "Observation contradicts bound capture")
+    require(observation["execution_mode"] != "live" or capture["capture_origin"] == "live", "Synthetic fixture cannot become live execution")
+    if observation["execution_mode"] == "live":
+        require(run["started_at_unix_utc"] <= capture["captured_at_unix_utc"] <= run["finished_at_unix_utc"], "Live capture was not acquired during this execution")
+    if path.is_relative_to((root / "conformance/fixtures").resolve()):
+        require(capture["capture_origin"] == "synthetic", "Synthetic fixture directory cannot hold live provenance")
+    if capture["capture_origin"] == "live":
+        require(capture["captured_at_unix_utc"] <= run["finished_at_unix_utc"], "Capture is later than its replay")
 
 
 def apply_evidence(root: Path, states: dict[str, dict]) -> None:
@@ -352,11 +406,14 @@ def apply_evidence(root: Path, states: dict[str, dict]) -> None:
         require(key not in seen, "Duplicate evidence claim")
         seen.add(key)
         path = local_path(root, claim["run"])
-        require(path.is_relative_to((root / "conformance/runs").resolve()), "Evidence receipt must live under conformance/runs")
+        published = path.is_relative_to((root / "conformance/receipts").resolve())
+        require(published or path.is_relative_to((root / "conformance/runs").resolve()), "Evidence receipt must live under conformance/runs or conformance/receipts")
         if path not in validated:
             run = read_json(path)
-            outcomes = validate_run(root, run)
+            outcomes = validate_run(root, run, published=published)
             require(run["scope"] == "gnap-scenarios", "Tooling self-tests cannot attest GNAP behavior")
+            if "observation" in run:
+                require(run["observation"]["capture_origin"] == "live", "Synthetic oracle fixtures cannot attest an AS")
             validated[path] = outcomes
         outcomes = validated[path]
         require(claim["case_id"] in outcomes, "Evidence refers to an absent test")
@@ -373,6 +430,8 @@ def apply_evidence(root: Path, states: dict[str, dict]) -> None:
 
 
 def render_report(root: Path, inventory: dict) -> str:
+    for path in sorted((root / "conformance/receipts").glob("*.json")):
+        validate_run(root, read_json(path), published=True)
     states = decision_states(root, inventory)
     apply_evidence(root, states)
     lines = [
@@ -397,6 +456,19 @@ def render_report(root: Path, inventory: dict) -> str:
     for key in ("applicability", "evidence"):
         for state, count in sorted(Counter(s[key] for s in states.values()).items()):
             lines.append(f"| {key}: `{state}` | {count} |")
+    observations = {}
+    for claim in read_json(root / "conformance/evidence.json")["claims"]:
+        run = read_json(local_path(root, claim["run"]))
+        if "observation" in run:
+            observations.setdefault(claim["run"], {"observation": run["observation"], "assertions": []})["assertions"].append({
+                "clause_id": claim["clause_id"], "case_id": claim["case_id"], "assertion": claim["assertion"]})
+    if observations:
+        lines.extend(["", "## Bound discovery observations", "",
+                      "Capture replay describes the historical response at the recorded endpoint/time,",
+                      "not current server behavior, remote source attestation or block completion.", ""])
+        # JSON escaping plus escaped backticks prevents untrusted metadata from
+        # breaking out of the fenced data block in the generated Markdown.
+        lines.extend(["```json", json.dumps(observations, indent=2, sort_keys=True, ensure_ascii=True).replace("`", "\\u0060"), "```", ""])
     lines.extend(["", "`condition_false` requires a reviewed condition, role, profile and rationale;",
                   "it does not remove a source block or mean a missing project target is completed.",
                   "`passing_observation_not_completion` means the named test ran successfully;",
@@ -513,13 +585,14 @@ class RecordingResult(unittest.TextTestResult):
             self.record(test, "fail" if issubclass(err[0], test.failureException) else "error")
 
 
-def run_tests(root: Path, directory: str, scope: str, output: str) -> bool:
+def run_tests(root: Path, directory: str, scope: str, output: str, *, observation=None, capture=None, published=False) -> bool:
     start_dir = local_path(root, directory)
     require(start_dir.is_dir(), "Test directory does not exist")
     require(scope == "tooling" or start_dir.is_relative_to((root / "conformance/scenarios").resolve()),
             "GNAP scenario receipts require tests under conformance/scenarios; tooling tests cannot be relabelled")
     output_path = local_path(root, output)
-    require(output_path.is_relative_to((root / "conformance/runs").resolve()) and output_path.suffix == ".json", "Receipt path must be conformance/runs/*.json")
+    folder = "conformance/receipts" if published else "conformance/runs"
+    require(output_path.is_relative_to((root / folder).resolve()) and output_path.suffix == ".json", f"Receipt path must be {folder}/*.json")
     suite = unittest.defaultTestLoader.discover(str(start_dir))
     cases = list(flatten_tests(suite))
     identifiers = [case.id() for case in cases]
@@ -527,6 +600,12 @@ def run_tests(root: Path, directory: str, scope: str, output: str) -> bool:
     # Source hashes bind the test modules and the tool that produced the receipt.
     # Other dependency/configuration provenance must be added by future runners.
     files = {Path(__file__).resolve()}
+    if observation is not None:
+        require(directory == "conformance/scenarios", "Discovery runner uses only the fixed scenario directory")
+        files.add(root / "conformance/discovery.py")
+        files.add(local_path(root, observation["capture_path"]))
+        require("test_as_discovery" in sys.modules, "Discovery scenario module was not discovered")
+        sys.modules["test_as_discovery"].CAPTURE = capture
     for case in cases:
         module = sys.modules.get(type(case).__module__)
         path = getattr(module, "__file__", None)
@@ -536,25 +615,46 @@ def run_tests(root: Path, directory: str, scope: str, output: str) -> bool:
     for path in sorted(files):
         require(path.is_relative_to(root.resolve()), "Discovered test source is outside repository")
         hashes[str(path.relative_to(root.resolve()))] = digest(path.read_bytes())
-    started = int(time.time())
-    result = unittest.TextTestRunner(verbosity=2, resultclass=RecordingResult).run(suite)
-    # setUpClass/Module failures can yield synthetic IDs and leave discovered
-    # cases unrun. Refuse to emit a falsely complete receipt in that case.
-    require(set(result.outcomes) == set(identifiers), "Execution did not report every discovered case; no receipt written")
     try:
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
         dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True))
     except (OSError, subprocess.CalledProcessError):
         revision, dirty = "unknown", True
+    require(not published or (revision != "unknown" and not dirty), "Publish only from a clean committed source tree")
+    started = int(time.time())
+    result = unittest.TextTestRunner(verbosity=2, resultclass=RecordingResult).run(suite)
+    # setUpClass/Module failures can yield synthetic IDs and leave discovered
+    # cases unrun. Refuse to emit a falsely complete receipt in that case.
+    require(set(result.outcomes) == set(identifiers), "Execution did not report every discovered case; no receipt written")
+    require(all(path.is_file() and digest(path.read_bytes()) == hashes[str(path.relative_to(root.resolve()))] for path in files), "Sources changed during execution")
     receipt = {"schema_version": SCHEMA, "runner": "python-unittest-v1", "scope": scope,
                "started_at_unix_utc": started, "finished_at_unix_utc": int(time.time()),
                "source_revision": revision, "working_tree_dirty": dirty,
                "source_files": hashes, "discovered_cases": identifiers,
                "results": [{"case_id": case, "status": result.outcomes[case]} for case in identifiers]}
-    validate_run(root, receipt)
+    if observation is not None:
+        receipt["observation"] = observation
+    validate_run(root, receipt, published=published)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(canonical(receipt), encoding="utf-8")
     return result.wasSuccessful()
+
+
+def discovery_tests(root: Path, capture_path: str, output: str, published: bool) -> bool:
+    from conformance.discovery import read_capture, CaptureError
+    path = local_path(root, capture_path)
+    try:
+        capture = read_capture(path)
+    except CaptureError as error:
+        raise LedgerError(str(error)) from error
+    require(not published or not path.is_relative_to((root / "conformance/runs").resolve()),
+            "Publish the reviewed capture in conformance/captures before recording a clean-source receipt")
+    observation = {"kind": "as-discovery-v1", "execution_mode": "capture_replay",
+                   "capture_path": capture_path, "capture_sha256": digest(path.read_bytes())}
+    for field in ("capture_origin", "endpoint", "captured_at_unix_utc", "remote_revision", "collector_config_sha256"):
+        observation[field] = capture[field]
+    return run_tests(root, "conformance/scenarios", "gnap-scenarios", output,
+                     observation=observation, capture=capture, published=published)
 
 
 def main() -> int:
@@ -566,12 +666,31 @@ def main() -> int:
     runner.add_argument("--directory", default="conformance/tests")
     runner.add_argument("--scope", choices=("tooling", "gnap-scenarios"), default="tooling")
     runner.add_argument("--output", default="conformance/runs/self-tests.json")
+    discovery = sub.add_parser("discovery-tests", help="Replay one bound capture through six independent section 9 assertions; offline by default")
+    discovery.add_argument("--capture", default="conformance/fixtures/discovery.json")
+    discovery.add_argument("--output", default="conformance/runs/discovery.json")
+    discovery.add_argument("--publish", action="store_true")
+    collector = sub.add_parser("capture-discovery", help="Operator-only live collection; requires environment opt-in and forbids CI")
+    collector.add_argument("--output", default="conformance/runs/discovery-capture.json")
     args = parser.parse_args()
     try:
         if args.command == "fetch":
             fetch(ROOT)
         elif args.command == "run-tests":
             return 0 if run_tests(ROOT, args.directory, args.scope, args.output) else 1
+        elif args.command == "discovery-tests":
+            return 0 if discovery_tests(ROOT, args.capture, args.output, args.publish) else 1
+        elif args.command == "capture-discovery":
+            import os
+            from conformance.discovery import acquire, encoded, CaptureError
+            output = local_path(ROOT, args.output)
+            require(output.is_relative_to((ROOT / "conformance/runs").resolve()) and output.suffix == ".json", "Live capture output must be conformance/runs/*.json")
+            try:
+                capture = acquire(os.environ.get("GNAP_DISCOVERY_ENDPOINT"))
+            except CaptureError as error:
+                raise LedgerError(str(error)) from error
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(encoded(capture))
         else:
             inventory = generate_inventory(ROOT)
             report = render_report(ROOT, inventory)
