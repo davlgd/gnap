@@ -301,6 +301,13 @@ current source tree. Its recorded sources remain available at commit
 `f8e7093992f6a07032ea3af9a7fc9f17f4d58afb` in Git history.
 A scenario, helper or runner change requires a fresh replay receipt, not a new
 network capture or a change to the historical capture time.
+
+The active [replay receipt](receipts/gnap-delegation-discovery-replay-2026-09-06.json)
+was produced on 6 September from the corrected scenario at clean commit
+`a470b42c9915130dcf086d3d7730afb71ea0c803`. It reuses the exact same capture
+from 5 September: no new network observation was made. Its six executed cases
+are the active mappings in `evidence.json`.
+
 The body contains only the public grant endpoint, announced `httpsig` proof and
 `key_rotation_supported: false`. The six response assertions do not establish
 capability execution or the remote source revision. A passing replay is only
