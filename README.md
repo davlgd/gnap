@@ -13,7 +13,7 @@ steps, and key-bound requests and tokens as the default.
 > full grant between them — request, signature, interaction, callback,
 > continuation, token — with both roles implemented here, and the token it
 > issues can be rotated and revoked (§6). The application examples add a real
-> HTTP client/AS flow, a co-located protected resource, a separated Biscuit file
+> HTTP client/AS flow, a co-located protected resource, a separate Biscuit file
 > application, and a diagnostic workbench. These are experimental consumers,
 > not a complete conformance suite
 > or an implementation of the RFC 9767 connection APIs.

@@ -119,6 +119,88 @@ async fn canonical_authority_handles_real_http_versions_and_ignores_forwarded() 
 }
 
 #[tokio::test]
+async fn bracketed_ipv6_authorities_preserve_host_and_port_matching() {
+    let authority: axum::http::uri::Authority = "[::1]:18080".parse().unwrap();
+    // Authority::host retains the brackets; the guard's suffix begins after
+    // them. Do not remove or re-add brackets based on a different URL API.
+    assert_eq!(authority.host(), "[::1]");
+    for (origin, target, host, version, expected) in [
+        (
+            "http://[::1]:18080",
+            "/probe",
+            Some("[::1]:18080"),
+            Version::HTTP_11,
+            200,
+        ),
+        (
+            "http://[::1]:18080",
+            "http://[::1]:18080/probe",
+            None,
+            Version::HTTP_2,
+            200,
+        ),
+        (
+            "http://[::1]:18080",
+            "/probe",
+            Some("[::1]"),
+            Version::HTTP_11,
+            421,
+        ),
+        (
+            "http://[::1]:18080",
+            "http://[::1]:18080/probe",
+            Some("[::1]:18081"),
+            Version::HTTP_2,
+            400,
+        ),
+        (
+            "http://[::1]:18080",
+            "/probe",
+            Some("[::1]:bad"),
+            Version::HTTP_11,
+            400,
+        ),
+        (
+            "http://[::1]:18080",
+            "/probe",
+            Some("[::1]evil:18080"),
+            Version::HTTP_11,
+            400,
+        ),
+        (
+            "https://[::1]",
+            "/probe",
+            Some("[::1]"),
+            Version::HTTP_11,
+            200,
+        ),
+        (
+            "https://[::1]",
+            "https://[::1]/probe",
+            None,
+            Version::HTTP_2,
+            200,
+        ),
+    ] {
+        let router = http::guarded(
+            Router::new().route("/probe", get(|| async { "ok" })),
+            Origin::parse(origin).unwrap(),
+        );
+        let mut request = Request::builder().uri(target).version(version);
+        if let Some(host) = host {
+            request = request.header("host", host);
+        }
+        let response = router
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{origin} {target} {host:?}");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(response.headers().get("location").is_none());
+    }
+}
+
+#[tokio::test]
 async fn cancelled_http_waiter_does_not_release_running_cpu_worker() {
     let workers = Arc::new(Semaphore::new(1));
     let origin = Origin::parse("http://127.0.0.1:18080").unwrap();
