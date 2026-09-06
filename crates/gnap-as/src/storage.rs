@@ -214,6 +214,9 @@ impl std::error::Error for StoreError {}
 /// indexes change atomically; there is no take/restore operation. Implementations
 /// must reject collisions before publication, never reuse IDs or wrap revisions,
 /// and must not resurrect missing or revoked aggregates through `compare_exchange`.
+/// Access, management and continuation credentials share a unique namespace:
+/// a value must not occur twice or switch roles during replacement. Public URI
+/// handles are indexed separately and are not credentials.
 ///
 /// The server prepares policy decisions, proofs and encodings outside the store.
 /// A conflict does not automatically retry those operations.
@@ -305,6 +308,14 @@ struct Indices {
     management: HashMap<String, GrantId>,
     values: HashMap<String, GrantId>,
     identifiers: HashMap<Vec<u8>, GrantId>,
+    credentials: HashMap<String, (GrantId, CredentialRole)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredentialRole {
+    Continuation,
+    Access,
+    Management,
 }
 
 impl Indices {
@@ -333,6 +344,9 @@ impl Indices {
                 return Err(StoreError::Invalid);
             }
             indices.continuation.insert(key.clone(), id);
+            indices
+                .credentials
+                .insert(key.clone(), (id, CredentialRole::Continuation));
         }
         if let Some(key) = &aggregate.record.interact_handle {
             if key.is_empty() || aggregate.record.continuation_token.is_none() {
@@ -348,6 +362,18 @@ impl Indices {
                 return Err(StoreError::Invalid);
             }
             indices.management.insert(handle.clone(), id);
+            for (value, role) in [
+                (token.token.value.as_str(), CredentialRole::Access),
+                (token.management_token.as_str(), CredentialRole::Management),
+            ] {
+                if indices
+                    .credentials
+                    .insert(value.to_owned(), (id, role))
+                    .is_some()
+                {
+                    return Err(StoreError::Collision);
+                }
+            }
             if indices
                 .values
                 .insert(token.token.value.as_str().to_owned(), id)
@@ -382,6 +408,11 @@ impl Indices {
             || collides(&self.management, &candidate.management, own_id)
             || collides(&self.values, &candidate.values, own_id)
             || collides(&self.identifiers, &candidate.identifiers, own_id)
+            || candidate.credentials.iter().any(|(value, (_, role))| {
+                self.credentials
+                    .get(value)
+                    .is_some_and(|(owner, previous_role)| *owner != own_id || role != previous_role)
+            })
         {
             return Err(StoreError::Collision);
         }
@@ -394,11 +425,13 @@ impl Indices {
         self.management.retain(|_, owner| *owner != id);
         self.values.retain(|_, owner| *owner != id);
         self.identifiers.retain(|_, owner| *owner != id);
+        self.credentials.retain(|_, (owner, _)| *owner != id);
         self.continuation.extend(candidate.continuation);
         self.interaction.extend(candidate.interaction);
         self.management.extend(candidate.management);
         self.values.extend(candidate.values);
         self.identifiers.extend(candidate.identifiers);
+        self.credentials.extend(candidate.credentials);
     }
 }
 

@@ -24,7 +24,9 @@ pub struct TokenEncodingContext<'a> {
     /// A fresh value from the configured nonce source.
     ///
     /// The opaque encoder uses it directly. Structured encoders may use their
-    /// own format's randomness instead. It is never a management credential.
+    /// own format's randomness instead. Before encoding, the AS compares it
+    /// against new reservations and credentials in the authenticated snapshot.
+    /// The source must still uphold its freshness contract; see [`TokenEncoder`].
     pub candidate_nonce: &'a str,
 }
 
@@ -35,12 +37,13 @@ pub struct EncodedToken {
     /// Opaque bytes for the deployment's live-token index, if the format needs it.
     ///
     /// For an attenuable format this can identify the ancestor shared by its
-    /// descendants. A replacement identifier must differ on rotation. This
+    /// descendants. A replacement identifier must differ on rotation or grant
+    /// reapproval. This
     /// metadata is not sent in the GNAP response and does not itself synchronize
     /// revocation with an RS.
     /// `Some` must contain at least one byte. The encoder is responsible for
     /// avoiding collisions with identifiers of independently issued tokens;
-    /// the token store does not guarantee global identifier uniqueness.
+    /// the grant store rejects duplicate live identifiers before publication.
     /// A rotation may return `None` even when the previous token had an
     /// identifier. Deployments requiring an indexable format must enforce that
     /// contract in their encoder and resource-server adapter.
@@ -72,6 +75,13 @@ impl std::error::Error for TokenEncodingError {}
 /// formats. The AS checks the returned wire value and identifier constraints,
 /// but cannot establish that a format's protected claims match the context.
 /// The encoder and the corresponding RS verifier must implement that contract.
+///
+/// The encoder and [`Nonces`](crate::Nonces) are trusted components. The server
+/// reserves new values locally and checks the authenticated grant's credentials
+/// before encoding; the store enforces global disjointness when publishing.
+/// There is no cross-grant reservation transaction around the callback. A broken
+/// or predictable nonce source under concurrency is therefore not covered by an
+/// absolute guarantee that an encoder never sees another grant's credential.
 pub trait TokenEncoder {
     /// Creates a fresh representation without changing authorization state.
     ///

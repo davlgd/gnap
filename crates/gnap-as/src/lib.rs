@@ -83,12 +83,34 @@
 //! proof and rights. [`MemoryStorage`] does not sweep expired tokens. Production
 //! clock handling, authoritative RS metadata, persistence and garbage collection
 //! remain deployment responsibilities; these helpers do not implement RFC 9767
-//! introspection. The aggregate can atomically clear associated tokens when a
-//! grant is revoked, but this is not yet an exercisable grant-to-token cascade:
-//! approval currently removes continuation, so an issued grant cannot be revoked
-//! through that endpoint. Token-management DELETE remains available. Supporting
-//! continuation after approval and propagating revocation to a separate resource
-//! server remain unfinished work.
+//! introspection. An open grant's DELETE atomically clears its associated tokens
+//! and indexes. A separate resource server must consult or receive authoritative
+//! live state; the SDK does not itself propagate revocation across services.
+
+//! # Continuing an approved grant
+//!
+//! [`Policy::keep_grant_open`] opts into returning `continue` after approval
+//! (§3.1); the default preserves one-shot grants. Approved POST rotates only the
+//! continuation credential, without issuing another token or reusing consent.
+//! PATCH replaces the fields it includes and reevaluates the resulting request.
+//! [`Policy::evaluate_context`] receives the authenticated snapshot for a
+//! modification or completed interaction, so consent can be bound to a
+//! [`GrantId`], the exact request and the current interaction reference.
+//!
+//! Previously issued tokens stay usable while a new interaction is pending.
+//! Successful reapproval replaces all of them in the same transaction as the
+//! new token and optional continuation. This is an SDK choice permitted by §5.3,
+//! not a change to old tokens' rights. Native identifiers must be fresh as well,
+//! so an attenuated descendant cannot survive by sharing a replacement's index.
+//! No `durable` flag or retain-old-tokens mode is implemented.
+//!
+//! A valid error without `continue` closes continuation and invalidates its old
+//! credential (§5), but does not itself revoke prior access tokens. Errors with
+//! `continue` are possible only for a genuinely pending grant (§3.6); an approved
+//! grant is not moved to pending merely to keep an error recoverable. Internal
+//! preparation failures (5xx) publish nothing. A response lost after a successful
+//! commit is different: retrying old credentials may fail and is never automatic.
+//! DELETE on an open grant marks the aggregate revoked and removes every token.
 
 //! # Access-token representation
 //!
@@ -150,7 +172,10 @@
 //! without making the ID reusable. [`MemoryStorage`] otherwise retains closed
 //! aggregates, does not enforce capacity limits and is not persistent. Its
 //! fallible `len` and `is_empty` inspect continuable grants, not retained history.
-//! This migration does not add continuation after an approved grant.
+//! Store implementations must enforce one credential namespace across access,
+//! management and continuation values, including collisions within a candidate.
+//! Public interaction and management URI handles are separate identifiers, not
+//! credentials. An existing credential cannot change roles during replacement.
 
 pub mod encoding;
 pub mod nonce;
@@ -162,7 +187,9 @@ pub use encoding::{
     EncodedToken, OpaqueTokenEncoder, TokenEncoder, TokenEncodingContext, TokenEncodingError,
 };
 pub use nonce::{Nonces, OsNonces};
-pub use policy::{Decision, KeyResolver, Policy, ReleasedSubject, SubjectGround};
+pub use policy::{
+    Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround,
+};
 pub use server::{
     AuthorizationServer, Endpoints, Finish, InteractionError, INTERACTION_LIFETIME, MAX_CLOCK_SKEW,
 };

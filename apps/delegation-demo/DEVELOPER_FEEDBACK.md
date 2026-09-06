@@ -22,7 +22,9 @@ allows a real protected resource to reuse exactly the AS's signature checks.
 | --- | --- | --- |
 | Keep grants across browser requests | `Session<'a,T,S>` borrows its transport and signer; a normal self-contained app state cannot own all three without a self-reference | One owning worker holds shared signer/transport and a map of borrowed sessions; document an owned-session or snapshot/resume pattern |
 | Connect async HTTP handlers | `HttpTransport::send` is blocking | A bounded dedicated worker drives client exchanges; AS/RS use bounded blocking tasks; provide a maintained HTTP adapter example |
-| Bind consent to a grant | `Policy::evaluate_after_interaction` receives the request but no grant identifier or authenticated consent context | Distinct client reference per browser session indexes synthetic decisions; real apps need a documented robust grant/RO correlation design |
+| Bind consent to a grant | The old `Policy::evaluate_after_interaction` hook had no grant identifier or authenticated consent context | Fixed by `EvaluationContext`: choices are tied to a GrantId, the exact request and the committed interaction reference. Client-key resolution is a separate registry. Tests reject cross-grant, cross-client, stale-reference and changed-request consent |
+| Continue after approval | The one-shot example could not exercise modifications or grant-wide revocation | `keep_grant_open`, contextual policy evaluation and `Session::revoke_grant` now support a real ongoing grant. A poll does not reissue tokens; a reduced set is observable at a second resource; expansion requests fresh consent. Reapproval replaces all old tokens atomically; denial closes continuation without silently revoking them |
+| Distinguish a failed preparation from a refused grant | A server configuration failure used to carry a terminal GNAP error even when no grant update had been committed; the client consequently closed a continuation that the AS had kept | Internal configuration failures now use a non-GNAP text response. A real Session/AS regression checks unchanged local and stored state after an encoding failure, then a fresh retry. Valid GNAP errors still carry their protocol meaning: RFC 9635 does not make a particular HTTP status a substitute for reading the response, and a response without continuation does not authorize another continuation call |
 | Serve a resource | The former `TokenStore` exposed only management-handle lookup | Fixed through `GrantStore::lookup(GrantSelector::AccessToken)`: the SDK atomically indexes the grant and tokens. The application no longer duplicates credential indexes. The RS verifies proof outside the store lock and rechecks the snapshot revision/expiration before authorizing; no introspection claim |
 | Share a store | Earlier external-trait implementations for `Arc<MyStore>` triggered Rust orphan rules | SDK blanket implementations for `Arc<T>` and `&T` support the fallible `GrantStore` contract; the application implements it on its retention adapter and shares that directly |
 | Enforce token lifetime | The original AS policy could not configure `expires_in`, so the RS maintained a separate deadline that a record rewrite could accidentally renew | Fixed through `Policy::token_lifetime`, `TokenRecord::issued_at` and its deadline/validity helpers. The demo requests 1,200 seconds and stores no duplicate token deadline; session lifetime remains separate |
@@ -53,3 +55,13 @@ this tests the application interleaving, not an independent protocol validator.
 Route tests distinguish unavailable storage (503) from invalid token/proof (401)
 and check that the synthetic credential is not reflected. These local tests do
 not establish distributed-storage behavior or a new live deployment result.
+
+The ongoing-grant consumer tests use the actual client Session, AS policy and
+resource verifier, including a sibling token inserted through the store to
+check whole-aggregate replacement and revocation. They honor the real five-second
+continuation waits rather than future-date issuance against application wall
+time. They also verify that a token retains its value and issuance timestamp
+after polling, that expired rights cannot justify an automatic downscope, and
+that denial of an extension leaves the previous token manageable. Browser HTTP
+smoke checks complement these local SDK exchanges; neither is independent
+conformance certification or real resource-owner identity assurance.

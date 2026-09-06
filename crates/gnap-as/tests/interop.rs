@@ -244,12 +244,16 @@ fn discovery_rejects_invalid_public_configuration_without_echoing_endpoint() {
         let as_ = server_at(endpoint);
         let response = as_.handle(&HttpRequest::new("OPTIONS", endpoint), 1_000);
         assert_eq!(response.status, 500, "{endpoint}");
-        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
-        assert!(body.get("error").is_some());
-        assert!(body.get("grant_request_endpoint").is_none());
-        assert!(!String::from_utf8(response.body)
-            .unwrap()
-            .contains("TOP-SECRET"));
+        assert_eq!(
+            response.header_value("content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        assert_eq!(response.header_value("cache-control"), Some("no-store"));
+        let body = String::from_utf8(response.body).unwrap();
+        assert!(body.starts_with("server configuration: "));
+        assert!(!body.contains(endpoint));
+        assert!(!body.contains("TOP-SECRET"));
+        assert!(serde_json::from_str::<gnap_types::message::GrantResponse>(&body).is_err());
         assert!(as_.storage().is_empty().unwrap());
     }
 }

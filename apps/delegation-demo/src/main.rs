@@ -9,9 +9,9 @@ use axum::{
     Json, Router,
 };
 use gnap_as::{
-    AuthorizationServer, Decision, Endpoints, Finish, GrantAggregate, GrantId, GrantSelector,
-    GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore, OsNonces, Policy, Revision,
-    StoreError,
+    AuthorizationServer, Decision, Endpoints, EvaluationContext, Finish, GrantAggregate, GrantId,
+    GrantSelector, GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore, OsNonces,
+    Policy, Revision, StoreError,
 };
 use gnap_client::{sign_request, HttpRequest, HttpResponse, HttpTransport, Session};
 use gnap_crypto::{
@@ -21,13 +21,17 @@ use gnap_crypto::{
     verify::{verify_request, Expectations, SignedRequest},
 };
 use gnap_types::{
-    access::AccessItem, client::Client, interact::InteractCallback, message::GrantRequest,
+    access::AccessItem,
+    client::Client,
+    interact::InteractCallback,
+    message::{ContinueRequest, GrantRequest},
     token::TokenValue,
 };
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     io::Read,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU64,
     sync::{mpsc, Arc, Mutex},
     time::{Duration, Instant},
@@ -36,7 +40,19 @@ use std::{
 const MAX_SESSIONS: usize = 64;
 const MAX_GRANTS: usize = 256;
 const SESSION_LIFETIME: Duration = Duration::from_secs(1200);
-type Decisions = Arc<Mutex<HashMap<String, bool>>>;
+const FOLDER_READ: &str = "synthetic-folder:read";
+const ARCHIVE_READ: &str = "synthetic-archive:read";
+#[derive(Default)]
+struct ConsentRegistry {
+    clients: HashSet<String>,
+    grants: HashMap<GrantId, Consent>,
+}
+struct Consent {
+    request: GrantRequest,
+    interaction_reference: String,
+    allowed: bool,
+}
+type Decisions = Arc<Mutex<ConsentRegistry>>;
 type As = AuthorizationServer<ConsentPolicy, KnownKeys, Arc<IndexedStorage>, OsNonces>;
 
 #[derive(Clone)]
@@ -46,6 +62,22 @@ struct CanonicalOrigin {
     authority: (String, u16),
 }
 impl CanonicalOrigin {
+    fn listener_ip(&self) -> IpAddr {
+        if self.scheme == "https" {
+            Ipv4Addr::UNSPECIFIED.into()
+        } else if self.authority.0 == "[::1]" {
+            Ipv6Addr::LOCALHOST.into()
+        } else {
+            // The parser permits only localhost and 127.0.0.1 here. Do not
+            // resolve localhost through DNS to choose a listening interface.
+            Ipv4Addr::LOCALHOST.into()
+        }
+    }
+    async fn bind(&self, port: u16) -> Result<tokio::net::TcpListener, &'static str> {
+        tokio::net::TcpListener::bind((self.listener_ip(), port))
+            .await
+            .map_err(|_| "HTTP listener unavailable")
+    }
     fn parse(value: &str) -> Result<Self, &'static str> {
         let parsed = reqwest::Url::parse(value).map_err(|_| "APP_ORIGIN must be a URL")?;
         if parsed.origin().ascii_serialization() != value
@@ -283,21 +315,72 @@ impl NonceStore for IndexedStorage {
 }
 
 struct ConsentPolicy(Decisions);
+fn requested_rights(request: &GrantRequest) -> Option<Vec<AccessItem>> {
+    let tokens = &request.access_token.as_ref()?.tokens;
+    if tokens.len() != 1 {
+        return None;
+    }
+    let rights = &tokens[0].access;
+    if rights.is_empty() || rights.len() > 2 || rights.iter().any(|r| !matches!(r, AccessItem::Reference(v) if matches!(v.as_str(), FOLDER_READ | ARCHIVE_READ))) || (rights.len() == 2 && rights[0] == rights[1]) {
+        return None;
+    }
+    Some(rights.clone())
+}
 impl Policy for ConsentPolicy {
     fn token_lifetime(&self, _: &GrantRequest) -> Option<NonZeroU64> {
         NonZeroU64::new(1200)
     }
-    fn evaluate(&self, _: &GrantRequest) -> Decision {
-        Decision::RequireInteraction
+    fn keep_grant_open(&self, _: &GrantRequest) -> bool {
+        true
     }
-    fn evaluate_after_interaction(&self, request: &GrantRequest) -> Decision {
-        let id = client_id(&request.client);
-        match self.0.lock().unwrap().get(&id) {
-            Some(true) => Decision::Approve {
-                access: vec![AccessItem::Reference("synthetic-folder:read".into())],
-                subject: None,
-            },
-            _ => Decision::Deny(gnap_registry::ErrorCode::UserDenied),
+    fn evaluate(&self, request: &GrantRequest) -> Decision {
+        if requested_rights(request).is_some() {
+            Decision::RequireInteraction
+        } else {
+            Decision::Deny(gnap_registry::ErrorCode::RequestDenied)
+        }
+    }
+    fn evaluate_context(&self, request: &GrantRequest, context: EvaluationContext<'_>) -> Decision {
+        let Some(rights) = requested_rights(request) else {
+            return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
+        };
+        match context {
+            EvaluationContext::Initial => Decision::RequireInteraction,
+            EvaluationContext::Modification(snapshot) => {
+                let time = now();
+                let live_rights: Vec<_> = snapshot
+                    .aggregate
+                    .tokens
+                    .values()
+                    .filter(|t| t.is_valid_at(time))
+                    .flat_map(|t| t.token.access.iter().flatten())
+                    .collect();
+                if rights.iter().all(|r| live_rights.contains(&r)) {
+                    Decision::Approve {
+                        access: rights,
+                        subject: None,
+                    }
+                } else {
+                    Decision::RequireInteraction
+                }
+            }
+            EvaluationContext::AfterInteraction(snapshot) => {
+                let choices = self.0.lock().unwrap();
+                match choices.grants.get(&snapshot.id) {
+                    Some(choice)
+                        if choice.allowed
+                            && choice.request == *request
+                            && snapshot.aggregate.record.interact_ref.as_deref()
+                                == Some(&choice.interaction_reference) =>
+                    {
+                        Decision::Approve {
+                            access: rights,
+                            subject: None,
+                        }
+                    }
+                    _ => Decision::Deny(gnap_registry::ErrorCode::UserDenied),
+                }
+            }
         }
     }
 }
@@ -313,7 +396,8 @@ impl KeyResolver for KnownKeys {
         self.decisions
             .lock()
             .unwrap()
-            .contains_key(&client_id(client))
+            .clients
+            .contains(&client_id(client))
             .then(|| Box::new(self.signer.verifier()) as Box<dyn Verifier>)
     }
 }
@@ -336,7 +420,7 @@ impl HttpTransport for Network {
             && (url.path() == "/gnap"
                 || url.path() == "/continue"
                 || url.path().starts_with("/token/")
-                || url.path() == "/resource/folder");
+                || matches!(url.path(), "/resource/folder" | "/resource/archive"));
         if !allowed {
             return Err("Network transport refused an endpoint outside this demo's fixed origin/path allow-list".into());
         }
@@ -388,6 +472,7 @@ struct Command {
 }
 struct BrowserSession<'a> {
     client: Session<'a, Network, Ps256Signer>,
+    grant_id: GrantId,
     handle: String,
     born: Instant,
     operations: usize,
@@ -396,16 +481,100 @@ struct BrowserSession<'a> {
     retired_token: Option<gnap_types::token::TokenValue>,
     folder: Option<Value>,
     next_continuation: u64,
+    continuation_open: bool,
+    requested_rights: Vec<AccessItem>,
+    last_resource_status: Option<u16>,
+}
+
+impl BrowserSession<'_> {
+    fn received(
+        &mut self,
+        step: &gnap_client::Step,
+        before: Option<TokenValue>,
+    ) -> Result<(), String> {
+        let response = step.response();
+        self.continuation_open = response.r#continue.is_some();
+        self.next_continuation = now().saturating_add(
+            response
+                .r#continue
+                .as_ref()
+                .and_then(|c| c.wait)
+                .unwrap_or(0),
+        );
+        if let Some(uri) = response.interact.as_ref().and_then(|i| i.redirect.as_ref()) {
+            self.handle = uri
+                .rsplit('/')
+                .next()
+                .ok_or("Missing interaction handle")?
+                .into();
+            self.state = "pending";
+        } else {
+            self.state = "approved";
+        }
+        if response.access_token.is_some() {
+            self.retired_token = before;
+            self.folder = None;
+        }
+        Ok(())
+    }
+}
+
+fn consent_finish(
+    server: &As,
+    storage: &IndexedStorage,
+    decisions: &Decisions,
+    client: &str,
+    grant: GrantId,
+    handle: &str,
+    allowed: bool,
+) -> Result<String, String> {
+    let snapshot = storage
+        .lookup(GrantSelector::Interaction(handle))
+        .map_err(|_| "Consent storage unavailable")?
+        .ok_or("Unknown interaction")?;
+    if snapshot.id != grant || client_id(&snapshot.aggregate.record.request.client) != client {
+        return Err("Interaction does not belong to this browser grant".into());
+    }
+    let Finish::Redirect { uri } = server
+        .complete_interaction(handle, now())
+        .map_err(|_| "Interaction completion refused")?
+    else {
+        return Err("Unexpected completion method".into());
+    };
+    let callback =
+        InteractCallback::from_redirect(&uri).map_err(|_| "Invalid completion reference")?;
+    // Completion's CAS must succeed first. The decision is read, not popped,
+    // during policy evaluation: a later CAS conflict cannot consume consent.
+    decisions.lock().unwrap().grants.insert(
+        grant,
+        Consent {
+            request: snapshot.aggregate.record.request,
+            interaction_reference: callback.interact_ref,
+            allowed,
+        },
+    );
+    Ok(uri)
 }
 
 fn now() -> u64 {
     gnap_types::unix_now()
 }
 
+fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
+    let tokens = session.client.usable_tokens(now());
+    let rights: Vec<_> = tokens
+        .iter()
+        .flatten()
+        .flat_map(|t| t.access.iter().flatten())
+        .collect();
+    json!({"state":session.state, "events":session.events, "rights":rights, "requested_rights":session.requested_rights, "token_present":tokens.is_some(), "resource_available":true, "retired_token_present":session.retired_token.is_some(), "folder":session.folder, "last_resource_status":session.last_resource_status, "interaction_uri":format!("{origin}/interact/{}",session.handle), "continuation_open":session.continuation_open, "continuation_wait_seconds":session.next_continuation.saturating_sub(now())})
+}
+
 fn client_worker(
     origin: String,
     signer: Arc<Ps256Signer>,
     server: Arc<As>,
+    storage: Arc<IndexedStorage>,
     decisions: Decisions,
     receiver: mpsc::Receiver<Command>,
 ) {
@@ -423,7 +592,9 @@ fn client_worker(
         sessions.retain(|id, session| {
             let live = session.born.elapsed() < SESSION_LIFETIME;
             if !live {
-                decisions.lock().unwrap().remove(id);
+                let mut decisions = decisions.lock().unwrap();
+                decisions.clients.remove(id);
+                decisions.grants.remove(&session.grant_id);
             }
             live
         });
@@ -434,19 +605,25 @@ fn client_worker(
         };
         let result = (|| -> Result<Value, String> {
             if command.action == "start" {
+                // The HTTP front door creates a fresh identity for every start.
+                // Reject an internal duplicate before changing consent or AS state.
+                if sessions.contains_key(&command.session) {
+                    return Err("Session already started; use a new browser identity".into());
+                }
                 if sessions.len() >= MAX_SESSIONS {
                     return Err("Demo busy: 64 active sessions; retry later".into());
                 }
                 decisions
                     .lock()
                     .unwrap()
-                    .insert(command.session.clone(), false);
+                    .clients
+                    .insert(command.session.clone());
                 let mut client =
                     Session::new(&transport, signer.as_ref(), format!("{origin}/gnap"))
                         .supporting(&["redirect"]);
                 let grant: GrantRequest = serde_json::from_value(json!({
                     "client": command.session,
-                    "access_token": {"access": ["synthetic-folder:read"]},
+                    "access_token": {"access": [FOLDER_READ, ARCHIVE_READ]},
                     "interact": {"start": ["redirect"], "finish": {"method":"redirect", "uri":format!("{origin}/callback"), "nonce":fresh_nonce().map_err(|e| e.to_string())?}}
                 })).map_err(|e| e.to_string())?;
                 let step = client.start(&grant, now()).map_err(|e| e.to_string())?;
@@ -461,10 +638,16 @@ fn client_worker(
                     .next()
                     .ok_or("Missing interaction handle")?
                     .to_owned();
+                let grant_id = storage
+                    .lookup(GrantSelector::Interaction(&handle))
+                    .map_err(|_| "Grant storage unavailable")?
+                    .ok_or("Unknown new grant")?
+                    .id;
                 sessions.insert(
                     command.session.clone(),
                     BrowserSession {
                         client,
+                        grant_id,
                         handle,
                         born: Instant::now(),
                         operations: 0,
@@ -474,6 +657,9 @@ fn client_worker(
                         ],
                         retired_token: None,
                         folder: None,
+                        continuation_open: true,
+                        requested_rights: requested_rights(&grant).unwrap(),
+                        last_resource_status: None,
                         next_continuation: now()
                             + step
                                 .response()
@@ -498,16 +684,15 @@ fn client_worker(
                     if session.state != "pending" {
                         return Err("Consent already completed".into());
                     }
-                    decisions
-                        .lock()
-                        .unwrap()
-                        .insert(command.session.clone(), command.action == "approve");
-                    let Finish::Redirect { uri } = server
-                        .complete_interaction(&session.handle, now())
-                        .map_err(|e| format!("{e:?}"))?
-                    else {
-                        return Err("Unexpected completion method".into());
-                    };
+                    let uri = consent_finish(
+                        &server,
+                        &storage,
+                        &decisions,
+                        &command.session,
+                        session.grant_id,
+                        &session.handle,
+                        command.action == "approve",
+                    )?;
                     session.events.push(format!(
                         "Resource owner explicitly chose {}. AS returns a bound callback.",
                         command.action
@@ -529,34 +714,56 @@ fn client_worker(
                     session.events.push("Client validated the interaction callback hash; continuation is now available.".into());
                 }
                 "continue" => {
+                    let before = session
+                        .client
+                        .usable_tokens(now())
+                        .and_then(|t| t.first().map(|t| t.value.clone()));
                     let step = match session.client.continue_grant(now()) {
                         Ok(s) => s,
                         Err(e) => {
                             if matches!(&e,gnap_client::ClientError::Server(e) if e.code == gnap_registry::ErrorCode::UserDenied)
                             {
                                 session.state = "denied";
-                                session.events.push("AS refused the delegation after explicit denial; no resource token was issued.".into());
+                                session.continuation_open = false;
+                                session.events.push("AS refused the request and closed continuation. Any previously issued tokens keep their own lifecycle; refusal is not revocation.".into());
                             } else {
                                 return Err(e.to_string());
                             }
-                            return Ok(
-                                json!({"state":session.state,"events":session.events,"resource_available":true}),
-                            );
+                            return Ok(browser_view(session, &origin));
                         }
                     };
-                    session.state = if step.response().access_token.is_some() {
-                        "approved"
+                    session.received(&step, before)?;
+                    session.events.push(if step.response().access_token.is_some() { "Signed continuation approved the requested rights and atomically replaced all earlier tokens." } else { "Signed POST poll renewed continuation without issuing another token or renewing its lifetime." }.into());
+                }
+                "downscope" | "expand" => {
+                    if !matches!(session.state, "approved" | "revoked")
+                        || !session.continuation_open
+                    {
+                        return Err("An open approved grant is required for this change".into());
+                    }
+                    let rights = if command.action == "downscope" {
+                        vec![FOLDER_READ]
                     } else {
-                        "pending"
+                        vec![FOLDER_READ, ARCHIVE_READ]
                     };
-                    session.next_continuation = now()
-                        + step
-                            .response()
-                            .r#continue
-                            .as_ref()
-                            .and_then(|c| c.wait)
-                            .unwrap_or(0);
-                    session.events.push("Signed continuation over HTTP; AS returned a key-bound token for synthetic-folder:read.".into());
+                    let changes: ContinueRequest = serde_json::from_value(json!({"access_token":{"access":rights}, "interact":{"start":["redirect"],"finish":{"method":"redirect","uri":format!("{origin}/callback"),"nonce":fresh_nonce().map_err(|_| "Interaction randomness unavailable")?}}})).map_err(|_| "Modification encoding failed")?;
+                    let before = session
+                        .client
+                        .usable_tokens(now())
+                        .and_then(|t| t.first().map(|t| t.value.clone()));
+                    let step = session
+                        .client
+                        .modify_grant(&changes, now())
+                        .map_err(|_| "Grant modification refused or AS unavailable")?;
+                    if matches!(step, gnap_client::Step::Recoverable(_)) {
+                        return Err(
+                            "AS refused this modification; existing rights are unchanged".into(),
+                        );
+                    }
+                    session.requested_rights =
+                        changes.access_token.unwrap().tokens[0].access.clone();
+                    session.received(&step, before)?;
+                    session.events.push(if session.state == "pending" { "Signed PATCH requested additional rights. A new interaction is required; previous tokens remain live while consent is pending." } else { "Signed PATCH reduced access to a subset of live approved rights. New tokens replaced the entire previous set without another consent prompt." }.into());
                 }
                 "rotate" => {
                     let before = session
@@ -576,7 +783,7 @@ fn client_worker(
                     session.events.push("Signed management POST over HTTP: access and management token values rotated.".into());
                 }
                 "revoke" => {
-                    session.retired_token = session
+                    let retiring = session
                         .client
                         .usable_tokens(now())
                         .and_then(|t| t.first().map(|t| t.value.clone()));
@@ -584,14 +791,32 @@ fn client_worker(
                         .client
                         .revoke_token(None, now())
                         .map_err(|e| e.to_string())?;
-                    session.state = "revoked";
+                    session.retired_token = retiring;
+                    if !matches!(session.state, "pending" | "awaiting_callback" | "ready") {
+                        session.state = "revoked";
+                    }
                     session.folder = None;
                     session.events.push(
                         "Signed management DELETE over HTTP: AS confirmed revocation (204).".into(),
                     );
                 }
-                "read" | "check-retired" => {
-                    let token = if command.action == "read" {
+                "revoke-grant" => {
+                    let retiring = session
+                        .client
+                        .usable_tokens(now())
+                        .and_then(|t| t.first().map(|t| t.value.clone()));
+                    session
+                        .client
+                        .revoke_grant(now())
+                        .map_err(|_| "Grant revocation refused or AS unavailable")?;
+                    session.retired_token = retiring;
+                    session.continuation_open = false;
+                    session.state = "grant_revoked";
+                    session.folder = None;
+                    session.events.push("Signed DELETE on continuation revoked the grant and all its tokens atomically (204).".into());
+                }
+                "read" | "read-archive" | "check-retired" => {
+                    let token = if command.action != "check-retired" {
                         session
                             .client
                             .usable_tokens(now())
@@ -603,8 +828,20 @@ fn client_worker(
                             .clone()
                             .ok_or("Rotate or revoke a token first")?
                     };
-                    let request = resource_request(&origin, token.as_str(), signer.as_ref())?;
+                    let path = if command.action == "read-archive" {
+                        "/resource/archive"
+                    } else {
+                        "/resource/folder"
+                    };
+                    let request = sign_request(
+                        HttpRequest::new("GET", format!("{origin}{path}")),
+                        signer.as_ref(),
+                        Some(&token),
+                        now(),
+                    )
+                    .map_err(|_| "Resource signing failed")?;
                     let response = transport.send(request)?;
+                    session.last_resource_status = Some(response.status);
                     if command.action == "check-retired" {
                         if response.status != 401 {
                             return Err(format!(
@@ -614,7 +851,7 @@ fn client_worker(
                         }
                         session.events.push("A fresh valid signature with the retired token was rejected by the RS (401).".into());
                     } else {
-                        if response.status != 200 {
+                        if !matches!(response.status, 200 | 401) {
                             return Err(format!(
                                 "RS refused the resource request ({})",
                                 response.status
@@ -623,7 +860,7 @@ fn client_worker(
                         session.folder = Some(
                             serde_json::from_slice(&response.body).map_err(|e| e.to_string())?,
                         );
-                        session.events.push("Signed GET /resource/folder over HTTP: RS verified proof, live token and read right, then returned synthetic documents.".into());
+                        session.events.push(format!("Signed GET {path} returned {} after the RS checked proof, token and the exact resource right.", response.status));
                     }
                 }
                 "start" | "status" => {}
@@ -634,10 +871,12 @@ fn client_worker(
                 }
                 _ => return Err("Unknown action".into()),
             }
-            Ok(
-                json!({"state":session.state, "events":session.events, "rights":["synthetic-folder:read"], "token_present":session.client.usable_tokens(now()).is_some(), "resource_available":true, "retired_token_present":session.retired_token.is_some(), "folder":session.folder, "interaction_uri":format!("{origin}/interact/{}",session.handle),"continuation_wait_seconds":session.next_continuation.saturating_sub(now())}),
-            )
+            Ok(browser_view(session, &origin))
         })();
+        if result.is_err() && command.action == "start" && !sessions.contains_key(&command.session)
+        {
+            decisions.lock().unwrap().clients.remove(&command.session);
+        }
         let _ = command.reply.send(result);
     }
 }
@@ -673,6 +912,7 @@ fn allow_start(starts: &Mutex<VecDeque<Instant>>) -> bool {
     true
 }
 
+#[cfg(test)]
 fn resource_request(
     origin: &str,
     token: &str,
@@ -705,6 +945,11 @@ fn read_resource_with_clock(
     request: &HttpRequest,
     clock: impl Fn() -> u64,
 ) -> Result<Value, ResourceError> {
+    let right = match request.url.strip_prefix(&app.origin) {
+        Some("/resource/folder") if request.method == "GET" => FOLDER_READ,
+        Some("/resource/archive") if request.method == "GET" => ARCHIVE_READ,
+        _ => return Err(ResourceError::Denied),
+    };
     let auth: Vec<&str> = request
         .headers
         .iter()
@@ -740,7 +985,8 @@ fn read_resource_with_clock(
         .decisions
         .lock()
         .unwrap()
-        .contains_key(&client_id(&record.client))
+        .clients
+        .contains(&client_id(&record.client))
     {
         return Err(ResourceError::Denied);
     }
@@ -748,7 +994,7 @@ fn read_resource_with_clock(
         .token
         .access
         .as_ref()
-        .is_some_and(|a| a.contains(&AccessItem::Reference("synthetic-folder:read".into())))
+        .is_some_and(|a| a.contains(&AccessItem::Reference(right.into())))
     {
         return Err(ResourceError::Denied);
     }
@@ -794,7 +1040,7 @@ fn read_resource_with_clock(
         return Err(ResourceError::Denied);
     }
     Ok(
-        json!({"folder":"synthetic-project-orion","documents":[{"name":"meeting-notes.txt","content":"Synthetic notes: review a GNAP delegation with explicit consent."},{"name":"readme.txt","content":"No personal data. This read was authorized by a live key-bound GNAP token."}],"granted_right":"synthetic-folder:read"}),
+        json!({"folder":if right == FOLDER_READ { "synthetic-project-orion" } else { "synthetic-archive" },"documents":[{"name":"readme.txt","content":"Synthetic documents only. This read was authorized by a live key-bound GNAP token."}],"granted_right":right}),
     )
 }
 async fn resource(
@@ -875,6 +1121,10 @@ async fn action(
         "revoke",
         "read",
         "check-retired",
+        "downscope",
+        "expand",
+        "read-archive",
+        "revoke-grant",
     ]
     .contains(&action)
     {
@@ -1016,7 +1266,13 @@ async fn protocol(
 
 #[tokio::main]
 async fn main() {
-    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
+    let port = std::env::var("PORT")
+        .unwrap_or_else(|_| "8080".into())
+        .parse::<u16>()
+        .unwrap_or_else(|_| {
+            eprintln!("Invalid PORT");
+            std::process::exit(1);
+        });
     let origin = std::env::var("APP_ORIGIN").unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
     let canonical = CanonicalOrigin::parse(&origin).unwrap_or_else(|reason| {
         // Do not echo the supplied URL: an invalid value may contain credentials.
@@ -1065,17 +1321,18 @@ async fn main() {
         starts: Arc::default(),
         admission: Arc::new(tokio::sync::Semaphore::new(16)),
     };
+    let worker_storage = storage.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(30));
         if let Err(error) = storage.cleanup() {
             eprintln!("Background store maintenance failed: {error}");
         }
     });
-    std::thread::spawn(move || client_worker(origin, signer, server, decisions, receiver));
+    std::thread::spawn(move || {
+        client_worker(origin, signer, server, worker_storage, decisions, receiver)
+    });
+    let listener = canonical.bind(port).await.expect("listener initialization");
     let router = application_router(app, canonical);
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
-        .await
-        .expect("listen PORT");
     eprintln!("GNAP delegation demo listening on PORT={port}; no credential values are logged.");
     axum::serve(listener, router).await.expect("HTTP server");
 }
@@ -1091,6 +1348,7 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/gnap", post(protocol).options(protocol))
         .route("/continue", axum::routing::any(protocol))
         .route("/resource/folder", get(resource))
+        .route("/resource/archive", get(resource))
         .route("/continue/{handle}", axum::routing::any(protocol))
         .route("/token/{handle}", axum::routing::any(protocol))
         .route("/app.js", get(|| async { ([("content-type", "text/javascript")], include_str!("../static/app.js")) }))
@@ -1112,6 +1370,43 @@ mod tests {
     use super::*;
     use gnap_as::{GrantRecord, TokenRecord};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn listener_is_loopback_for_local_http_and_reachable_by_https_proxy() {
+        for (configured, ip, host) in [
+            ("http://127.0.0.1:18080", "127.0.0.1", "127.0.0.1"),
+            ("http://localhost:18080", "127.0.0.1", "localhost"),
+            ("http://[::1]:18080", "::1", "[::1]"),
+            ("https://demo.example", "0.0.0.0", "127.0.0.1"),
+        ] {
+            let origin = CanonicalOrigin::parse(configured).unwrap();
+            let listener = origin
+                .bind(0)
+                .await
+                .expect("listener regression requires IPv4 and IPv6 loopback");
+            let address = listener.local_addr().unwrap();
+            assert_eq!(address.ip(), ip.parse::<IpAddr>().unwrap());
+            assert_ne!(address.port(), 0);
+            let serving = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new().route("/health", get(|| async { "ok" })),
+                )
+                .await
+                .unwrap();
+            });
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap()
+                .get(format!("http://{host}:{}/health", address.port()))
+                .send()
+                .await;
+            serving.abort();
+            assert_eq!(response.unwrap().status(), 200);
+        }
+    }
 
     #[tokio::test]
     async fn actual_router_serves_discovery_and_does_not_redirect_options_aliases() {
@@ -1424,11 +1719,15 @@ mod tests {
         assert_eq!(session_cookie(&headers).unwrap().len(), 22);
     }
 
-    fn test_app() -> App {
+    pub(super) fn test_app() -> App {
         let signer = Arc::new(Ps256Signer::generate(2048, "test-client").unwrap());
         let storage = Arc::new(IndexedStorage::default());
         let decisions: Decisions = Arc::default();
-        decisions.lock().unwrap().insert("test-client".into(), true);
+        decisions
+            .lock()
+            .unwrap()
+            .clients
+            .insert("test-client".into());
         let server = Arc::new(AuthorizationServer::new(
             ConsentPolicy(decisions.clone()),
             KnownKeys {
@@ -1465,7 +1764,7 @@ mod tests {
             )
             .unwrap(),
             client: serde_json::from_value(json!("test-client")).unwrap(),
-            management_token: "management-only".into(),
+            management_token: format!("management-{value}"),
         }
     }
     fn test_aggregate(handle: &str, token: TokenRecord) -> GrantAggregate {
@@ -1499,7 +1798,7 @@ mod tests {
         assert!(read_resource(&app, &request).is_err());
         assert!(read_resource(
             &app,
-            &resource_request(&app.origin, "management-only", &app.signer).unwrap()
+            &resource_request(&app.origin, "management-access-one", &app.signer).unwrap()
         )
         .is_err());
         let other = Ps256Signer::generate(2048, "test-client").unwrap();
@@ -1892,3 +2191,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod ongoing_tests;

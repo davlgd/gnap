@@ -287,8 +287,27 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             }
         }
 
+        self.protocol.requested = request.access_token.as_ref().map(|a| a.cardinality);
+        self.prepare_interaction(request.interact.as_ref())?;
+
+        let body = serde_json::to_vec(request)
+            .map_err(|e| ClientError::Usage(format!("serializing the request: {e}")))?;
+        let http = self.signed_request("POST", &self.endpoint.clone(), Some(body), None, now)?;
+        let response = self.round_trip(http)?;
+        self.absorb(&response, now)
+    }
+
+    /// Validates the interaction context before sending an initial request or PATCH.
+    fn prepare_interaction(
+        &mut self,
+        interaction: Option<&gnap_types::interact::InteractRequest>,
+    ) -> Result<(), ClientError> {
+        if interaction.is_some() {
+            self.protocol.client_nonce = None;
+            self.protocol.hash_method = None;
+        }
         // The nonce the client chose feeds the interaction hash later (§4.2.3).
-        if let Some(i) = &request.interact {
+        if let Some(i) = interaction {
             if let Some(f) = &i.finish {
                 // §2.5.2 — the callback is validated against this nonce and
                 // this algorithm, so both have to be usable now.
@@ -305,8 +324,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                 self.protocol.hash_method = Some(method);
             }
         }
-        self.protocol.requested = request.access_token.as_ref().map(|a| a.cardinality);
-        if let Some(i) = &request.interact {
+        if let Some(i) = interaction {
             self.protocol.offered_modes = i
                 .start
                 .iter()
@@ -331,11 +349,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             }
         }
 
-        let body = serde_json::to_vec(request)
-            .map_err(|e| ClientError::Usage(format!("serializing the request: {e}")))?;
-        let http = self.signed_request("POST", &self.endpoint.clone(), Some(body), None, now)?;
-        let response = self.round_trip(http)?;
-        self.absorb(&response, now)
+        Ok(())
     }
 
     /// Reads and validates a callback arriving on the redirect URI (§4.2.1).
@@ -488,7 +502,10 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         // associated interaction reference on the callback URI." Polling in
         // that window asks the AS to act on an interaction the client has no
         // evidence of, which is the very thing the reference is for.
-        if self.protocol.as_nonce.is_some() && !self.protocol.interaction_finished {
+        if self.protocol.grant.state() == State::Pending
+            && self.protocol.as_nonce.is_some()
+            && !self.protocol.interaction_finished
+        {
             return Err(ClientError::Usage(
                 "the AS returned a `finish` nonce, so this grant continues on the \
                  interaction reference from the callback; it MUST NOT be continued before \
@@ -608,6 +625,12 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             .apply(Event::Modify, now)
             .map_err(|e| ClientError::Usage(e.to_string()))?;
 
+        let context_before = self.protocol.clone();
+        if let Some(access) = &changes.access_token {
+            self.protocol.requested = Some(access.cardinality);
+        }
+        self.prepare_interaction(changes.interact.as_ref())?;
+
         let body = serde_json::to_vec(changes)
             .map_err(|e| ClientError::Usage(format!("serializing the modification: {e}")))?;
         let http = self.signed_request(
@@ -620,12 +643,94 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         let response = self.round_trip(http)?;
         let before = self.protocol.grant.clone();
         self.protocol.grant = attempt;
-        let step = self.absorb(&response, now)?;
+        let step = match self.absorb(&response, now) {
+            Err(ClientError::Server(error)) => {
+                // The error closes continuation, not acceptance of the fields
+                // proposed by this refused PATCH. Keep their previous context.
+                self.protocol.client_nonce = context_before.client_nonce;
+                self.protocol.hash_method = context_before.hash_method;
+                self.protocol.requested = context_before.requested;
+                self.protocol.offered_modes = context_before.offered_modes;
+                return Err(ClientError::Server(error));
+            }
+            result => result?,
+        };
 
         if matches!(step, Step::Recoverable(_)) {
-            self.rewind(before, now);
+            // A refused PATCH did not install the offered request context.
+            let continuation = self.protocol.continuation.clone();
+            let inferred_grant = self.protocol.grant.clone();
+            self.protocol = context_before;
+            self.protocol.continuation = continuation;
+            if before.state() == State::Pending {
+                self.rewind(before, now);
+            } else {
+                self.protocol.grant = inferred_grant;
+            }
+        } else {
+            self.protocol.validated_ref = None;
         }
         Ok(step)
+    }
+
+    /// Revokes the ongoing grant and its associated tokens (§5.4).
+    ///
+    /// Only a 204 response with empty content confirms revocation. Inconclusive
+    /// exchanges preserve local state; the server may still have committed the
+    /// request, so retry is neither automatic nor guaranteed to succeed.
+    /// Valid GNAP errors update continuation exactly as other grant responses.
+    ///
+    /// # Errors
+    /// Fails when no continuation is offered, a state/wait guard refuses the
+    /// request, the exchange fails, or the response does not confirm revocation.
+    pub fn revoke_grant(&mut self, now: u64) -> Result<(), ClientError> {
+        self.transaction(|session| session.revoke_grant_inner(now))
+    }
+
+    fn revoke_grant_inner(&mut self, now: u64) -> Result<(), ClientError> {
+        let continuation = self.protocol.continuation.clone().ok_or_else(|| {
+            ClientError::Usage("the AS offered no continuation (RFC 9635 §5)".into())
+        })?;
+        let mut revoked = self.protocol.grant.clone();
+        revoked
+            .apply(Event::Revoke, now)
+            .map_err(|e| ClientError::Usage(e.to_string()))?;
+        let request = self.signed_request(
+            "DELETE",
+            &continuation.uri,
+            None,
+            Some(&continuation.access_token.value),
+            now,
+        )?;
+        let response = self.round_trip(request)?;
+        if response.status != 204 {
+            let step = self.absorb(&response, now)?;
+            if let Step::Recoverable(response) = step {
+                if let Some(error) = response.error {
+                    return Err(ClientError::Server(error));
+                }
+            }
+            return Err(ClientError::Protocol(
+                "grant revocation requires 204 No Content (RFC 9635 §5.4)".into(),
+            ));
+        }
+        if !response.body.is_empty() {
+            return Err(ClientError::Protocol(
+                "a 204 revocation response must have no content".into(),
+            ));
+        }
+        revoked.withhold_continuation();
+        self.protocol.grant = revoked;
+        self.protocol.continuation = None;
+        self.protocol.issued = None;
+        self.protocol.subject = None;
+        self.protocol.as_nonce = None;
+        self.protocol.client_nonce = None;
+        self.protocol.hash_method = None;
+        self.protocol.validated_ref = None;
+        self.protocol.interaction_window = None;
+        self.protocol.interaction_finished = false;
+        Ok(())
     }
 
     /// Rotates a token's value through its management API (§6.1).
@@ -842,10 +947,10 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
 
     /// An unusable response says nothing authoritative about the remote grant.
     /// Retain all local state, but commit valid GNAP errors just like successes.
-    fn transaction(
+    fn transaction<R>(
         &mut self,
-        operation: impl FnOnce(&mut Self) -> Result<Step, ClientError>,
-    ) -> Result<Step, ClientError> {
+        operation: impl FnOnce(&mut Self) -> Result<R, ClientError>,
+    ) -> Result<R, ClientError> {
         let before = self.protocol.clone();
         let result = operation(self);
         if result.is_err() && !matches!(&result, Err(ClientError::Server(_))) {

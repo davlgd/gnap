@@ -305,7 +305,19 @@ stale writes cannot restore a token removed by a concurrent revoke. Policy and
 proof verification run outside the store transaction. Custom adapters must
 implement the [transactional storage contract](crates/gnap-as/src/lib.rs),
 including collision checks, failure reporting and maintenance removal. This
-does not add persistence or continuation after grant approval.
+does not add persistence.
+
+`Policy::keep_grant_open` can retain continuation after approval; the default
+still closes it. An approved POST poll renews only continuation, without
+reissuing access tokens or extending their lifetime. PATCH re-evaluates the
+request through `EvaluationContext`, which supplies the authenticated grant
+snapshot to deployment policy. Existing tokens remain valid while another
+interaction is pending; approval atomically replaces all of them. DELETE
+revokes the whole grant and its tokens. A valid GNAP error without continuation
+closes that continuation but does not itself revoke existing access tokens.
+The [delegation lab](apps/delegation-demo/README.md) exercises these distinctions
+with two resource rights, fresh consent for expansion and protected HTTP reads.
+This replacement policy does not implement the optional `durable` token flag.
 Revoked-token records are removed. A later call to the old management URI is
 rejected because its key binding can no longer be verified; the idempotent
 revocation recommended in §6.2 would require retaining authentication metadata.

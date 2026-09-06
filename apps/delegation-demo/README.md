@@ -1,10 +1,12 @@
 # GNAP delegation lab
 
 A real HTTP consumer of this workspace: a web client asks an authorization
-server for read access to a synthetic folder, the visitor explicitly consents,
+server for read access to a synthetic folder and archive, the visitor explicitly consents,
 and a resource server verifies a live key-bound token before returning documents.
 Rotation and revocation can then be checked by presenting the retired token
 with a **fresh valid signature**, which the resource server must reject.
+Approval leaves the grant open: poll, reduce its rights, request an extension
+with new consent, or revoke the entire grant through its continuation endpoint.
 
 This is a public teaching sandbox, not an authenticated document service or a
 claim of full GNAP conformance. No personal data or private key fixtures are used.
@@ -19,28 +21,62 @@ cargo run --manifest-path apps/delegation-demo/Cargo.toml --locked
 
 Open <http://127.0.0.1:8080>. The initial key generation can take a few seconds.
 Approve the request, follow the callback, continue after the AS wait period, and
-read the folder. Rotate, test the retired token, read again, revoke, and test
-the retired token again. A separate fresh request can demonstrate denial.
+read both resources. Polling the approved grant renews continuation without
+issuing another access token or extending that token's lifetime. Keep folder
+access only, then try the archive: the RS refuses it. The previous token is
+also refused, including for the folder.
+
+Request folder and archive again. The reduced token still works for the folder
+while the new consent is pending. Approval replaces all earlier tokens with the
+new rights; denial closes continuation but leaves previous tokens under their
+own expiration and management lifecycle. To test denial and grant revocation,
+use separate grants: a closed continuation cannot later revoke the whole grant.
+Token revocation remains available for a retained token after denial.
+
+The separate token controls demonstrate rotation and token-only revocation.
+"Revoke the entire grant" instead sends DELETE to continuation and invalidates
+every token belonging to it. It can also cancel a pending request before consent
+or the callback: approval is not required for cancellation. Both cases require
+an open continuation and respect the AS wait period. Changing rights, unlike
+cancelling the request, requires an approved grant. Retired-token checks use
+fresh valid signatures.
 
 ```sh
 cargo test --manifest-path apps/delegation-demo/Cargo.toml --locked
 python3 tools/smoke_ecosystem.py --demo http://127.0.0.1:8080
 ```
 
-The smoke test expects an already running service and creates two synthetic
+The smoke test expects an already running service and creates synthetic
 sessions. It drives real HTTP, consent/callback, denial, protected reads, token
 rotation/revocation, cross-browser isolation, callback replay and unsigned
-resource rejection. It is not a third-party interoperability test.
+resource rejection. The ongoing-grant checks also exercise an approved poll,
+downscope, expansion with fresh consent, protected reads while consent is
+pending, and grant-wide revocation. The public browser output does not reveal
+tokens: unchanged value and issuance time after polling are verified by the
+SDK consumer tests, not inferred from the HTTP smoke output. Neither test
+suite is a third-party interoperability test.
+
+Listener tests require working IPv4 and IPv6 loopback interfaces. They check
+actual socket addresses and local HTTP reachability, including `localhost`;
+an unavailable interface is an explicit test-environment failure.
 
 ## Deployment contract
 
-- `PORT`: listening port, default `8080`; binds `0.0.0.0`.
+- `PORT`: listening port, default `8080`.
 - `APP_ORIGIN`: exact externally visible HTTPS origin, no trailing slash, path,
   userinfo, query or fragment. Use its canonical spelling: lowercase hostname,
   without an explicit default port. HTTP is accepted only for localhost development.
   In that mode the app explicitly enables nonstandard HTTP-loopback discovery;
   OPTIONS responses carry `GNAP-Development-Only: insecure-loopback-discovery`.
   Public HTTPS deployments use the strict RFC 9635 discovery checks.
+  HTTP origins with `127.0.0.1` or `localhost` bind only `127.0.0.1`; `[::1]`
+  binds only `::1`, without resolving DNS to choose an interface. Prefer the
+  explicit IPv4 address in local examples; `localhost` clients must fall back
+  to IPv4 if they try IPv6 first. A local proxy must connect through loopback.
+  HTTPS origins bind `0.0.0.0` for the upstream TLS proxy. The app itself serves
+  HTTP: the proxy and deployment firewall must block untrusted direct backend
+  access. The Host/authority guard is not a network-access boundary or TLS.
+  No environment variable overrides this listening policy.
 - Binary: `gnap-delegation-demo`; readiness: `GET /health`.
 - Clever Cloud: use this app directory as `APP_FOLDER`, a **Build M** instance,
   and exactly one runtime instance. Set `APP_ORIGIN` to its public HTTPS origin.
@@ -89,7 +125,7 @@ python3 tools/smoke_ecosystem.py --demo https://demo.example --demo-alias https:
 
 The single deployment contains three roles, not three independent security
 administrations. `gnap-client::Session` exchanges actual HTTP requests with
-`gnap-as::AuthorizationServer`; the RS shares an application token index with
+`gnap-as::AuthorizationServer`; the RS shares the SDK's transactional token indexes with
 the AS and calls `gnap-crypto::verify::verify_request`. **No RFC 9767 introspection
 endpoint is implemented or simulated.**
 
@@ -100,8 +136,23 @@ endpoint is implemented or simulated.**
   Restart invalidates all keys, grants and tokens. No token values appear in
   the browser or application logs.
 - The visitor plays the resource owner; there is no real login, user directory,
-  private document upload or identity assurance. Only a fixed read right exists.
+  private document upload or identity assurance. Only two fixed read rights
+  exist: `synthetic-folder:read` at `/resource/folder` and
+  `synthetic-archive:read` at `/resource/archive`.
+- Consent is bound to the stable grant ID, exact current request and the
+  interaction reference committed by the AS. Completing the interaction must
+  succeed before that choice is recorded or its finish redirect is returned.
+  Policy reads the choice without consuming it before the grant CAS; a storage
+  conflict cannot lose the decision. A previous browser/client approval cannot
+  authorize another grant or a later interaction. A PATCH is approved without
+  another prompt only when its requested rights are a subset of rights in the
+  snapshot's still-live tokens. Otherwise it requests fresh interaction.
 - Browser state uses random 128-bit HttpOnly/SameSite cookies, Secure on HTTPS.
+  Every HTTP `/api/start` creates a fresh browser identity even when a cookie is
+  supplied; older sessions remain subject to their normal retention limits.
+  The worker rejects an internal start reusing a live session ID before calling
+  the AS or changing registries. This does not revoke any existing token or
+  discard consent, and grant identifiers are never reused.
   State-changing POSTs require an exact matching Origin. Callback hashes are
   verified and a callback is consumed once per browser session.
 - At most 64 active sessions, a 32-command worker queue, 40 actions per session,
@@ -141,7 +192,8 @@ endpoint is implemented or simulated.**
   production abuse protection. Never deploy this as a real authorization service.
 
 GNAP capabilities demonstrated here are negotiated interaction/continuation,
-key-bound requests and token lifecycle management. This is not a claim that
+approved ongoing grants, PATCH modification with re-consent, grant-wide
+revocation, key-bound requests and token lifecycle management. This is not a claim that
 OAuth cannot provide consent, fine-grained access or proof-of-possession; an
 honest comparison must include OAuth extensions and deployment profiles.
 
