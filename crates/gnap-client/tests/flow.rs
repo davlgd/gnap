@@ -9,7 +9,7 @@ use gnap_crypto::hash::{interaction_hash, HashMethod, InteractionHashInput};
 use gnap_crypto::ps256::Ps256Signer;
 use gnap_registry::ErrorCode;
 use gnap_types::interact::InteractCallback;
-use gnap_types::message::GrantRequest;
+use gnap_types::message::{ContinueRequest, GrantRequest};
 use std::cell::RefCell;
 
 const RSA_PKCS1: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
@@ -105,6 +105,49 @@ const APPROVED: &str = r#"{
   "access_token": {"value": "OS9M2PMHKUR64TB8N6BW7OZB8CDFONP219RP1LT0",
                    "access": ["dolphin-metadata"]}
 }"#;
+
+#[test]
+fn empty_503_keeps_a_modification_retryable() {
+    let sk = signer();
+    let as_ = FakeAs::with(vec![POLLING, "", APPROVED]);
+    as_.replies.borrow_mut()[1].status = 503;
+    let mut session = Session::new(&as_, &sk, ENDPOINT);
+    session.start(&request(), 1_000).unwrap();
+    let continuation = session.continuation().cloned();
+    assert!(session
+        .modify_grant(&ContinueRequest::default(), 1_001)
+        .is_err());
+    assert_eq!(session.state(), State::Pending);
+    assert_eq!(session.continuation(), continuation.as_ref());
+    assert!(matches!(
+        session.modify_grant(&ContinueRequest::default(), 1_002),
+        Ok(Step::Approved(_))
+    ));
+}
+
+#[test]
+fn empty_503_after_callback_keeps_the_reference_retryable() {
+    let sk = signer();
+    let as_ = FakeAs::with(vec![PENDING, "", APPROVED]);
+    as_.replies.borrow_mut()[1].status = 503;
+    let mut session = Session::new(&as_, &sk, ENDPOINT);
+    session.start(&request(), 1_000).unwrap();
+    session.accept_callback(&valid_callback(), 1_001).unwrap();
+    let continuation = session.continuation().cloned();
+    assert!(session.continue_grant(1_002).is_err());
+    assert_eq!(session.state(), State::Pending);
+    assert_eq!(session.continuation(), continuation.as_ref());
+    assert!(matches!(
+        session.continue_grant(1_003),
+        Ok(Step::Approved(_))
+    ));
+    let seen = as_.seen.borrow();
+    assert_eq!(seen[1].body, seen[2].body);
+    assert_ne!(
+        seen[1].header_value("signature-input"),
+        seen[2].header_value("signature-input")
+    );
+}
 
 /// The whole redirect flow: request, interaction, callback, continuation, token.
 ///
