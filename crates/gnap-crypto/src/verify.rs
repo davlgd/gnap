@@ -272,9 +272,11 @@ fn accept_signature(
         );
     }
 
-    // §7.3.1 — the verifier recomputes Content-Digest when there is content.
-    if let (Some(body), Some(d)) = (request.body, digest) {
-        verify_content_digest(body, d).map_err(|e| e.to_string())?;
+    // A present digest also commits to the absence of content (RFC 9530 §6.3).
+    // Treat None like an empty body; otherwise stripping a signed body leaves
+    // its digest unchecked and can change the operation the AS dispatches.
+    if let Some(d) = digest {
+        verify_content_digest(request.body.unwrap_or_default(), d).map_err(|e| e.to_string())?;
     }
     if request.body.is_some_and(|b| !b.is_empty())
         && !components.contains(&Component::ContentDigest)
