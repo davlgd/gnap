@@ -16,6 +16,7 @@ function render(data) {
   const continuable = data.continuation_open && ['ready', 'approved', 'revoked'].includes(data.state);
   document.querySelector('[data-action="continue"]').textContent = continuable && wait > 0 ? `Continue in ${wait}s` : data.state === 'approved' ? 'Poll without reissuing tokens' : 'Continue after callback';
   const changeable = ['approved', 'revoked'].includes(data.state) && data.continuation_open && wait === 0;
+  // Cancellation also applies before approval; unlike changing rights, it only needs live continuation and an elapsed wait.
   const lot = data.mode === 'multiple';
   const has = label => (data.tokens || []).some(t => t.label === label);
   const documents = lot ? has('documents') : data.token_present;

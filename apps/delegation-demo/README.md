@@ -84,7 +84,11 @@ general rule of GNAP.
 
 The separate token controls demonstrate rotation and token-only revocation.
 "Revoke the entire grant" instead sends DELETE to continuation and invalidates
-every token belonging to it. Retired-token checks use fresh valid signatures.
+every token belonging to it. It can also cancel a pending request before consent
+or the callback: approval is not required for cancellation. Both cases require
+an open continuation and respect the AS wait period. Changing rights, unlike
+cancelling the request, requires an approved grant. Retired-token checks use
+fresh valid signatures.
 
 ```sh
 cargo test --manifest-path apps/delegation-demo/Cargo.toml --locked
