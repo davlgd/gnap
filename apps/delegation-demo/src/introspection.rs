@@ -5,13 +5,8 @@ use gnap_as::{
     IntrospectionDecision, IntrospectionPolicy, MemoryResourceSetStore, ResolvedResourceServer,
     ResourceRegistrationPolicy, ResourceServerResolver, RsId, TokenRecord,
 };
-use gnap_crypto::verify::{verify_request_with_policy, Expectations, SignedRequest};
-use gnap_crypto::Ps256Verifier;
 use gnap_registry::KeyProofingMethod;
-use gnap_types::{
-    key::KeyObject,
-    rs::{IntrospectionRequest, IntrospectionResponse, ResourceServer, RsDiscovery},
-};
+use gnap_types::{key::KeyObject, rs::ResourceServer};
 
 pub(super) const RS_ID: &str = "delegation-demo-rs";
 pub(super) const RS2_ID: &str = "delegation-demo-metadata-rs";
@@ -313,126 +308,50 @@ impl ResourceClient {
         profile: Profile,
         clock: impl Fn() -> u64,
     ) -> Result<(), ResourceError> {
-        let auth: Vec<_> = request
-            .headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-            .map(|(_, value)| value.as_str())
-            .collect();
-        if auth.len() != 1 {
-            return Err(ResourceError::Denied);
-        }
-        let (scheme, value) = auth[0].split_once(' ').ok_or(ResourceError::Denied)?;
-        let value = value.trim_start_matches(' ');
-        if !scheme.eq_ignore_ascii_case("gnap")
-            || value.is_empty()
-            || value.bytes().any(|byte| byte.is_ascii_whitespace())
-        {
-            return Err(ResourceError::Denied);
-        }
-        let before = clock();
-        let discovery_url = format!("{}/.well-known/gnap-as-rs", self.origin);
-        let metadata: RsDiscovery = json_response(
-            self.transport
-                .send(HttpRequest::new("GET", &discovery_url))
-                .map_err(|_| ResourceError::Unavailable)?,
-        )?;
-        let validated_url = if self.origin.starts_with("http:") {
-            metadata.discovery_url_for_local_development()
+        let grant = format!("{}/gnap", self.origin);
+        let introspection = format!("{}/introspect", self.origin);
+        let trusted = if self.origin.starts_with("http:") {
+            gnap_rs::TrustedAs::for_local_development(grant, introspection)
         } else {
-            metadata.discovery_url()
+            gnap_rs::TrustedAs::new(grant, introspection)
         }
         .map_err(|_| ResourceError::Unavailable)?;
-        let endpoint = format!("{}/introspect", self.origin);
-        if validated_url != discovery_url
-            || metadata.grant_request_endpoint != format!("{}/gnap", self.origin)
-            || metadata.introspection_endpoint.as_deref() != Some(&endpoint)
-            || metadata
-                .key_proofs_supported
-                .as_ref()
-                .is_some_and(|proofs| !proofs.contains(&KeyProofingMethod::Httpsig))
-        {
-            return Err(ResourceError::Unavailable);
-        }
-        let context = IntrospectionRequest {
-            access_token: TokenValue::new(value).map_err(|_| ResourceError::Denied)?,
-            resource_server: ResourceServer::ByReference(profile.rs_id().into()),
-            proof: Some(KeyProofingMethod::Httpsig),
-            access: Some(vec![AccessItem::Reference(right.into())]),
-            extra: Default::default(),
+        let identity = ResourceServer::ByReference(profile.rs_id().into());
+        let nonces = |nonce: &str, time: u64| self.nonces.remember_nonce(nonce, time);
+        let authorizer = gnap_rs::Authorizer::new(
+            &trusted,
+            &identity,
+            self.transport.as_ref(),
+            self.signer.as_ref(),
+            &nonces,
+            &gnap_rs::AudiencePolicy::IntrospectionContext,
+        );
+        // The SDK verifies trust, binding and presentation. This application
+        // additionally retains its existing, deliberately narrow token profile.
+        let policy = |token: &gnap_rs::TokenInfo<'_>| {
+            if !profile.accepts_lifetime(token.expires_at.checked_sub(token.issued_at))
+                || !profile.accepts_rights(token.access)
+                || token.not_before.is_some()
+                || token.audience.is_some()
+                || token.subject.is_some()
+                || token.instance_id.is_some()
+            {
+                Err(gnap_rs::AuthorizationError::Unavailable)
+            } else {
+                Ok(())
+            }
         };
-        let mut outgoing = HttpRequest::new("POST", &endpoint);
-        outgoing
-            .headers
-            .push(("content-type".into(), "application/json".into()));
-        outgoing.body = Some(serde_json::to_vec(&context).map_err(|_| ResourceError::Unavailable)?);
-        let outgoing = sign_request(outgoing, self.signer.as_ref(), None, before)
-            .map_err(|_| ResourceError::Unavailable)?;
-        let response: IntrospectionResponse = json_response(
-            self.transport
-                .send(outgoing)
-                .map_err(|_| ResourceError::Unavailable)?,
-        )?;
-        let IntrospectionResponse::Active(active) = response else {
-            return Err(ResourceError::Denied);
-        };
-        let key = active
-            .key
-            .as_ref()
-            .and_then(|key| key.as_value())
-            .ok_or(ResourceError::Unavailable)?;
-        // iat/exp are optional in RFC 9767, but mandatory in this fixed demo
-        // profile. A changed AS profile must not silently remove our deadline.
-        let (Some(issued), Some(expires)) = (active.iat, active.exp) else {
-            return Err(ResourceError::Unavailable);
-        };
-        if active.iss != format!("{}/gnap", self.origin)
-            || !profile.accepts_lifetime(expires.checked_sub(issued))
-            || key.validate().is_err()
-            || key.proof.method() != &KeyProofingMethod::Httpsig
-            || matches!(&key.proof, gnap_types::key::Proof::Detailed { params, .. } if !params.is_empty())
-            || active.flags.as_ref().is_some_and(|flags| !flags.is_empty())
-            || !active.extra.is_empty()
-            || !profile.accepts_rights(&active.access)
-        {
-            return Err(ResourceError::Unavailable);
-        }
-        let right = AccessItem::Reference(right.into());
-        if !active.access.contains(&right) {
-            return Err(ResourceError::Denied);
-        }
-        let verifier =
-            Ps256Verifier::from_public_jwk(key.jwk.as_ref().ok_or(ResourceError::Unavailable)?)
-                .map_err(|_| ResourceError::Unavailable)?;
-        let verification_time = clock();
-        if verification_time < before || verification_time < issued || verification_time >= expires
-        {
-            return Err(ResourceError::Denied);
-        }
-        verify_request_with_policy(
-            &SignedRequest {
-                method: &request.method,
-                target_uri: &request.url,
-                headers: &request.headers,
-                body: request.body.as_deref(),
-            },
-            &verifier,
-            &Expectations {
-                now: verification_time,
-                max_clock_skew: 300,
-                key_id: None,
-            },
-            &|nonce: &str, time: u64| self.nonces.remember_nonce(nonce, time),
-            &|params| params.nonce.as_ref().is_some_and(|nonce| !nonce.is_empty()),
-        )
-        .map_err(|_| ResourceError::Denied)?;
-        let final_time = clock();
-        if final_time < verification_time || final_time >= expires {
-            return Err(ResourceError::Denied);
-        }
-        // A concurrent revocation after the AS decision can race this read.
-        // No positive result is retained for a subsequent resource request.
-        Ok(())
+        authorizer
+            .authorize(
+                request,
+                &[AccessItem::Reference(right.into())],
+                &policy,
+                clock,
+            )
+            .map_err(|error| match error {
+                gnap_rs::AuthorizationError::Denied => ResourceError::Denied,
+                gnap_rs::AuthorizationError::Unavailable => ResourceError::Unavailable,
+            })
     }
 }
 
