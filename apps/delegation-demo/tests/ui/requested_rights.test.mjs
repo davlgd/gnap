@@ -50,6 +50,29 @@ test('identity is opt-in and consent is explicit without opening grant modificat
   assert.equal(renderSnapshot({state:'pending'}).get('#identity-consent').hidden, true);
 });
 
+test('push waits locally without enabling continuation before a verified callback', () => {
+  const timers = [];
+  const nodes = renderSnapshot({state:'awaiting_push', continuation_open:true,
+    push_finish:{received:false, expired:false, delivery:'uncertain'}}, timers);
+  assert.equal(nodes.get('#push-finish').hidden, false);
+  assert.match(nodes.get('#push-status').textContent, /does not undo consent/);
+  assert.equal(nodes.get('[data-action="continue"]').disabled, true);
+  assert.equal(nodes.get('[data-action="start-push"]').disabled, false);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 1000);
+});
+
+test('push expiration stops callback refresh and consent, while receipt permits continuation', () => {
+  const expired = renderSnapshot({state:'pending', continuation_open:true,
+    push_finish:{received:false, expired:true, delivery:'uncertain'}});
+  assert.match(expired.get('#push-status').textContent, /Start a fresh request/);
+  for (const action of ['approve', 'deny', 'continue']) assert.equal(expired.get(`[data-action="${action}"]`).disabled, true);
+  const received = renderSnapshot({state:'ready', continuation_open:true,
+    push_finish:{received:true, expired:false, delivery:'uncertain'}});
+  assert.match(received.get('#push-status').textContent, /validated the HTTP callback/);
+  assert.equal(received.get('[data-action="continue"]').disabled, false);
+});
+
 test('verified identity display expires locally and never exposes a raw assertion', () => {
   const timers = [];
   const nodes = renderSnapshot({state:'approved', identity_requested:true, continuation_open:false,

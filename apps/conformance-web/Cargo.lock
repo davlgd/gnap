@@ -475,6 +475,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "gnap-crypto",
+ "gnap-net",
  "gnap-registry",
  "gnap-types",
  "reqwest",
@@ -498,6 +499,10 @@ dependencies = [
  "sha3",
  "subtle",
 ]
+
+[[package]]
+name = "gnap-net"
+version = "0.1.0"
 
 [[package]]
 name = "gnap-registry"

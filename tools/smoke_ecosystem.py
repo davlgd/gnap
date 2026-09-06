@@ -185,6 +185,50 @@ def demo(base, outcomes):
     outcomes.append({"check": "explicit-denial", "status": "pass"})
 
 
+def push_demo(base, outcomes):
+    """Two disposable flows; callback transport is performed by the application."""
+    for choice in ("approve", "deny"):
+        browser = client()
+
+        def action(name):
+            status, _, body, _ = request(browser, base, "/api/" + name, "POST", {}, base)
+            expect(status == 200 and isinstance(body, dict), "Push action failed: " + name)
+            expect("redirect" not in body and "push-callback/" not in json.dumps(body),
+                   "Push action exposed a callback destination")
+            return body
+
+        state = action("start-push")
+        expect(state.get("state") == "pending", "Push did not request consent")
+        state = action(choice)
+        expect(state.get("state") == "awaiting_push", "Push consent did not await receipt")
+        deadline = time.monotonic() + 15
+        while True:
+            status, _, state, _ = request(browser, base, "/api/status")
+            expect(status == 200 and isinstance(state, dict), "Push status unavailable")
+            push = state.get("push_finish")
+            expect(isinstance(push, dict) and set(push) == {"received", "expired", "delivery"},
+                   "Push status has an unexpected shape")
+            if push.get("received") is True and push.get("delivery") == "delivered":
+                break
+            expect(time.monotonic() < deadline, "Push was not received and acknowledged within the smoke deadline")
+            time.sleep(0.5)
+        expect(state.get("state") == "ready", "Validated push did not enable continuation")
+        wait_for_continuation(browser, base)
+        state = action("continue")
+        expect(state.get("continuation_open") is False, "Push grant remained open after its decision")
+        if choice == "approve":
+            expect(state.get("state") == "approved" and state.get("token_present") is True,
+                   "Push approval did not issue a token")
+            expect(action("read").get("last_resource_status") == 200, "Push token did not authorize the resource")
+            expect(action("revoke").get("token_present") is False, "Push token remained usable after revocation")
+            expect(action("check-retired").get("last_resource_status") == 401,
+                   "Retired push token was not refused")
+        else:
+            expect(state.get("state") == "denied" and state.get("token_present") is False,
+                   "Push denial issued a token or lost the decision")
+        outcomes.append({"check": "push-" + choice, "status": "pass"})
+
+
 def wait_for_continuation(browser, base):
     status, _, body, _ = request(browser, base, "/api/status")
     expect(status == 200, "Could not read continuation wait")
@@ -748,19 +792,25 @@ def main():
     parser.add_argument("--demo", type=origin)
     parser.add_argument("--demo-alias", type=origin, help="An additional demo origin you control; requires --demo")
     parser.add_argument("--workbench", type=origin)
+    parser.add_argument("--push-only", action="store_true", help="Exercise only push approval and denial on --demo")
     args = parser.parse_args()
     if not args.demo and not args.workbench:
         parser.error("Provide --demo and/or --workbench; only test targets you control")
     if args.demo_alias and (not args.demo or args.demo_alias == args.demo):
         parser.error("--demo-alias requires a distinct --demo origin")
+    if args.push_only and (not args.demo or args.workbench or args.demo_alias):
+        parser.error("--push-only requires --demo alone")
     outcomes = []
     try:
         if args.demo:
             ready(args.demo, registration=True)
-            demo(args.demo, outcomes)
-            ongoing_demo(args.demo, outcomes)
-            multiple_demo(args.demo, outcomes)
-            secondary_device_demo(args.demo, outcomes)
+            if args.push_only:
+                push_demo(args.demo, outcomes)
+            else:
+                demo(args.demo, outcomes)
+                ongoing_demo(args.demo, outcomes)
+                multiple_demo(args.demo, outcomes)
+                secondary_device_demo(args.demo, outcomes)
             if args.demo_alias:
                 demo_alias(args.demo, args.demo_alias, outcomes)
         if args.workbench:

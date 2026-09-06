@@ -271,11 +271,11 @@ fn local_http_worker_refuses_identity_before_creating_client_or_grant() {
     });
     let (reply, received) = tokio::sync::oneshot::channel();
     sender
-        .send(Command {
+        .send(WorkerCommand::Browser(Command {
             session: "unused-client".into(),
             action: "start-identity".into(),
             reply,
-        })
+        }))
         .unwrap();
     let result = received.blocking_recv().unwrap();
     drop(sender);

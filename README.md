@@ -38,6 +38,7 @@ These are project decisions, not claims that those features are already present.
 | [`gnap-types`](crates/gnap-types) | The message data model: serialization, polymorphism, shape validation |
 | [`gnap-crypto`](crates/gnap-crypto) | Signing and shared GNAP request verification (`httpsig`, `PS256`), interaction hash, `Content-Digest` |
 | [`gnap-subject`](crates/gnap-subject) | Pinned PS256 identity assertions, with explicit issuer, audience and session binding |
+| [`gnap-net`](crates/gnap-net) | Shared conservative public-IP filtering for application HTTP boundaries |
 | [`gnap-core`](crates/gnap-core) | The grant state machine (§1.5): transitions, guards, response checking |
 | [`gnap-client`](crates/gnap-client) | The client instance role, over a pluggable HTTP transport |
 | [`gnap-as`](crates/gnap-as) | The authorization server role, free of any HTTP framework |
@@ -398,7 +399,7 @@ GNAP grant flow across three processes and supplies a signed live-decision
 channel. Process tests cover RS restart, two RS instances sharing one AS,
 AS outage and grant loss after AS restart. These are local HTTP observations,
 not a hosted TLS validation or a distributed transaction between revocation
-and file operations. JWT, Macaroon and ZCAP implementations are not supplied.
+and file operations. JWT access-token, Macaroon and ZCAP implementations are not supplied.
 The AS issues neither bearer nor `durable` tokens.
 
 Applications can select a different representation through
