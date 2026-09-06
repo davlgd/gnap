@@ -173,3 +173,34 @@ fn token_record_lifetime_boundaries_and_invalid_external_records() {
     assert!(record.is_valid_at(u64::MAX - 1));
     assert!(!record.is_valid_at(u64::MAX));
 }
+
+/// `TokenRecord::new` builds a record without a native identifier; the store
+/// indexes and reads it back like any other record.
+#[test]
+fn a_constructed_token_record_is_stored_and_read_back() {
+    use gnap_as::{TokenRecord, TokenStore};
+
+    let token: gnap_types::token::AccessToken =
+        serde_json::from_str(r#"{"value":"BBB","access":["read"],"expires_in":60}"#).unwrap();
+    let client: gnap_types::client::Client = serde_json::from_str(r#""client-541-ab""#).unwrap();
+    let record = TokenRecord::new(token.clone(), client.clone(), "MMM-2", 2_000);
+    assert!(record.identifier.is_none());
+    assert_eq!(record.issued_at, 2_000);
+    assert_eq!(record.token, token);
+    assert_eq!(record.client, client);
+    assert_eq!(record.management_token, "MMM-2");
+    assert_eq!(record.expires_at(), Some(2_060));
+    assert!(record.is_valid_at(2_059));
+    assert!(!record.is_valid_at(2_060));
+
+    let store = MemoryStorage::new();
+    store.put_token("handle-c", record);
+    let stored = store
+        .get_token("handle-c")
+        .expect("the constructed record is indexed");
+    assert!(stored.identifier.is_none());
+    assert_eq!(stored.token.value.as_str(), "BBB");
+    assert_eq!(stored.management_token, "MMM-2");
+    assert!(store.take_token("handle-c").is_some());
+    assert!(store.get_token("handle-c").is_none());
+}
