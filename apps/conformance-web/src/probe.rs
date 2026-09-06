@@ -39,6 +39,18 @@ struct ConfiguredTarget {
 }
 
 impl Probes {
+    /// Shared admission budget for unsigned probes and authenticated scenarios.
+    pub(crate) fn admit(&self) -> Result<(), StatusCode> {
+        let mut last = self
+            .last_started
+            .lock()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        if last.is_some_and(|previous| previous.elapsed() < COOLDOWN) {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+        *last = Some(Instant::now());
+        Ok(())
+    }
     /// Configuration is operator consent to send the fixed malformed-grant or
     /// OPTIONS discovery probe. No third-party ownership verification is implied.
     pub fn from_json(configuration: &str) -> Result<Self, &'static str> {
@@ -205,18 +217,12 @@ pub async fn run(State(probes): State<Probes>, Json(input): Json<ProbeRequest>) 
         )
             .into_response();
     }
-    {
-        let Ok(mut last) = probes.last_started.lock() else {
-            return StatusCode::SERVICE_UNAVAILABLE.into_response();
-        };
-        if last.is_some_and(|previous| previous.elapsed() < COOLDOWN) {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                "Global probe cooldown: one request per 60 seconds per process.",
-            )
-                .into_response();
-        }
-        *last = Some(Instant::now());
+    if let Err(status) = probes.admit() {
+        return (
+            status,
+            "Global probe cooldown: one request per 60 seconds per process.",
+        )
+            .into_response();
     }
     match tokio::time::timeout(Duration::from_secs(4), request(target, input.operation)).await {
         Ok(Ok(checks)) => Json(report(input.target_id, target.role, input.operation, checks)).into_response(),

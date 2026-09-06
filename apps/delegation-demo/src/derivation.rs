@@ -32,6 +32,7 @@ impl DerivationPolicy for introspection::Registration {
         if rs.id != RsId(resource_registration::RS_OWNER.into())
             || rs.key != self.key
             || token.derivation.is_some()
+            || token.client.as_value().is_some()
             || requested.cardinality != Cardinality::Single
             || requested.tokens.len() != 1
             || requested.tokens[0].access != wanted

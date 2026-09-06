@@ -6,6 +6,12 @@ an operator-approved AS, an OPTIONS discovery request to that same AS endpoint,
 or a credential-free GET to an operator-declared protected RS endpoint. It does
 **not** certify AS, RS or client conformance.
 
+The opt-in [authenticated lifecycle scenario](../../docs/authenticated-workbench.md)
+adds a separate client key, manual owner consent and actual protected-resource,
+replay, rotation and revocation checks. It uses only operator-approved AS/RS
+pairs. This feature is disabled by default; its public key must be explicitly
+approved at the AS and reapproved after each workbench restart.
+
 ## Run and test
 
 Run from the repository root. Rust 1.98 is the tested toolchain for this app;
@@ -13,7 +19,7 @@ the SDK's MSRV is not a promise for this independently locked HTTP application.
 
 ```sh
 cargo test --manifest-path apps/conformance-web/Cargo.toml --locked
-node --test apps/conformance-web/tests/ui/panel_generation.test.mjs
+node --test apps/conformance-web/tests/ui/*.test.mjs
 cargo run --manifest-path apps/conformance-web/Cargo.toml --locked
 ```
 
@@ -71,12 +77,15 @@ The three core message kinds reuse `gnap-types` deserialization and explicitly s
 - Captured AS response `Cache-Control: no-store` and optional body digest.
 
 These are **shared implementation checks, not an independent oracle**. There is
-no claim of complete key validity, extension validation, stateful flow
+no claim that these imports establish complete key validity, extension validation, stateful flow
 correctness, signatures, replay detection, assertion authenticity, RS rights
 enforcement, authenticated RFC 9767 introspection, or interoperability with another vendor.
 Even an empty grant response can pass the JSON shape check; whether it is
 appropriate in a particular exchange is outside an isolated message check.
 Missing optional material is `not_tested`, never a vacuous pass.
+
+The optional lifecycle scenario tests selected live outcomes separately; it does
+not turn an imported message into authenticated evidence.
 
 ### AS discovery diagnostics (RFC 9635 section 9)
 
@@ -487,13 +496,17 @@ raw parser error strings because SDK errors can include submitted secrets.
 
 Limits: 64 KiB upload, 32 KiB body string, 64 header pairs, 128-byte header names,
 4096-byte header values/digest, no CR/LF in imported headers, 16 in-flight
-application requests, 5-second application deadline. Parsing is bounded
-synchronous CPU work; there is no detached blocking job surviving cancellation.
+application requests, 5-second HTTP-handler deadline. Import parsing is bounded
+synchronous CPU work. The opt-in lifecycle worker has a separate five-minute
+budget and can outlive the initiating HTTP request; closing a page does not
+cancel an authorized scenario. Its [limits](../../docs/authenticated-workbench.md#admission-and-network-limits)
+also bound retained sessions, credentials, reports and outgoing requests.
 Axum/Hyper parse HTTP. Reverse-proxy header/connection/body deadlines and
 rate limiting are still required against distributed flooding and slow headers;
 the app does not claim general DoS immunity.
 
 UI uses `textContent`, no imported HTML, no externally hosted assets, restrictive
-CSP, `no-store` and no credentialed fetches. Do not paste live tokens or private
+CSP and `no-store`. Import and unsigned-probe requests omit credentials; the
+opt-in lifecycle page uses its own HttpOnly session cookie. Do not paste live tokens or private
 keys even though reports do not reflect their values. The clear button clears
 the visible fields/report, not forensic browser or hosting history.

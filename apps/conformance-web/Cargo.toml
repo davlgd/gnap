@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 gnap-net = { path = "../../crates/gnap-net" }
+gnap-client = { path = "../../crates/gnap-client" }
 axum = "=0.7.9"
 tokio = { version = "=1.51.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }

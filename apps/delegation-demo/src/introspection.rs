@@ -72,6 +72,25 @@ impl IntrospectionPolicy for Registration {
         token: &TokenRecord,
         minimum: Option<&[AccessItem]>,
     ) -> IntrospectionDecision {
+        if token.client.as_value().is_some() {
+            if rs.as_reference() != Some(RS_ID)
+                || minimum
+                    .is_some_and(|rights| rights != [AccessItem::Reference(FOLDER_READ.into())])
+            {
+                return IntrospectionDecision::Inactive;
+            }
+            return self
+                .decisions
+                .lock()
+                .ok()
+                .and_then(|registry| registry.external.introspect(token))
+                .map_or(IntrospectionDecision::Inactive, |key| {
+                    IntrospectionDecision::Active {
+                        access: vec![AccessItem::Reference(FOLDER_READ.into())],
+                        key: Some(key),
+                    }
+                });
+        }
         if rs.as_reference() == Some(RS2_ID) {
             let expected = vec![AccessItem::Reference(derivation::METADATA_READ.into())];
             let accepted = token
@@ -182,7 +201,8 @@ impl Profile {
     }
     fn accepts_lifetime(self, duration: Option<u64>) -> bool {
         match self {
-            Self::Documents | Self::Reports => duration == Some(1200),
+            Self::Documents => matches!(duration, Some(300 | 1200)),
+            Self::Reports => duration == Some(1200),
             Self::Metadata => duration.is_some_and(|seconds| (1..=60).contains(&seconds)),
         }
     }
@@ -193,6 +213,17 @@ impl Profile {
             Self::Reports => access == [AccessItem::Reference(multiple::REPORTS_READ.into())],
         }
     }
+}
+
+#[test]
+fn external_lifetime_is_not_a_relaxation_of_the_reports_profile() {
+    assert!(Profile::Documents.accepts_lifetime(Some(300)));
+    assert!(Profile::Documents.accepts_lifetime(Some(1200)));
+    for duration in [None, Some(0), Some(299), Some(301), Some(1199), Some(1201)] {
+        assert!(!Profile::Documents.accepts_lifetime(duration));
+    }
+    assert!(!Profile::Reports.accepts_lifetime(Some(300)));
+    assert!(Profile::Reports.accepts_lifetime(Some(1200)));
 }
 
 // This transport owns no blocking runtime: constructing/dropping a reqwest

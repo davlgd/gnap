@@ -1,4 +1,5 @@
-//! Bounded, stateless GNAP message diagnostics. This is not a certification suite.
+//! Bounded GNAP message diagnostics and opt-in authenticated scenarios.
+//! Imports remain stateless. This is not a certification suite.
 
 use axum::{
     body::Bytes,
@@ -15,6 +16,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
 pub mod discovery;
+pub mod lifecycle;
 pub mod probe;
 mod rs_import;
 mod token_exchange;
@@ -65,7 +67,7 @@ pub enum Status {
     NotTested,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Check {
     pub id: &'static str,
     pub status: Status,
@@ -294,6 +296,10 @@ pub fn app() -> Router {
 }
 
 pub fn app_with_probes(probes: probe::Probes) -> Router {
+    app_with_lifecycle(probes, lifecycle::Lifecycle::disabled())
+}
+
+pub fn app_with_lifecycle(probes: probe::Probes, lifecycle: lifecycle::Lifecycle) -> Router {
     let permits = Arc::new(Semaphore::new(16));
     Router::new()
         .route(
@@ -323,6 +329,7 @@ pub fn app_with_probes(probes: probe::Probes) -> Router {
         .route("/api/targets", get(probe::targets))
         .route("/api/probe", post(probe::handler))
         .with_state(probes)
+        .merge(lifecycle.router())
         .layer(DefaultBodyLimit::max(MAX_UPLOAD))
         .layer(middleware::from_fn(move |request: Request, next: Next| {
             let permits = permits.clone();

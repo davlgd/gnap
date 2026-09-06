@@ -470,10 +470,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "gnap-client"
+version = "0.1.0"
+dependencies = [
+ "gnap-core",
+ "gnap-crypto",
+ "gnap-registry",
+ "gnap-subject",
+ "gnap-types",
+ "serde_json",
+]
+
+[[package]]
 name = "gnap-conformance-web"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "gnap-client",
  "gnap-crypto",
  "gnap-net",
  "gnap-registry",
@@ -483,6 +496,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "gnap-core"
+version = "0.1.0"
+dependencies = [
+ "gnap-registry",
+ "gnap-types",
 ]
 
 [[package]]
@@ -509,6 +530,18 @@ name = "gnap-registry"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "gnap-subject"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "gnap-crypto",
+ "gnap-registry",
+ "gnap-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -38,8 +38,8 @@ access-token request and redirect finish. Other subject requests are refused;
 this deliberate application policy is not a general limitation of GNAP.
 Identity issuance is restricted to this demo's registered browser-client
 references, all resolved to its one shared application proof key. A client key
-supplied by value is not enrolled, and presenting a known reference with another
-key does not authenticate it. The separate resource-server identity cannot
+supplied by value cannot request identity, and presenting a known reference with
+another key does not authenticate it. The separate resource-server identity cannot
 request this subject flow. This demo does not offer open client registration.
 
 The AS generates a dedicated assertion key in memory, separate from every
@@ -64,6 +64,58 @@ tokens, complete C1/C2 coverage or independent-vendor interoperability.
 Assertion expiration is separate from the resource token's twenty-minute
 lifetime. An unavailable verified identity at expiration is not an outage or
 session revocation: the resource token remains usable under its own checks.
+
+## External workbench clients
+
+External clients are disabled by default. To enable the separate workbench
+lifecycle, set `GNAP_EXTERNAL_CLIENTS` to a JSON array of at most eight objects:
+each object contains a `jwk` public RSA PS256 key and an exact `callback` URI
+ending in `/lifecycle/callback`. An empty array also disables this flow. Invalid
+configuration prevents startup; diagnostics identify the entry index without
+printing its contents. Supply public keys only: private JWK fields are rejected.
+
+Each public key must contain `kty`, `n`, `e`, `alg: "PS256"` and `kid`, with a
+2048–4096-bit modulus. The resolver checks the actual public key and its
+metadata, then verifies the client's signature using the configured key. A
+matching `kid` alone grants no authority, and no remote key resolution occurs.
+The same key material cannot be registered twice under different callbacks.
+Callbacks must use canonical HTTPS, with no user information, query or fragment.
+For local tests only, an explicit HTTP-loopback `APP_ORIGIN` permits an
+HTTP-loopback callback. Other HTTP destinations remain forbidden.
+
+This profile issues one key-bound, opaque `synthetic-folder:read` token for
+300 seconds, after manual consent. The initial request contains a client key
+by value, a single access-token request and a simple redirect interaction;
+finish must use the configured callback. Labels, flags, token formats,
+extensions, subjects, user information, multiple tokens, push finish and codes
+are outside this profile. It does not offer ongoing grants, expansion or
+downstream derivation. Token rotation and individual revocation remain available.
+The document RS accepts this exact five-minute lifetime alongside the internal
+twenty-minute profile; the reports profile is unchanged.
+
+The owner visits the AS's existing `/interact/{handle}` route in a separate
+browser context. GET displays a fixed synthetic-client consent form and never
+approves anything. POST requires that owner's separate HttpOnly cookie, a
+one-use ticket and the exact AS Origin and Host. The recorded choice is bound
+to the grant, request, AS nonce and original deadline. The SDK completes the
+interaction transactionally and produces the callback hash and reference;
+the workbench only receives that callback, it does not approve consent.
+This is still a fictional owner, not a login or a real account-authentication
+system.
+
+Local consent expires five minutes after the initial grant, even though the
+SDK's generic interaction response advertises its ten-minute upper bound.
+The form states the shorter limit; reloads and replacement owner sessions
+cannot extend it. The workbench also sets a five-minute finish timeout.
+Admission allows at most 32 live external grants in total and four per public
+key, including approved grants while their tokens remain live. External owner
+state is capped at 64 entries, each lasting at most five minutes, with 120 form
+requests per minute and four concurrent form workers. These are sandbox
+budgets, not GNAP protocol limits. A POST counts only after finding a live
+owner session bound to that handle; malformed forms and invalid tickets from
+that session still count. They do not consume the internal browser's
+owner-session allowance. Grants, choices and keys live only in this process;
+a restart invalidates them. No Biscuit keys are used by this flow.
 
 ## Run
 
