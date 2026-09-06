@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GNAP authenticated lifecycle test</title><link rel="stylesheet" href="/style.css"><script src="/lifecycle.js" defer></script></head>
+<body><main><h1>Authenticated GNAP lifecycle test</h1>
+<p><a href="/">Back to message diagnostics</a></p>
+<p>This workbench uses its own test-client key. You decide on the authorization server's page whether it may read a synthetic resource. After approval, it tests successful access, replay rejection, a different signing key, rotation and revocation. Denial tests only the refusal path.</p>
+<aside>No production data or private key input. Only operator-approved targets are offered. A report describes this bounded scenario, not complete GNAP conformance or an independent protocol implementation. The client SDK supplies messages and finish verification; the HTTP/JSON outcome checks are separate.</aside>
+<p>The operator must approve the workbench's <a href="/api/lifecycle/key">current public key</a> at the AS. It changes on restart; access remains refused until the new key is approved. No key is approved automatically.</p>
+<label for="lifecycle-target">Operator-approved AS/RS pair</label><select id="lifecycle-target" disabled><option>No targets configured</option></select>
+<label><input type="checkbox" id="lifecycle-consent"> I authorize this complete synthetic test, including negative requests, rotation and revocation.</label>
+<button type="button" id="lifecycle-start" disabled>Start and decide on the AS</button>
+<p id="lifecycle-status" role="status" aria-live="polite"></p>
+<p><a id="lifecycle-redirect" hidden rel="noreferrer">Continue to the authorization server</a></p>
+<button type="button" id="lifecycle-download" disabled>Download redacted report</button>
+<section id="lifecycle-report" aria-label="Observed checks"></section>
+<p>One start per 60 seconds, shared with the other live probes. At most four active workers and eight retained reports. Consent and network work expire after five minutes; reports expire after ten. Closing this page does not cancel a test already authorized. Network failures are inconclusive, and cleanup cannot be guaranteed during an outage.</p>
+</main></body></html>

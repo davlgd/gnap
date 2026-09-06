@@ -101,7 +101,7 @@ jobs:
           node-version: '22'
           package-manager-cache: false
       - name: Check application interface behavior
-        run: node --test apps/conformance-web/tests/ui/panel_generation.test.mjs apps/delegation-demo/tests/ui/*.test.mjs
+        run: node --test apps/conformance-web/tests/ui/*.test.mjs apps/delegation-demo/tests/ui/*.test.mjs
       - name: Install stable toolchain
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
@@ -131,6 +131,37 @@ jobs:
           test "$(curl --http2-prior-knowledge --silent --show-error --noproxy '*' --max-time 10 --output /dev/null --write-out '%{http_version} %{http_code}' http://127.0.0.1:18081/api/status)" = '2 200'
           test "$(curl --http2-prior-knowledge --silent --show-error --noproxy '*' --max-time 10 --output /dev/null --write-out '%{http_version} %{http_code}' http://localhost:18081/api/status)" = '2 421'
           test "$(curl --http2-prior-knowledge --silent --show-error --noproxy '*' --max-time 10 --output /dev/null --write-out '%{http_version} %{http_code}' http://localhost:18081/)" = '2 307'
+
+      - name: Exercise authenticated workbench approval and denial
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          demo_pid=''
+          PORT=18084 GNAP_WORKBENCH_ORIGIN=http://127.0.0.1:18084 \
+            GNAP_LIFECYCLE_TARGETS='[{"name":"CI document service","grant":"http://127.0.0.1:18083/gnap","continuation":"http://127.0.0.1:18083/continue","interaction":"http://127.0.0.1:18083/interact/","management":"http://127.0.0.1:18083/token/","resource":"http://127.0.0.1:18083/resource/folder"}]' \
+            apps/conformance-web/target/debug/gnap-conformance-web > "$RUNNER_TEMP/gnap-lifecycle-workbench.log" 2>&1 &
+          workbench_pid=$!
+          trap 'kill "$workbench_pid" 2>/dev/null || true; if [[ -n "$demo_pid" ]]; then kill "$demo_pid" 2>/dev/null || true; fi' EXIT
+          wait_for_endpoint() {
+            local endpoint="$1" service_pid="$2"
+            for attempt in {1..60}; do
+              kill -0 "$service_pid" 2>/dev/null || return 1
+              if curl --fail --silent --noproxy '*' --max-time 1 --output /dev/null "$endpoint"; then return 0; fi
+              sleep 1
+            done
+            return 1
+          }
+          wait_for_endpoint http://127.0.0.1:18084/api/lifecycle/key "$workbench_pid"
+          # Only the public JWK and fixed callback cross this process boundary.
+          lifecycle_public_clients=$(python3 -B tools/smoke_lifecycle.py --workbench http://127.0.0.1:18084 --registration-only)
+          PORT=18083 APP_ORIGIN=http://127.0.0.1:18083 GNAP_EXTERNAL_CLIENTS="$lifecycle_public_clients" \
+            apps/delegation-demo/target/debug/gnap-delegation-demo > "$RUNNER_TEMP/gnap-lifecycle-demo.log" 2>&1 &
+          demo_pid=$!
+          wait_for_endpoint http://127.0.0.1:18083/api/status "$demo_pid"
+          python3 -B tools/smoke_lifecycle.py --demo http://127.0.0.1:18083 --workbench http://127.0.0.1:18084 --choice allow
+          # Keep the public admission policy intact; there is no CI bypass.
+          sleep 60
+          python3 -B tools/smoke_lifecycle.py --demo http://127.0.0.1:18083 --workbench http://127.0.0.1:18084 --choice deny
 
   registries:
     name: Registry generation and upstream drift

@@ -10,11 +10,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_resource_targets(
         &std::env::var("GNAP_RS_TEST_TARGETS").unwrap_or_else(|_| "[]".into()),
     )?;
+    let lifecycle = gnap_conformance_web::lifecycle::Lifecycle::from_json(
+        &std::env::var("GNAP_LIFECYCLE_TARGETS").unwrap_or_else(|_| "[]".into()),
+        &std::env::var("GNAP_WORKBENCH_ORIGIN").unwrap_or_default(),
+        probes.clone(),
+    )?;
     eprintln!("GNAP diagnostics listening on port {port}; no request/body logging; only explicitly configured probe targets");
-    axum::serve(listener, gnap_conformance_web::app_with_probes(probes))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    axum::serve(
+        listener,
+        gnap_conformance_web::app_with_lifecycle(probes, lifecycle),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
     Ok(())
 }

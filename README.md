@@ -117,7 +117,10 @@ their own dependency locks and toolchain requirements:
   and user authentication synthetic.
 - [Web diagnostics](apps/conformance-web/README.md): inspect imported messages
   and AS discovery documents, or run bounded rejection and discovery probes
-  against operator-approved endpoints.
+  against operator-approved endpoints. The opt-in
+  [authenticated scenario](docs/authenticated-workbench.md) uses its own client
+  key and separate owner consent to exercise resource access, replay refusal,
+  token rotation and revocation over HTTP.
   Reports distinguish passed, failed and untested checks, with no overall
   certification verdict.
 - [Biscuit files](apps/biscuit-files/README.md): run separate client, AS and RS

@@ -39,6 +39,7 @@ const FINISH_TIMEOUT: NonZeroU64 = NonZeroU64::new(300).unwrap();
 const FOLDER_READ: &str = "synthetic-folder:read";
 const ARCHIVE_READ: &str = "synthetic-archive:read";
 mod derivation;
+mod external_client;
 mod identity;
 mod introspection;
 mod multiple;
@@ -47,6 +48,7 @@ mod resource_registration;
 mod secondary_device;
 #[derive(Default)]
 struct ConsentRegistry {
+    external: external_client::Registry,
     push: push_finish::Registry,
     identity: Option<Arc<identity::Identity>>,
     clients: HashSet<String>,
@@ -289,8 +291,34 @@ impl GrantStore for IndexedStorage {
         if state.continuation_deadlines.len() >= MAX_GRANTS {
             return Err(StoreError::Unavailable);
         }
+        let external = aggregate.record.request.client.as_value().is_some();
+        if external {
+            let mut count = 0;
+            let mut same_key = 0;
+            for id in state.continuation_deadlines.keys() {
+                let previous = state
+                    .base
+                    .lookup(GrantSelector::Id(*id))?
+                    .ok_or(StoreError::Invalid)?;
+                let client = &previous.aggregate.record.request.client;
+                if client.as_value().is_some() {
+                    count += 1;
+                    same_key += usize::from(external_client::same_client_key(
+                        client,
+                        &aggregate.record.request.client,
+                    ));
+                }
+            }
+            if count >= external_client::MAX_GRANTS || same_key >= external_client::MAX_PER_KEY {
+                return Err(StoreError::Unavailable);
+            }
+        }
         let deadline = now
-            .checked_add(SESSION_LIFETIME.as_secs())
+            .checked_add(if external {
+                external_client::LIFETIME
+            } else {
+                SESSION_LIFETIME.as_secs()
+            })
             .ok_or(StoreError::Exhausted)?;
         let snapshot = state.base.create(aggregate)?;
         state.continuation_deadlines.insert(snapshot.id, deadline);
@@ -428,13 +456,27 @@ fn resolve_rights(
     (resolved.len() <= 2).then_some(resolved)
 }
 impl Policy for ConsentPolicy {
-    fn token_lifetime(&self, _: &GrantRequest) -> Option<NonZeroU64> {
-        NonZeroU64::new(1200)
+    fn token_lifetime(&self, request: &GrantRequest) -> Option<NonZeroU64> {
+        NonZeroU64::new(if request.client.as_value().is_some() {
+            external_client::LIFETIME
+        } else {
+            1200
+        })
     }
     fn keep_grant_open(&self, request: &GrantRequest) -> bool {
-        request.subject.is_none() && !push_finish::is_push(request)
+        request.client.as_value().is_none()
+            && request.subject.is_none()
+            && !push_finish::is_push(request)
     }
     fn evaluate(&self, request: &GrantRequest) -> Decision {
+        if request.client.as_value().is_some() {
+            return self
+                .0
+                .lock()
+                .unwrap()
+                .external
+                .evaluate(request, EvaluationContext::Initial);
+        }
         if !push_finish::acceptable_request(request, &self.0.lock().unwrap().push, None) {
             return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
         }
@@ -448,6 +490,9 @@ impl Policy for ConsentPolicy {
         }
     }
     fn evaluate_context(&self, request: &GrantRequest, context: EvaluationContext<'_>) -> Decision {
+        if request.client.as_value().is_some() {
+            return self.0.lock().unwrap().external.evaluate(request, context);
+        }
         let grant = match context {
             EvaluationContext::Initial => None,
             EvaluationContext::Modification(snapshot)
@@ -512,6 +557,9 @@ struct KnownKeys {
 }
 impl KeyResolver for KnownKeys {
     fn resolve(&self, client: &Client) -> Option<Box<dyn Verifier>> {
+        if client.as_value().is_some() {
+            return self.decisions.lock().ok()?.external.resolve(client);
+        }
         if client.as_reference() == Some(introspection::RS_ID) {
             return gnap_crypto::Ps256Verifier::from_public_jwk(self.rs_key.jwk.as_ref()?)
                 .ok()
@@ -600,6 +648,7 @@ struct App {
     #[cfg(test)]
     code_completion_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     admission: Arc<tokio::sync::Semaphore>,
+    external_admission: Arc<tokio::sync::Semaphore>,
     resource_admission: Arc<tokio::sync::Semaphore>,
     metadata_admission: Arc<tokio::sync::Semaphore>,
     reports_admission: Arc<tokio::sync::Semaphore>,
@@ -1545,10 +1594,25 @@ async fn interaction(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
+    let handle = uri.path().trim_start_matches("/interact/");
+    if external_client::is_external(&app, handle) {
+        if uri.query().is_some() {
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+        let Ok(permit) = app.external_admission.clone().try_acquire_owned() else {
+            return StatusCode::TOO_MANY_REQUESTS.into_response();
+        };
+        let handle = handle.to_owned();
+        return tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            external_client::entry(&app, &handle, &headers)
+        })
+        .await
+        .unwrap_or_else(|_| StatusCode::SERVICE_UNAVAILABLE.into_response());
+    }
     let Some(session) = session_cookie(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let handle = uri.path().trim_start_matches("/interact/");
     match dispatch(&app, session, format!("interaction:{handle}")).await {
         Ok(_) => Html(include_str!("../static/index.html")).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
@@ -1576,6 +1640,19 @@ async fn protocol(
     };
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        if uri.path() == "/gnap"
+            && request.method == "POST"
+            && !external_client::wire_profile(&request)
+        {
+            return Ok(HttpResponse {
+                status: 400,
+                headers: vec![
+                    ("content-type".into(), "application/json".into()),
+                    ("cache-control".into(), "no-store".into()),
+                ],
+                body: br#"{"error":"request_denied"}"#.to_vec(),
+            });
+        }
         app.storage.cleanup()?;
         Ok::<_, StoreError>(
             if matches!(
@@ -1657,6 +1734,20 @@ async fn main() {
             .expect("OS randomness and RSA generation"),
     );
     let decisions: Decisions = Arc::default();
+    let external_configuration = match std::env::var("GNAP_EXTERNAL_CLIENTS") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!("GNAP_EXTERNAL_CLIENTS must be valid Unicode JSON");
+            std::process::exit(1);
+        }
+    };
+    decisions.lock().unwrap().external =
+        external_client::Registry::parse(external_configuration.as_deref(), &origin)
+            .unwrap_or_else(|reason| {
+                eprintln!("{reason}");
+                std::process::exit(1);
+            });
     decisions.lock().unwrap().identity =
         identity::Identity::generate(&origin, &signer).expect("Ephemeral subject configuration");
     let storage = Arc::new(IndexedStorage::default());
@@ -1738,6 +1829,7 @@ async fn main() {
         #[cfg(test)]
         code_completion_hook: None,
         admission: Arc::new(tokio::sync::Semaphore::new(16)),
+        external_admission: Arc::new(tokio::sync::Semaphore::new(4)),
         resource_admission: Arc::new(tokio::sync::Semaphore::new(4)),
         metadata_admission: Arc::new(tokio::sync::Semaphore::new(4)),
         reports_admission: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -1808,7 +1900,7 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/api/{action}", post(action))
         .route("/callback", get(callback))
         .route("/push-callback/{id}", post(push_finish::receive).layer(DefaultBodyLimit::max(1024)))
-        .route("/interact/{handle}", get(interaction))
+        .route("/interact/{handle}", get(interaction).post(external_client::submit).layer(DefaultBodyLimit::max(1024)))
         .route("/gnap", post(protocol).options(protocol))
         .route("/.well-known/gnap-as-rs", get(protocol))
         .route("/introspect", post(protocol))
@@ -2296,6 +2388,7 @@ mod tests {
             code_entries: Arc::default(),
             code_completion_hook: None,
             admission: Arc::new(tokio::sync::Semaphore::new(2)),
+            external_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             resource_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             metadata_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             reports_admission: Arc::new(tokio::sync::Semaphore::new(2)),
