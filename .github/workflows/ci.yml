@@ -59,8 +59,11 @@ jobs:
       - name: Quotations are literal
         # The code quotes the RFCs to justify what it does. A drifted quotation
         # lends the authority of the normative text to a sentence nobody wrote,
-        # so this downloads the RFCs and checks every quotation word for word.
-        run: python3 tools/check_quotes.py
+        # so this checks selected quotations in crate/app source trees against
+        # the RFCs, downloading missing source texts. Test the selection too.
+        run: |
+          python3 -B -m unittest discover -s tools/tests -v
+          python3 tools/check_quotes.py
       - name: The README still describes the code
         # The transcript is the example's real output, and the sections listed
         # as unimplemented are the ones actually excluded.
