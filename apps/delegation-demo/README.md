@@ -5,11 +5,53 @@ server for read access to a synthetic folder and archive, the visitor explicitly
 and a resource server verifies a live key-bound token before returning documents.
 Rotation and revocation can then be checked by presenting the retired token
 with a **fresh valid signature**, which the resource server must reject.
-Approval leaves the grant open: poll, reduce its rights, request an extension
+Ordinary approval leaves the grant open: poll, reduce its rights, request an extension
 with new consent, or revoke the entire grant through its continuation endpoint.
 
 This is a public teaching sandbox, not an authenticated document service or a
 claim of full GNAP conformance. No personal data or private key fixtures are used.
+
+## Optional subject disclosure
+
+On an HTTPS deployment, "Start with identity disclosure" requests document
+rights plus `opaque`, `iss_sub` and a PS256 `id_token` about one fictional
+resource owner. Explicit approval of this exact request releases both; denial
+releases neither. No identity is released before interaction. Unlike the other
+flows, approval closes continuation: the resource token keeps its own lifetime
+and management, but this grant cannot be modified or polled after approval.
+Local HTTP refuses this option without affecting the existing flows.
+The demo accepts exactly `sub_id_formats: ["opaque", "iss_sub"]` and
+`assertion_formats: ["id_token"]`, without extra subject fields, with a single
+access-token request and redirect finish. Other subject requests are refused;
+this deliberate application policy is not a general limitation of GNAP.
+Identity issuance is restricted to this demo's registered browser-client
+references, all resolved to its one shared application proof key. A client key
+supplied by value is not enrolled, and presenting a known reference with another
+key does not authenticate it. The separate resource-server identity cannot
+request this subject flow. This demo does not offer open client registration.
+
+The AS generates a dedicated assertion key in memory, separate from every
+HTTP proof key. The client pins its public verifier, exact HTTPS issuer and GNAP
+endpoint in application configuration. It verifies signature, audience, session
+nonce, time and issuer/subject consistency through `Session::verify_subject`.
+The audience is the RFC 7638 thumbprint of the application's actual client proof
+key; the nonce is the client's retained interaction-finish nonce. These are
+agreed application conventions, not new GNAP requirements. No key is fetched
+from the assertion. Only verified identity claims reach the page, never the
+compact assertion, nonce or private key; an ID Token is not an access token.
+
+Every visitor shares one client key and one fictional subject. Its random
+opaque identifier stays stable only for this process and changes after restart;
+the `iss_sub` and ID Token name that same fictional subject. This is not a
+general pairwise account store. Assertions expire after five minutes. Their
+`auth_time` represents the simulated authentication event at sandbox consent,
+not authentication of a real visitor. There are no accounts, login, independent
+identity provider, complete OpenID Provider or identity renewal/revocation
+workflow. This exercises the signed subject-assertion profile, not JWT access
+tokens, complete C1/C2 coverage or independent-vendor interoperability.
+Assertion expiration is separate from the resource token's twenty-minute
+lifetime. An unavailable verified identity at expiration is not an outage or
+session revocation: the resource token remains usable under its own checks.
 
 ## Run
 

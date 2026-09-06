@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gnap-registry", "crates/gnap-types", "crates/gnap-crypto", "crates/gnap-core", "crates/gnap-client", "crates/gnap-as", "crates/gnap-biscuit"]
+members = ["crates/gnap-registry", "crates/gnap-types", "crates/gnap-crypto", "crates/gnap-core", "crates/gnap-client", "crates/gnap-as", "crates/gnap-biscuit", "crates/gnap-subject"]
 
 # Investigation spikes are kept out of the workspace so their dependencies do
 # not constrain how it resolves. These directories are not part of the
@@ -21,6 +21,7 @@ serde_json = "1"
 gnap-registry = { path = "crates/gnap-registry", version = "0.1.0" }
 gnap-types = { path = "crates/gnap-types", version = "0.1.0" }
 gnap-core = { path = "crates/gnap-core", version = "0.1.0" }
+gnap-subject = { path = "crates/gnap-subject", version = "0.1.0" }
 gnap-crypto = { path = "crates/gnap-crypto", version = "0.1.0" }
 gnap-client = { path = "crates/gnap-client", version = "0.1.0" }
 sha2 = "0.10"

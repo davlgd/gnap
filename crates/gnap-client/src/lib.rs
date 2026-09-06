@@ -124,6 +124,6 @@ pub mod signing;
 pub mod transport;
 
 pub use error::ClientError;
-pub use session::{AttributedSubject, Session, Step};
+pub use session::{AttributedSubject, Session, Step, VerifiedSubject};
 pub use signing::sign_request;
 pub use transport::{HttpRequest, HttpResponse, HttpTransport};

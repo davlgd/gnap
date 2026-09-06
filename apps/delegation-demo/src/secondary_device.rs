@@ -302,6 +302,7 @@ fn complete(app: &App, pending: Pending, allowed: multiple::Choice) -> Result<()
     choices.grants.insert(
         snapshot.id,
         Consent {
+            decided_at: now(),
             request: pending.request,
             interaction_reference: None,
             as_nonce: pending.as_nonce,

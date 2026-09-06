@@ -19,7 +19,7 @@ use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier as _};
 use rsa::traits::PublicKeyParts;
 use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 use serde_json::{Map, Value};
-use sha2::Sha256;
+use sha2::{Digest as _, Sha256};
 
 /// An RSA private key used with `PS256`.
 pub struct Ps256Signer {
@@ -29,6 +29,18 @@ pub struct Ps256Signer {
 }
 
 impl Ps256Signer {
+    /// SHA-256 JWK thumbprint (RFC 7638), independent of `kid` and algorithm metadata.
+    #[must_use]
+    pub fn thumbprint(&self) -> String {
+        thumbprint(&self.public)
+    }
+
+    /// Size of the RSA modulus, for profiles that constrain key strength.
+    #[must_use]
+    pub fn modulus_bits(&self) -> usize {
+        self.public.n().bits()
+    }
+
     /// Loads a PKCS#8 private key, `BEGIN PRIVATE KEY` format.
     ///
     /// A PKCS#8 key carrying the RSASSA-PSS OID (`1.2.840.113549.1.1.10`) is
@@ -138,6 +150,18 @@ pub struct Ps256Verifier {
 }
 
 impl Ps256Verifier {
+    /// SHA-256 JWK thumbprint (RFC 7638), independent of `kid` and algorithm metadata.
+    #[must_use]
+    pub fn thumbprint(&self) -> String {
+        thumbprint(self.inner.as_ref())
+    }
+
+    /// Size of the RSA modulus, for profiles that constrain key strength.
+    #[must_use]
+    pub fn modulus_bits(&self) -> usize {
+        self.inner.as_ref().n().bits()
+    }
+
     /// Imports a public RSA JWK for GNAP's PS256 HTTP signatures.
     ///
     /// GNAP requires `alg` and `kid` ([RFC 9635 §7.1]); this path requires
@@ -357,3 +381,40 @@ impl rsa::rand_core::RngCore for OsRng {
 }
 
 impl rsa::rand_core::CryptoRng for OsRng {}
+
+fn thumbprint(key: &RsaPublicKey) -> String {
+    // Base64url integers contain no JSON escapes; this fixes member order even
+    // when a consumer enables serde_json's preserve_order feature.
+    let e = URL_SAFE_NO_PAD.encode(key.e().to_bytes_be());
+    let n = URL_SAFE_NO_PAD.encode(key.n().to_bytes_be());
+    let canonical = format!(r#"{{"e":"{e}","kty":"RSA","n":"{n}"}}"#);
+    URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()))
+}
+
+#[cfg(test)]
+mod thumbprint_tests {
+    use super::*;
+
+    #[test]
+    fn rfc7638_section_3_1() {
+        // Public RSA numbers from RFC 7638 §3.1; RS256 metadata in that
+        // example is irrelevant to the thumbprint, not a PS256 import policy.
+        let n = concat!(
+            "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAt",
+            "VT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn6",
+            "4tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FD",
+            "W2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n9",
+            "1CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINH",
+            "aQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw"
+        );
+        let key = RsaPublicKey::new(
+            BigUint::from_bytes_be(&URL_SAFE_NO_PAD.decode(n).unwrap()),
+            BigUint::from(65537_u32),
+        )
+        .unwrap();
+        assert_eq!(
+            thumbprint(&key),
+            "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+        );
+    }
+}

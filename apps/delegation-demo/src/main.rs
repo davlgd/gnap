@@ -39,16 +39,19 @@ const FINISH_TIMEOUT: NonZeroU64 = NonZeroU64::new(300).unwrap();
 const FOLDER_READ: &str = "synthetic-folder:read";
 const ARCHIVE_READ: &str = "synthetic-archive:read";
 mod derivation;
+mod identity;
 mod introspection;
 mod multiple;
 mod resource_registration;
 mod secondary_device;
 #[derive(Default)]
 struct ConsentRegistry {
+    identity: Option<Arc<identity::Identity>>,
     clients: HashSet<String>,
     grants: HashMap<GrantId, Consent>,
 }
 struct Consent {
+    decided_at: u64,
     request: GrantRequest,
     interaction_reference: Option<String>,
     as_nonce: Option<String>,
@@ -426,10 +429,13 @@ impl Policy for ConsentPolicy {
     fn token_lifetime(&self, _: &GrantRequest) -> Option<NonZeroU64> {
         NonZeroU64::new(1200)
     }
-    fn keep_grant_open(&self, _: &GrantRequest) -> bool {
-        true
+    fn keep_grant_open(&self, request: &GrantRequest) -> bool {
+        request.subject.is_none()
     }
     fn evaluate(&self, request: &GrantRequest) -> Decision {
+        if !identity::acceptable_request(request, self.0.lock().unwrap().identity.as_deref()) {
+            return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
+        }
         if multiple::requested_slots(request, &self.1).is_some() {
             Decision::RequireInteraction
         } else {
@@ -437,6 +443,9 @@ impl Policy for ConsentPolicy {
         }
     }
     fn evaluate_context(&self, request: &GrantRequest, context: EvaluationContext<'_>) -> Decision {
+        if !identity::acceptable_request(request, self.0.lock().unwrap().identity.as_deref()) {
+            return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
+        }
         let (Some(slots), Some(shape)) = (
             multiple::requested_slots(request, &self.1),
             request
@@ -451,7 +460,11 @@ impl Policy for ConsentPolicy {
             // Within what is live for the same label: approved directly, as one
             // replacement lot. Anything else goes back to the resource owner.
             EvaluationContext::Modification(snapshot) => {
-                multiple::modification(shape, &slots, snapshot)
+                if request.subject.is_some() {
+                    Decision::Deny(gnap_registry::ErrorCode::RequestDenied)
+                } else {
+                    multiple::modification(shape, &slots, snapshot)
+                }
             }
             EvaluationContext::AfterInteraction(snapshot) => {
                 let choices = self.0.lock().unwrap();
@@ -462,7 +475,13 @@ impl Policy for ConsentPolicy {
                                 == choice.interaction_reference
                             && snapshot.aggregate.record.as_nonce == choice.as_nonce =>
                     {
-                        multiple::decision(shape, &slots, &choice.allowed)
+                        let decision = multiple::decision(shape, &slots, &choice.allowed);
+                        identity::release(
+                            decision,
+                            request,
+                            choice.decided_at,
+                            choices.identity.as_deref(),
+                        )
                     }
                     _ => Decision::Deny(gnap_registry::ErrorCode::UserDenied),
                 }
@@ -582,6 +601,7 @@ struct Command {
     reply: tokio::sync::oneshot::Sender<Result<Value, String>>,
 }
 struct BrowserSession<'a> {
+    identity: Option<Arc<identity::Identity>>,
     client: Session<'a, Network, Ps256Signer>,
     grant_id: GrantId,
     handle: String,
@@ -696,6 +716,7 @@ fn consent_finish_choice(
     choices.grants.insert(
         grant,
         Consent {
+            decided_at: now(),
             request: snapshot.aggregate.record.request,
             interaction_reference: Some(callback.interact_ref),
             as_nonce: snapshot.aggregate.record.as_nonce,
@@ -716,7 +737,7 @@ fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
         .flatten()
         .flat_map(|t| t.access.iter().flatten())
         .collect();
-    json!({"state":session.state, "mode":session.mode.name(), "events":session.events, "rights":rights, "tokens":multiple::view(tokens.as_ref()), "requested_rights":session.requested_rights, "requested_tokens":multiple::slots_view(&session.requested), "token_present":tokens.is_some(), "resource_available":true, "retired_token_present":session.retired.is_some(), "retired_token_label":session.retired.as_ref().and_then(|retired| retired.label.clone()), "folder":session.folder, "last_resource_status":session.last_resource_status, "user_code_uri":session.code, "interaction_uri":session.code.is_none().then(|| format!("{origin}/interact/{}",session.handle)), "continuation_open":session.continuation_open, "continuation_wait_seconds":session.next_continuation.saturating_sub(now())})
+    json!({"identity_requested":session.identity.is_some(), "identity":identity::view(session, now()), "state":session.state, "mode":session.mode.name(), "events":session.events, "rights":rights, "tokens":multiple::view(tokens.as_ref()), "requested_rights":session.requested_rights, "requested_tokens":multiple::slots_view(&session.requested), "token_present":tokens.is_some(), "resource_available":true, "retired_token_present":session.retired.is_some(), "retired_token_label":session.retired.as_ref().and_then(|retired| retired.label.clone()), "folder":session.folder, "last_resource_status":session.last_resource_status, "user_code_uri":session.code, "interaction_uri":session.code.is_none().then(|| format!("{origin}/interact/{}",session.handle)), "continuation_open":session.continuation_open, "continuation_wait_seconds":session.next_continuation.saturating_sub(now())})
 }
 
 fn client_session<'a>(
@@ -765,7 +786,12 @@ fn client_worker(
         };
         let result = (|| -> Result<Value, String> {
             if multiple::is_start(&command.action) {
-                // The HTTP front door creates a fresh identity for every start.
+                let identity = if command.action == "start-identity" {
+                    Some(decisions.lock().unwrap().identity.clone().ok_or("Identity assertions require this demo's HTTPS origin; local HTTP flows remain available")?)
+                } else {
+                    None
+                };
+                // The HTTP front door creates a fresh browser session ID for every start.
                 // Reject an internal duplicate before changing consent or AS state.
                 if sessions.contains_key(&command.session) {
                     return Err("Session already started; use a new browser identity".into());
@@ -799,12 +825,17 @@ fn client_worker(
                 } else {
                     json!({"start": ["redirect"], "finish": {"method":"redirect", "uri":format!("{origin}/callback"), "nonce":fresh_nonce().map_err(|e| e.to_string())?}})
                 };
-                let grant: GrantRequest = serde_json::from_value(json!({
+                let mut grant: GrantRequest = serde_json::from_value(json!({
                     "client": command.session,
                     "access_token": access_token,
                     "interact": interact
                 }))
                 .map_err(|e| e.to_string())?;
+                if identity.is_some() {
+                    grant.subject = Some(
+                        serde_json::from_value(identity::request()).expect("fixed subject request"),
+                    );
+                }
                 let step = client.start(&grant, now()).map_err(|e| e.to_string())?;
                 let interaction = step
                     .response()
@@ -835,6 +866,7 @@ fn client_worker(
                 sessions.insert(
                     command.session.clone(),
                     BrowserSession {
+                        identity,
                         client,
                         grant_id,
                         handle,
@@ -1317,6 +1349,7 @@ async fn action(
         "read-metadata",
         "revoke-grant",
         "start-multiple",
+        "start-identity",
         "approve-reports",
         "read-reports",
         "rotate-reports",
@@ -1520,6 +1553,8 @@ async fn main() {
             .expect("OS randomness and RSA generation"),
     );
     let decisions: Decisions = Arc::default();
+    decisions.lock().unwrap().identity =
+        identity::Identity::generate(&origin, &signer).expect("Ephemeral subject configuration");
     let storage = Arc::new(IndexedStorage::default());
     let resources = resource_registration::store();
     let server = AuthorizationServer::new(

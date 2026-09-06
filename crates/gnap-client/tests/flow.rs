@@ -15,6 +15,9 @@ use std::cell::RefCell;
 #[path = "flow/finish_timeout.rs"]
 mod finish_timeout;
 
+#[path = "flow/subject_assertions.rs"]
+mod subject_assertions;
+
 const RSA_PKCS1: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
 const ENDPOINT: &str = "https://server.example.com/gnap";
 const CLIENT_NONCE: &str = "VJLO6A4CATR0KRO";

@@ -488,6 +488,7 @@ dependencies = [
  "gnap-core",
  "gnap-crypto",
  "gnap-registry",
+ "gnap-subject",
  "gnap-types",
  "serde_json",
 ]
@@ -524,6 +525,7 @@ dependencies = [
  "gnap-client",
  "gnap-crypto",
  "gnap-registry",
+ "gnap-subject",
  "gnap-types",
  "reqwest",
  "serde",
@@ -537,6 +539,18 @@ name = "gnap-registry"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "gnap-subject"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "gnap-crypto",
+ "gnap-registry",
+ "gnap-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
