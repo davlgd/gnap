@@ -74,18 +74,26 @@ def expect(condition, message):
         raise AssertionError(message)
 
 
-def ready(base):
-    # RSA generation happens once at demo startup. Keep waiting bounded, and
-    # never enable certificate bypasses for a deployment health check.
-    deadline = time.monotonic() + 45
+def ready(base, *, registration=False):
+    # The demo's one-time RSA/bootstrap work precedes grant readiness, not
+    # liveness. Workbench health has no registration state. No TLS bypasses.
+    deadline = time.monotonic() + (150 if registration else 45)
     while time.monotonic() < deadline:
         try:
-            if request(client(), base, "/health")[0] == 200:
-                return
+            status, _, body, _ = request(client(), base, "/health")
+            if status == 200:
+                if not registration:
+                    return
+                expect(isinstance(body, dict), "Demo liveness response is not JSON")
+                state = body.get("bootstrap")
+                expect(state in ("starting", "ready", "failed"), "Demo bootstrap state is missing or unknown")
+                expect(state != "failed", "Demo resource registration bootstrap failed")
+                if state == "ready":
+                    return
         except OSError:
             pass
         time.sleep(0.5)
-    raise AssertionError("Application did not become healthy within startup deadline")
+    raise AssertionError("Application did not reach the required startup state")
 
 
 def demo(base, outcomes):
@@ -362,6 +370,23 @@ def rs_imports(base, outcomes):
          {"rs-error-shape": "pass", "rs-error-http-status": "pass"}),
         ("rs-error-status", "rs_error_response", {"error": "invalid_resource_server"}, {"http_status": 401},
          {"rs-error-http-status": "fail"}),
+        ("registration-request", "resource_registration_request",
+         {"access": ["synthetic-folder:read"], "resource_server": "synthetic-rs",
+          "token_introspection_required": True}, None,
+         {"registration-request-access": "pass", "registration-request-rs": "pass",
+          "registration-request-introspection-required": "pass"}),
+        ("registration-missing-type", "resource_registration_request",
+         {"access": [{"actions": ["read"]}], "resource_server": "synthetic-rs"}, None,
+         {"registration-request-access": "fail"}),
+        ("registration-empty-formats", "resource_registration_request",
+         {"access": [], "resource_server": "synthetic-rs", "token_formats_supported": []}, None,
+         {"registration-request-access": "pass", "registration-request-token-formats": "pass"}),
+        ("registration-response", "resource_registration_response",
+         {"resource_reference": "a public reference, not a token"}, None,
+         {"registration-response-reference": "pass", "registration-response-instance-id": "not_tested"}),
+        ("registration-missing-reference", "resource_registration_response",
+         {"instance_id": "synthetic-rs"}, None,
+         {"registration-response-reference": "fail"}),
     ]
     for label, kind, body, context, expected in cases:
         payload = {"kind": kind, "body": json.dumps(body)}
@@ -377,6 +402,11 @@ def rs_imports(base, outcomes):
         expect(checks.get("rs-authentication-and-state") == "not_tested"
                and checks.get("rs-http-and-discovery-publication") == "not_tested",
                "Imported RS message was mistaken for a live observation")
+        if kind.startswith("resource_registration_"):
+            expect(all(checks.get(name) == "not_tested" for name in (
+                "registration-format-compatibility", "registration-introspection-support",
+                "registration-authentication-and-state")),
+                "Registration import claimed AS capabilities or a persisted reference")
         outcomes.append({"check": "workbench-rs-" + label, "status": "pass", "elapsed_ms": elapsed})
 
 
@@ -389,8 +419,9 @@ def rs_api(base, outcomes):
     expect(body.get("grant_request_endpoint") == base + "/gnap", "RS-facing discovery changed the grant endpoint")
     expect(body.get("introspection_endpoint") == base + "/introspect", "RS-facing discovery changed the introspection endpoint")
     expect(body.get("key_proofs_supported") == ["httpsig"], "RS-facing discovery advertised unsupported proofs")
-    expect("token_formats_supported" not in body and "resource_registration_endpoint" not in body,
-           "RS-facing discovery advertised unsupported formats or registration")
+    expect("token_formats_supported" not in body, "RS-facing discovery invented an opaque token-format name")
+    expect(body.get("resource_registration_endpoint") == base + "/register-resources",
+           "RS-facing discovery changed the registration endpoint")
     expect(headers.get("cache-control") == "no-store", "RS-facing discovery response is cacheable")
     expect(headers.get("set-cookie") is None and headers.get("location") is None,
            "RS-facing discovery created browser state or redirected")
@@ -410,6 +441,14 @@ def rs_api(base, outcomes):
         expect(headers.get_content_type() == "application/json" and headers.get("cache-control") == "no-store",
                "Introspection refusal has unsafe headers: " + label)
         outcomes.append({"check": "rs-introspection-rejects-" + label, "status": "pass", "elapsed_ms": elapsed})
+    status, headers, body, elapsed = request(browser, base, "/register-resources", "POST", {
+        "access": ["synthetic-folder:read"], "resource_server": "delegation-demo-rs",
+        "token_introspection_required": True,
+    })
+    expect(status == 400 and body == {"error": "invalid_resource_server"},
+           "Unsigned resource registration was not refused with a single RS error")
+    expect(headers.get("cache-control") == "no-store", "Registration refusal is cacheable")
+    outcomes.append({"check": "rs-registration-rejects-unsigned", "status": "pass", "elapsed_ms": elapsed})
 
 
 def main():
@@ -425,7 +464,7 @@ def main():
     outcomes = []
     try:
         if args.demo:
-            ready(args.demo)
+            ready(args.demo, registration=True)
             demo(args.demo, outcomes)
             ongoing_demo(args.demo, outcomes)
             if args.demo_alias:

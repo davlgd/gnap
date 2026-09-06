@@ -1,0 +1,4 @@
+{
+  "kind": "resource_registration_response",
+  "body": "{\"resource_reference\":null,\"instance_id\":7,\"introspection_endpoint\":{}}"
+}

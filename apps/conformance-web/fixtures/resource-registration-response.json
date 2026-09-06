@@ -1,0 +1,5 @@
+{
+  "kind": "resource_registration_response",
+  "body": "{\"resource_reference\":\"synthetic-resource-reference\",\"instance_id\":\"synthetic-rs-reference\",\"introspection_endpoint\":\"https://as.example/introspect\"}",
+  "headers": [["Content-Type", "application/json"], ["Cache-Control", "no-store"]]
+}

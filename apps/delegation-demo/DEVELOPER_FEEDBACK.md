@@ -27,6 +27,8 @@ allows a real protected resource to reuse exactly the AS's signature checks.
 | Distinguish a failed preparation from a refused grant | A server configuration failure used to carry a terminal GNAP error even when no grant update had been committed; the client consequently closed a continuation that the AS had kept | Internal configuration failures now use a non-GNAP text response. A real Session/AS regression checks unchanged local and stored state after an encoding failure, then a fresh retry. Valid GNAP errors still carry their protocol meaning: RFC 9635 does not make a particular HTTP status a substitute for reading the response, and a response without continuation does not authorize another continuation call |
 | Serve a resource without access to AS storage | The first consumer used the SDK token index directly, so it could not exercise the RS/AS protocol boundary | The opaque RS now discovers the configured AS and calls RFC 9767 introspection over HTTP with a separate pre-registered RS key. It verifies client proof locally using the returned client key. The AS still owns its transactional indexes; the RS no longer reads them |
 | Interpret an introspection refusal | `active:false` includes an AS unable to determine activity; it is not proof of intrinsic token invalidity | The RS refuses access without inventing a cause. Network failures and unusable responses are separate 503 errors; static storage-failure logs aid the AS operator without exposing credentials. No global failure counter rewrites concurrent responses |
+| Request reusable sets of rights | Literal rights in the first client hid the resource-registration boundary | The RS now registers two immutable sets over signed HTTP. The client receives their public references in process and uses them in initial requests and PATCH. The AS resolves references before consent/downscope and freezes approved leaves in tokens. A reference alone never grants access |
+| Start through a canonical URL during process replacement | The proxy can route bootstrap calls to an older instance with different ephemeral keys or incomplete capabilities | One bounded supervisor retries only explicit transient outcomes, signs every request afresh and checks returned sets against the local AS registry before publishing both references. Deduplication permits a retry after a committed registration whose response was lost. This co-location check is application coordination, not a portable GNAP discovery guarantee |
 | Share a store | Earlier external-trait implementations for `Arc<MyStore>` triggered Rust orphan rules | SDK blanket implementations for `Arc<T>` and `&T` support the fallible `GrantStore` contract; the application implements it on its retention adapter and shares that directly |
 | Enforce token lifetime | The original AS policy could not configure `expires_in`, so the RS maintained a separate deadline that a record rewrite could accidentally renew | Fixed through `Policy::token_lifetime`, `TokenRecord::issued_at` and its deadline/validity helpers. The demo requests 1,200 seconds and stores no duplicate token deadline; session lifetime remains separate |
 | Clean up a public demo | Transactional aggregates need atomic removal of all indexes, without permitting stale CAS resurrection | Fixed through `GrantStore::remove(id, revision)`. A bounded application sweep keeps only continuation-retention metadata; token validity comes from the SDK record. A 256-aggregate cap refuses new grants with HTTP 503 without evicting live rights; nonce caches remain the SDK implementation |
@@ -69,6 +71,16 @@ The explicit 1,200-second timestamp profile and fixed two-right vocabulary are
 application choices, not new RFC requirements. Discovery and two short-lived
 HTTP connections per read are sufficient for this bounded consumer, not an
 efficiency result or a recommendation for a high-throughput service.
+
+Resource-registration tests use real local HTTP for startup, readiness gating
+and explicit-format refusal. Injected elapsed time and transport failures cover
+the six-attempt limit, deadline and rollback refusal, lost-response deduplication,
+partial failure and old-instance acknowledgements. Both wire forms of
+`invalid_resource_server` are tested; missing discovery capabilities may retry,
+while a supplied unexpected endpoint stops before sending credentials. The
+ongoing-grant consumer now requests the registered references and retains its
+leaf-right, re-consent, token-replacement and revocation assertions. None of
+these observations establishes durable storage or a successful public rollout.
 
 The ongoing-grant consumer tests use the actual client Session, AS policy and
 resource verifier, including a sibling token inserted through the store to

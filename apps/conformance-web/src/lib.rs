@@ -33,6 +33,8 @@ pub enum MessageKind {
     IntrospectionRequest,
     IntrospectionResponse,
     RsErrorResponse,
+    ResourceRegistrationRequest,
+    ResourceRegistrationResponse,
 }
 
 /// Headers are optional: absence means the trace did not capture them, not an
@@ -218,7 +220,9 @@ pub fn analyze(input: Import) -> Result<Report, &'static str> {
         MessageKind::RsDiscovery
         | MessageKind::IntrospectionRequest
         | MessageKind::IntrospectionResponse
-        | MessageKind::RsErrorResponse => return rs_import::analyze(&input),
+        | MessageKind::RsErrorResponse
+        | MessageKind::ResourceRegistrationRequest
+        | MessageKind::ResourceRegistrationResponse => return rs_import::analyze(&input),
         MessageKind::GrantRequest => {
             if let Some(req) = parse_check::<GrantRequest>(
                 &input.body,

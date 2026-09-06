@@ -17,6 +17,8 @@ fn discovery_and_rs_comparison_contexts_are_not_interchangeable() {
         "introspection_request",
         "introspection_response",
         "rs_error_response",
+        "resource_registration_request",
+        "resource_registration_response",
     ] {
         for context in [
             json!({"queried_endpoint":"https://private-context.example/gnap"}),
@@ -41,6 +43,8 @@ fn discovery_and_rs_comparison_contexts_are_not_interchangeable() {
         "grant_response",
         "continue_request",
         "introspection_request",
+        "resource_registration_request",
+        "resource_registration_response",
     ] {
         // Even an empty RS context must not silently acquire another meaning.
         for context in [json!({}), json!({"http_status":400})] {

@@ -111,7 +111,8 @@ does not execute that authenticated scenario against imported targets.
 ## RFC 9767 imported-message increment
 
 The workbench now independently checks selected JSON rules for RS-facing AS
-discovery, introspection requests/responses and RS-facing errors. It reuses the
+discovery, introspection requests/responses, resource registration
+requests/responses and RS-facing errors. It reuses the
 registry as reference data, not SDK validators as the oracle. Probes, consent
 and target allowlists are unchanged. Synthetic fixtures test the diagnostics,
 not live interoperability.
@@ -134,3 +135,31 @@ Next evidence requires real signed RS requests with the RS's own key, working
 tokens and negative tests for revocation, audience and rights. An application's
 `/resource-check` is not automatically RFC 9767 introspection. This increment
 introduces no private-key upload or public credentialed probe.
+
+## Resource registration import feedback
+
+- A `resource_reference` is an access-rights reference, not an access token.
+  Reusing token-value validation here would introduce unrelated restrictions.
+- Registration delegates access syntax to RFC 9635 §8. Its REQUIRED object
+  `type` takes precedence over the incomplete §3.4 example. An empty access
+  array must not be rejected merely because a particular AS policy needs rights.
+- Token format registry membership and AS/RS compatibility are different
+  questions. A current known format or an empty list cannot attest an
+  intersection; unknown names need registry review rather than permanent rejection.
+  In particular, the SDK's opaque-token deployment policy does not make
+  `opaque` an IANA format name: it is absent from this vendored registry.
+  The synthetic positive registry fixture uses the registered name `biscuit`;
+  it does not claim that any server supports Biscuit registration.
+- `token_introspection_required` needs per-RS authorization and actual AS
+  capabilities to exercise the required error behavior. An imported boolean
+  or endpoint string cannot supply that evidence. No declared context is added
+  to these imports as a substitute for an authenticated exchange.
+- The response endpoint receives a string-type check only, not discovery's URI
+  profile. The report explicitly leaves URI syntax, transport and actual service
+  behavior untested. Additional members remain extensions to review, not errors
+  introduced by a closed SDK shape.
+
+The new synthetic fixtures exercise these distinctions, nested duplicate-name
+ambiguity, parser limits and redacted HTTP reports. They do not attest a running
+registration endpoint, RS key ownership or reference persistence. Network probes
+and their consent/allowlist policy are unchanged.

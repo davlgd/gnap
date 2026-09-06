@@ -14,9 +14,9 @@ function render(data) {
   document.querySelector('[data-action="continue"]').textContent = continuable && wait > 0 ? `Continue in ${wait}s` : data.state === 'approved' ? 'Poll without reissuing tokens' : 'Continue after callback';
   const changeable = ['approved', 'revoked'].includes(data.state) && data.continuation_open && wait === 0;
   // Cancellation also applies before approval; unlike changing rights, it only needs live continuation and an elapsed wait.
-  const enabled = {start: true, approve: data.state === 'pending', deny: data.state === 'pending', continue: continuable && wait === 0, read: data.token_present, 'read-archive': data.token_present, rotate: data.token_present, revoke: data.token_present, 'revoke-grant': data.continuation_open && wait === 0, downscope: changeable && (data.rights || []).length > 1, expand: changeable && !(data.rights || []).includes('synthetic-archive:read'), 'check-retired':data.retired_token_present};
+  const enabled = {start: !['starting', 'failed'].includes(data.state), approve: data.state === 'pending', deny: data.state === 'pending', continue: continuable && wait === 0, read: data.token_present, 'read-archive': data.token_present, rotate: data.token_present, revoke: data.token_present, 'revoke-grant': data.continuation_open && wait === 0, downscope: changeable && (data.rights || []).length > 1, expand: changeable && !(data.rights || []).includes('synthetic-archive:read'), 'check-retired':data.retired_token_present};
   for (const button of document.querySelectorAll('[data-action]')) button.disabled = !enabled[button.dataset.action];
-  if (data.continuation_open && wait > 0) setTimeout(() => fetch('/api/status').then(r => r.json()).then(render).catch(e => {error.textContent = e.message;}), 1000);
+  if (data.state === 'starting' || (data.continuation_open && wait > 0)) setTimeout(() => fetch('/api/status').then(r => r.json()).then(render).catch(e => {error.textContent = e.message;}), 1000);
 }
 for (const button of document.querySelectorAll('[data-action]')) button.addEventListener('click', async () => {
   button.disabled = true;

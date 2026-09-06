@@ -1,0 +1,4 @@
+{
+  "kind": "resource_registration_request",
+  "body": "{\"access\":{},\"resource_server\":{},\"token_formats_supported\":[7],\"token_introspection_required\":\"true\"}"
+}

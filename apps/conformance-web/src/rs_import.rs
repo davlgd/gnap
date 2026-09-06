@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 const DISCOVERY: &str = "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.1";
 const INTRO: &str = "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.3";
 const ERROR: &str = "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.5";
+const REGISTRATION: &str = "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.4";
 const ACCESS: &str = "https://www.rfc-editor.org/rfc/rfc9635.html#section-8";
 
 /// Caller-declared comparison context, never an authenticated observation.
@@ -377,6 +378,19 @@ fn error_response(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<
     add(checks, "rs-error-http-status", c.and_then(|c| c.http_status).map(|s| s == 400), "RFC 9767 section 3.5 specifies HTTP 400 for RS-facing API errors. This compares only caller-declared status; without it HTTP is not tested.", ERROR);
 }
 
+fn registration_request(o: &Map<String, Value>, checks: &mut Vec<Check>) {
+    add(checks, "registration-request-access", Some(o.get("access").is_some_and(access_shape)), "access is REQUIRED: an array of reference strings or GNAP access objects with string type and selected standard dimensions. Empty arrays are not prohibited here. Resource-type semantics, reference resolution and the AS's actual interpretation are not tested.", ACCESS);
+    add(checks, "registration-request-rs", Some(o.get("resource_server").is_some_and(|v| v.is_string() || v.as_object().is_some_and(|o| o.get("key").is_some_and(key_shape)))), "resource_server is REQUIRED: an identity reference string or object containing key as object/reference. Only outer presentation is checked; key contents, mathematical validity, ownership, signature and RS authorization are not verified.", "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.2");
+    add(checks, "registration-request-token-formats", o.get("token_formats_supported").and_then(|v| registered_list(v, gnap_registry::TokenFormat::REGISTERED)), "Optional string array whose values MUST be registered in the GNAP Token Formats registry. Known values match this build's registry snapshot; unknown values need external registry review and are inconclusive. Absence leaves the format to the AS. An empty array establishes no compatible format.", REGISTRATION);
+    add(checks, "registration-request-introspection-required", o.get("token_introspection_required").map(Value::is_boolean), "Optional boolean: true declares that the RS expects to introspect these tokens; absent or false declares that it does not anticipate needing introspection. This does not establish the AS's support for this RS.", REGISTRATION);
+}
+
+fn registration_response(o: &Map<String, Value>, checks: &mut Vec<Check>) {
+    add(checks, "registration-response-reference", Some(o.get("resource_reference").is_some_and(Value::is_string)), "resource_reference is a REQUIRED string representing the registered resource list, not an access token. No token-value, nonempty or ASCII restriction is imposed. Whether this reference identifies the submitted resources is not tested.", REGISTRATION);
+    add(checks, "registration-response-instance-id", o.get("instance_id").map(Value::is_string), "Optional string RS instance identifier. Its assignment, persistence, resolution and binding to the RS are not tested.", REGISTRATION);
+    add(checks, "registration-response-introspection-endpoint", o.get("introspection_endpoint").map(Value::is_string), "Optional string naming the AS introspection endpoint. Only its JSON type is checked here; URI syntax, transport, ownership and actual introspection are not verified. No URL is fetched and discovery-specific URI rules are not transposed to this field.", REGISTRATION);
+}
+
 pub fn analyze(input: &Import) -> Result<Report, &'static str> {
     let (profile, reference, known): (&str, &str, &[&str]) = match input.kind {
         MessageKind::RsDiscovery => (
@@ -414,6 +428,25 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
             ],
         ),
         MessageKind::RsErrorResponse => ("gnap-rs-error-import-v1", ERROR, &["error"]),
+        MessageKind::ResourceRegistrationRequest => (
+            "gnap-resource-registration-request-import-v1",
+            REGISTRATION,
+            &[
+                "access",
+                "resource_server",
+                "token_formats_supported",
+                "token_introspection_required",
+            ],
+        ),
+        MessageKind::ResourceRegistrationResponse => (
+            "gnap-resource-registration-response-import-v1",
+            REGISTRATION,
+            &[
+                "resource_reference",
+                "instance_id",
+                "introspection_endpoint",
+            ],
+        ),
         _ => return Err("Unsupported RFC 9767 import kind."),
     };
     let mut checks = Vec::new();
@@ -451,19 +484,36 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
             MessageKind::RsErrorResponse => {
                 error_response(o, input.rs_context.as_ref(), &mut checks)
             }
+            MessageKind::ResourceRegistrationRequest => registration_request(o, &mut checks),
+            MessageKind::ResourceRegistrationResponse => registration_response(o, &mut checks),
             _ => {}
         }
         add(
             &mut checks,
             "rs-extension-semantics",
             None,
-            if o.keys().any(|k| !known.contains(&k.as_str())) {
+            if o.keys().any(|k| !known.contains(&k.as_str()))
+                && matches!(
+                    input.kind,
+                    MessageKind::IntrospectionRequest | MessageKind::IntrospectionResponse
+                )
+            {
                 "Additional members are present. Their registration and semantics are not tested; an AS unable to process an introspection request parameter MUST NOT declare the token active. An import cannot test that behavior."
+            } else if o.keys().any(|k| !known.contains(&k.as_str())) {
+                "Additional members are present. Their registration and semantics are not tested. This does not make extensions forbidden or prove that a receiver understands them."
             } else {
                 "No unrecognized top-level member detected, but extension semantics, nested key contents and resource-type-specific rules remain outside this import diagnostic."
             },
             reference,
         );
+    }
+    if matches!(
+        input.kind,
+        MessageKind::ResourceRegistrationRequest | MessageKind::ResourceRegistrationResponse
+    ) {
+        add(&mut checks, "registration-format-compatibility", None, "Not tested: if the AS supports none of the requested token formats, it MUST return an error. Registry membership, an omitted list or an empty list cannot establish an AS/RS format intersection or actual error behavior.", REGISTRATION);
+        add(&mut checks, "registration-introspection-support", None, "Not tested: when introspection is required by the RS, the AS must support it for this RS or return an error. An imported declaration or endpoint string cannot establish that support or the AS's error behavior.", REGISTRATION);
+        add(&mut checks, "registration-authentication-and-state", None, "Not tested: the RS MUST identify itself with its own key and sign the request. Key ownership, signature, authorization, resource registration, reference persistence/resolution and request-response correspondence require an authenticated exchange and state. Never upload private keys.", REGISTRATION);
     }
     add(&mut checks, "content-digest", input.content_digest.as_ref().map(|d| gnap_crypto::verify_content_digest(input.body.as_bytes(), d).is_ok()), "Separate shared gnap-crypto digest check against exact body bytes, if supplied. Not a signature or HTTP authentication check.", "https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.1");
     add(&mut checks, "rs-authentication-and-state", None, "Not tested: RS signature/authorization, client proof/key binding, issuer trust, actual token value, active state, expiration, revocation, audience, permissions or final resource decision. Never send private keys or production tokens.", INTRO);

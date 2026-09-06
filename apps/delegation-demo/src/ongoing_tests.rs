@@ -105,8 +105,17 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
         app.storage.clone(),
         app.decisions.clone(),
     );
+    let references = app.bootstrap.get().unwrap().as_ref().unwrap().clone();
     let worker = std::thread::spawn(move || {
-        client_worker(worker_origin, signer, server, storage, decisions, receiver)
+        client_worker(
+            worker_origin,
+            signer,
+            server,
+            storage,
+            decisions,
+            receiver,
+            references,
+        )
     });
     let starts = Arc::new(AtomicUsize::new(0));
     let counted = starts.clone();
@@ -315,12 +324,11 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
 #[test]
 fn ongoing_grant_polls_downscopes_reconsents_and_revokes_all_tokens() {
     let app = tests::test_app();
+    let references = app.bootstrap.get().unwrap().as_ref().unwrap();
     let network = Direct(&app.server);
     let mut client = Session::new(&network, app.signer.as_ref(), "https://demo.example/gnap")
         .supporting(&["redirect"]);
-    let pending = client
-        .start(&request(&[FOLDER_READ, ARCHIVE_READ]), now())
-        .unwrap();
+    let pending = client.start(&request(&[&references.both]), now()).unwrap();
     let finish = choice(&app, &pending, true);
     client
         .accept_callback(&InteractCallback::from_redirect(&finish).unwrap(), now())
@@ -329,6 +337,17 @@ fn ongoing_grant_polls_downscopes_reconsents_and_revokes_all_tokens() {
     let approved = client.continue_grant(now()).unwrap();
     assert!(approved.response().r#continue.is_some());
     let original = value(&approved);
+    let approved_rights = approved.response().access_token.as_ref().unwrap().tokens[0]
+        .access
+        .as_ref()
+        .unwrap();
+    assert_eq!(approved_rights.len(), 2);
+    assert!(
+        approved_rights
+            .iter()
+            .all(resource_registration::known_leaf),
+        "the token freezes leaves, not the registered reference"
+    );
     let before = app
         .storage
         .lookup(GrantSelector::AccessToken(original.as_str()))
@@ -351,7 +370,7 @@ fn ongoing_grant_polls_downscopes_reconsents_and_revokes_all_tokens() {
     assert_eq!(client.usable_tokens(now()).unwrap()[0].value, original);
     wait(&polled);
     let reduced = client
-        .modify_grant(&changes(&[FOLDER_READ]), now())
+        .modify_grant(&changes(&[&references.folder]), now())
         .unwrap();
     assert!(reduced.response().interact.is_none());
     let reduced_value = value(&reduced);
@@ -371,15 +390,16 @@ fn ongoing_grant_polls_downscopes_reconsents_and_revokes_all_tokens() {
         token.issued_at = 0;
     }
     assert_eq!(
-        ConsentPolicy(app.decisions.clone()).evaluate_context(
-            &request(&[FOLDER_READ]),
-            EvaluationContext::Modification(&expired_context)
-        ),
+        ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone())
+            .evaluate_context(
+                &request(&[&references.folder]),
+                EvaluationContext::Modification(&expired_context)
+            ),
         Decision::RequireInteraction
     );
     wait(&reduced);
     let expanded = client
-        .modify_grant(&changes(&[FOLDER_READ, ARCHIVE_READ]), now())
+        .modify_grant(&changes(&[&references.both]), now())
         .unwrap();
     assert!(expanded.response().interact.is_some());
     assert_eq!(client.usable_tokens(now()).unwrap()[0].value, reduced_value);
@@ -529,7 +549,7 @@ fn consent_cannot_cross_grants_clients_requests_or_interaction_references() {
         .lookup(GrantSelector::Id(snapshot.id))
         .unwrap()
         .unwrap();
-    let policy = ConsentPolicy(app.decisions.clone());
+    let policy = ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone());
     assert!(matches!(
         policy.evaluate_context(
             &snapshot.aggregate.record.request,
