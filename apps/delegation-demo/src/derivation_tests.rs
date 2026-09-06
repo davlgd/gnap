@@ -107,7 +107,7 @@ fn downstream_scenario(app: App, origin: String) {
     let parent = approved.response().access_token.as_ref().unwrap().tokens[0]
         .value
         .clone();
-    let child = derivation::issue(&app.resource_client, &parent).unwrap();
+    let child = derivation::issue(&app.resource_client, &parent, now()).unwrap();
     let before = app
         .storage
         .lookup(GrantSelector::AccessToken(parent.as_str()))
@@ -245,7 +245,7 @@ fn downstream_scenario(app: App, origin: String) {
         "parent is appropriate only at RS1"
     );
     assert!(
-        derivation::issue(&app.resource_client, &child.value).is_err(),
+        derivation::issue(&app.resource_client, &child.value, now()).is_err(),
         "a second derivation hop is forbidden"
     );
     let mut tampered = derivation_request(&app, &parent, &app.resource_client.signer);
@@ -332,7 +332,7 @@ fn downstream_scenario(app: App, origin: String) {
     app.storage
         .compare_exchange(source.id, source.revision, aged)
         .unwrap();
-    let short = derivation::issue(&app.resource_client, &rotated.value).unwrap();
+    let short = derivation::issue(&app.resource_client, &rotated.value, now()).unwrap();
     assert!(
         short.expires_in.is_some_and(|ttl| (1..=10).contains(&ttl)),
         "child never exceeds remaining parent lifetime"
@@ -350,7 +350,7 @@ fn downstream_scenario(app: App, origin: String) {
         401,
         "parent DELETE cascades too"
     );
-    assert!(derivation::issue(&app.resource_client, &rotated.value).is_err());
+    assert!(derivation::issue(&app.resource_client, &rotated.value, now()).is_err());
     app.storage.cleanup().unwrap();
 }
 
@@ -408,6 +408,57 @@ impl HttpTransport for FailedDownstream {
 }
 
 #[test]
+fn downstream_read_uses_the_injected_clock_at_parent_expiration() {
+    let mut app = tests::test_app();
+    let parent = tests::test_record("synthetic-parent");
+    let time = parent.issued_at;
+    let expires = time + parent.token.expires_in.unwrap();
+    app.storage
+        .create(tests::test_aggregate("handle", parent))
+        .unwrap();
+    let transport = Arc::new(FailedDownstream {
+        app: app.clone(),
+        transport_failure: false,
+        lost_cleanup: false,
+        deletes: Default::default(),
+    });
+    app.resource_client = Arc::new(introspection::ResourceClient {
+        origin: app.origin.clone(),
+        signer: app.resource_client.signer.clone(),
+        nonces: MemoryStorage::default(),
+        transport: transport.clone(),
+    });
+    let request = signed(
+        &app,
+        derivation::RS1_PATH,
+        &TokenValue::new("synthetic-parent").unwrap(),
+        &app.signer,
+    );
+    let calls = std::cell::Cell::new(0);
+    let result = read_resource_with_clock(&app, &request, || {
+        let call = calls.get();
+        calls.set(call + 1);
+        if call < 2 {
+            time
+        } else {
+            expires
+        }
+    });
+    assert!(matches!(result, Err(ResourceError::Denied)));
+    assert_eq!(
+        calls.get(),
+        3,
+        "expiry is checked again after proof verification"
+    );
+    assert_eq!(
+        transport.deletes.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no child is issued when the parent expires during authorization"
+    );
+    assert_eq!(app.storage.lock().unwrap().continuation_deadlines.len(), 1);
+}
+
+#[test]
 fn failed_downstream_still_deletes_once_and_lost_cleanup_is_not_success() {
     let app = tests::test_app();
     app.storage
@@ -435,7 +486,7 @@ fn failed_downstream_still_deletes_once_and_lost_cleanup_is_not_success() {
             &TokenValue::new("synthetic-parent").unwrap(),
             &app.signer,
         );
-        let result = derivation::read(&client, &request);
+        let result = derivation::read(&client, &request, now);
         if transport_failure || lost_cleanup {
             assert!(matches!(result, Err(ResourceError::Unavailable)));
         } else {
@@ -487,7 +538,12 @@ fn derived_reply_must_match_the_local_profile_without_reflecting_errors() {
             })),
         };
         assert_eq!(
-            derivation::issue(&client, &TokenValue::new("synthetic-parent").unwrap()).is_ok(),
+            derivation::issue(
+                &client,
+                &TokenValue::new("synthetic-parent").unwrap(),
+                now()
+            )
+            .is_ok(),
             index == 0
         );
     }
@@ -502,7 +558,11 @@ fn derived_reply_must_match_the_local_profile_without_reflecting_errors() {
         })),
     };
     assert!(matches!(
-        derivation::issue(&client, &TokenValue::new("synthetic-parent").unwrap()),
+        derivation::issue(
+            &client,
+            &TokenValue::new("synthetic-parent").unwrap(),
+            now()
+        ),
         Err(ResourceError::Unavailable)
     ));
 }
@@ -527,7 +587,7 @@ fn child_cleanup_requires_an_empty_204_and_never_accepts_an_arbitrary_destinatio
                 headers: vec![],
             })),
         };
-        assert_eq!(derivation::revoke(&client, &child).is_ok(), accepted);
+        assert_eq!(derivation::revoke(&client, &child, now()).is_ok(), accepted);
     }
     for destination in [
         "https://other.example/token/handle",

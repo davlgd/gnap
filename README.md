@@ -14,7 +14,7 @@ steps, and key-bound requests and tokens as the default.
 > full grant between them — request, signature, interaction, callback,
 > continuation, token — with both roles implemented here, and the token it
 > issues can be rotated and revoked (§6). The application examples add a real
-> HTTP client/AS flow, a co-located protected resource, a separated Biscuit file
+> HTTP client/AS flow, a co-located protected resource, a separate Biscuit file
 > application, and a diagnostic workbench. The co-located resource server uses
 > authenticated HTTP introspection rather than reading the AS store. These are
 > experimental consumers, not a complete conformance suite or a complete
@@ -430,7 +430,8 @@ the adapter's responsibility.
 | ✅ | `gnap-client` — the client instance role, §2 through §5 |
 | ✅ | `gnap-as` — the authorization server role, §2 through §5 |
 | ✅ | `gnap-as` and `gnap-client` — token management (§6): rotate and revoke |
-| ⬜ | Key rotation (§6.1.1, §7.3.1.1) and the remaining key proofing methods |
+| 🚧 | Bound-key rotation (§6.1.1, §7.3.1.1) through linked PS256 proofs; the selected client profile and remaining binding limits are described above |
+| ⬜ | The remaining key proofing methods (§7.3.2–§7.3.4) |
 | 🚧 | RFC 9767 — RS-facing discovery, opaque-token introspection, immutable resource registration and one-hop downstream delegation; broader profiles remain open |
 | 🚧 | HTTP application acceptance tests and bounded web diagnostics; full network conformance harness remains open |
 
