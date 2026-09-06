@@ -124,6 +124,49 @@ fn a_conformant_request_is_accepted_and_described() {
     assert!(seen.borrow().contains("n-1"), "the nonce was spent");
 }
 
+/// A signed digest must still be checked when an adapter reports no content.
+/// Otherwise stripping the content changes the operation without invalidating
+/// its proof, as described in RFC 9530 §6.3.
+#[test]
+fn removing_content_invalidates_its_signed_digest_without_spending_the_nonce() {
+    let (headers, _) = conformant();
+    for body in [None, Some(&b""[..])] {
+        let seen = memory();
+        assert!(verify(&headers, body, &expectations(), &seen).is_err());
+        assert!(seen.borrow().is_empty());
+    }
+}
+
+#[test]
+fn a_signed_digest_of_empty_content_accepts_both_adapter_representations() {
+    let digest = content_digest(b"", DigestAlgorithm::Sha256);
+    let message = Message {
+        method: "POST",
+        target_uri: URL,
+        content_digest: Some(&digest),
+        authorization: None,
+        other: Vec::new(),
+    };
+    let input = input(
+        vec![
+            Component::Method,
+            Component::TargetUri,
+            Component::ContentDigest,
+        ],
+        Some("empty"),
+    );
+    let mut headers = forge(&input, &message, "sig1");
+    headers.push(("Content-Digest".into(), digest));
+    for body in [None, Some(&b""[..])] {
+        let seen = memory();
+        assert!(verify(&headers, body, &expectations(), &seen).is_ok());
+        assert!(seen.borrow().contains("empty"));
+    }
+    let seen = memory();
+    assert!(verify(&headers, Some(b"added content"), &expectations(), &seen).is_err());
+    assert!(seen.borrow().is_empty());
+}
+
 /// A request with no signature at all is told apart from one whose signature
 /// is refused: the two are answered differently by a role.
 #[test]
