@@ -34,6 +34,32 @@ own expiration and management lifecycle. To test denial and grant revocation,
 use separate grants: a closed continuation cannot later revoke the whole grant.
 Token revocation remains available for a retained token after denial.
 
+The metadata button exercises one-hop downstream derivation (RFC 9767 §4).
+RS1 first verifies the caller's folder read through introspection, then sends a
+signed grant request to the configured AS with `existing_access_token` in its
+body. The AS explicitly maps that task to `archive-metadata:read` at RS2. This
+does not reuse the parent rights or grant archive document access. The child
+is bound to RS1's own key, expires within 60 seconds and no later than its
+parent, and is presented to RS2 with a fresh signature. RS2 authenticates its
+own introspection call with a third key, distinct from the client and RS1.
+The UI displays only synthetic metadata and the child's advertised lifetime.
+The introspection registry recognizes both RS keys; the separate derivation
+requester registry admits only RS1. Enrollment in a role does not authorize
+rights: the AS policy still checks the exact parent and the explicit mapping.
+
+This selected profile accepts only one hop, one opaque child token and no
+interaction, subject, bearer flag or continuation for that child. The client
+cannot use the child, and neither token works at the other's RS. RS1 makes one
+signed DELETE attempt against the child's management endpoint after the RS2
+attempt, including a refused or failed resource call. An inconclusive cleanup
+response gives 503, not success; it does not prove whether deletion happened.
+There is no automatic retry. Token-value rotation for children is refused.
+Removing the exact parent token, including rotation, revokes its children
+atomically in AS storage. This does not make an earlier introspection decision
+and a later network read atomic: a concurrent retirement can race a read already
+authorized by the AS. Every new read uses introspection; no positive result is
+cached. Local Biscuit attenuation is a different mechanism, not this flow.
+
 The separate token controls demonstrate rotation and token-only revocation.
 "Revoke the entire grant" instead sends DELETE to continuation and invalidates
 every token belonging to it. It can also cancel a pending request before consent
@@ -132,29 +158,38 @@ After migration, test both the canonical origin and the previous alias:
 python3 tools/smoke_ecosystem.py --demo https://demo.example --demo-alias https://previous.example
 ```
 
-The single deployment contains three roles, not three independent security
-administrations. `gnap-client::Session` exchanges actual HTTP requests with
+One application contains the client, AS and two RS roles, not independent
+security administrations. `gnap-client::Session` exchanges actual HTTP requests with
 `gnap-as::AuthorizationServer`. For each resource request, the RS fetches
 `/.well-known/gnap-as-rs` from that configured AS, then calls `/introspect` with
 a signature from its own pre-registered key. This exercises RFC 9767 discovery,
-opaque-token introspection and resource-set registration, not RS self-enrolment,
-resource-set management or token derivation.
-The RS has no token-store lookup. The AS returns the client public key, not the
-RS key; the RS verifies the exact incoming request with the shared SDK verifier.
+opaque-token introspection and resource-set registration. The metadata action
+adds token derivation, not RS self-enrolment or resource-set management.
+Neither RS has token-store lookup. The AS returns the key of the token's caller:
+the browser application's key for a parent, RS1's key for a child. The receiving
+RS verifies the exact incoming request with the shared SDK verifier.
 
-Only the configured origin and those two exact AS paths, plus
-`/register-resources` for startup registration, are reachable through the RS
+Only the configured origin and those two exact AS paths, `/register-resources`
+for startup registration, `/gnap`, `/resource/archive-metadata` and bounded
+single-segment `/token/{handle}` management paths are reachable through the RS
 HTTP adapter. An advertised endpoint elsewhere is refused before
 credentials are sent. Redirects and environment proxies are disabled; ordinary
-TLS certificate verification remains enabled. Each of the two HTTP calls has a
-two-second timeout and an 8 KiB response limit. Every read makes two HTTP round
-trips: a discovery GET followed by an introspection POST. There is deliberately
+TLS certificate verification remains enabled. Each call has a two-second timeout
+and an 8 KiB response limit. An ordinary folder/archive read makes two HTTP round
+trips: a discovery GET followed by an introspection POST. The metadata action
+adds a grant POST, an RS2 GET with its own discovery/introspection, then DELETE:
+seven internal HTTP exchanges in total. AS, RS1 and RS2 use separate admission
+semaphores, so RS1 waiting on RS2 does not occupy an RS2 worker slot. A completed
+metadata action exceeding 12 seconds is refused; this elapsed-time check is not
+cancellation of blocking calls or a hard end-to-end deadline. There is deliberately
 no metadata cache and no positive-token cache; this simple
 consumer does not optimize connection reuse or claim high throughput.
 
 The fixed demo profile requires a public PS256 HTTPSig client key, the exact
 grant issuer, its two understood read rights and `iat`/`exp` describing a
-1,200-second lifetime. Those timestamps are optional in RFC 9767, but not in
+1,200-second parent lifetime. RS2 instead requires only `archive-metadata:read`
+and a positive lifetime no greater than 60 seconds. Those timestamps are optional
+in RFC 9767, but not in
 this application's profile. Unsupported flags, key parameters and response
 extensions fail closed. Refusing additional response fields is a restriction of
 this demonstration: RFC 9767 permits additional fields in an active response.
@@ -209,13 +244,15 @@ must work; there is no loopback proxy bypass for a public HTTPS deployment.
 
 - One ephemeral 2048-bit RSA key represents the client application; browser sessions
   are isolated client references, not independent cryptographic client owners.
-  A second, distinct ephemeral RSA key authenticates only the RS to the AS.
+  Two further, distinct ephemeral RSA keys identify RS1 and RS2. RS1 also uses
+  its own key as the client of the downstream grant and resource request.
   Restart invalidates all keys, grants and tokens. No token values appear in
   the browser or application logs.
 - The visitor plays the resource owner; there is no real login, user directory,
-  private document upload or identity assurance. Only two fixed read rights
+  private document upload or identity assurance. Only two parent read rights
   exist: `synthetic-folder:read` at `/resource/folder` and
-  `synthetic-archive:read` at `/resource/archive`.
+  `synthetic-archive:read` at `/resource/archive`. The separate derived
+  `archive-metadata:read` right exposes only a synthetic document count.
 - Consent is bound to the stable grant ID, exact current request and the
   interaction reference committed by the AS. Completing the interaction must
   succeed before that choice is recorded or its finish redirect is returned.
@@ -234,10 +271,13 @@ must work; there is no loopback proxy bypass for a public HTTPS deployment.
   verified and a callback is consumed once per browser session.
 - At most 64 active sessions, a 32-command worker queue, 40 actions per session,
   10 new sessions/minute globally, 16 in-flight AS/protocol operations and
-  four separate in-flight RS operations. The separate pools let resource
+  four in-flight operations per RS, in separate pools. These let resource
   workers call the AS in the same process without occupying its worker permits.
   Storage holds at most 256 grant aggregates: saturation returns HTTP 503,
   without evicting grants with live rights to make room for new requests.
+  The SDK additionally caps active children at eight per exact parent, and
+  retained derived grants at 256. Successful per-call deletion releases the
+  active-child slot; application maintenance removes retired aggregates.
   A single client worker serializes session operations; a slow HTTP request can
   hold up all sessions until its 10-second timeout. It is intentionally a bounded
   demonstration, not a throughput benchmark.

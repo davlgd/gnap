@@ -220,6 +220,8 @@
 //!
 //! Implement [`GrantStore::create`], [`GrantStore::lookup`],
 //! [`GrantStore::compare_exchange`] and [`GrantStore::remove`] as transactions.
+//! Downstream derivation is a separate, opt-in capability: only stores that
+//! also implement [`DerivedGrantStore`] can serve the derivation handler.
 //! A lookup returns one [`GrantSnapshot`], including its [`Revision`]. Authenticate
 //! and prepare changes from that snapshot, then replace the whole aggregate
 //! against that revision. All continuation, interaction, management, access-value
@@ -253,6 +255,7 @@
 //! Public interaction and management URI handles are separate identifiers, not
 //! credentials. An existing credential cannot change roles during replacement.
 
+pub mod derivation;
 pub mod encoding;
 pub mod nonce;
 pub mod policy;
@@ -261,6 +264,7 @@ pub mod rs;
 pub mod server;
 pub mod storage;
 
+pub use derivation::{DerivationPolicy, DerivedAccess, DerivedToken, ParentToken};
 pub use encoding::{
     EncodedToken, OpaqueTokenEncoder, TokenEncoder, TokenEncodingContext, TokenEncodingError,
 };
@@ -280,6 +284,6 @@ pub use server::{
     AuthorizationServer, Endpoints, Finish, InteractionError, INTERACTION_LIFETIME, MAX_CLOCK_SKEW,
 };
 pub use storage::{
-    GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantSnapshot, GrantStore, MemoryStorage,
-    NonceStore, Revision, Storage, StoreError, TokenRecord,
+    DerivedGrantStore, GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantSnapshot,
+    GrantStore, MemoryStorage, NonceStore, Revision, Storage, StoreError, TokenRecord,
 };

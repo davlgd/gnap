@@ -1,6 +1,6 @@
 # GNAP and modern OAuth: what this ecosystem should demonstrate
 
-Comparison checked on **2026-09-05**. This is a design and evaluation guide, not
+Comparison checked on **2026-09-06**. This is a design and evaluation guide, not
 a claim that this workspace already implements every feature described below.
 AS means authorization server; RS means resource server.
 
@@ -37,41 +37,53 @@ guarantee. GNAP is a separate protocol, not a wire-compatible OAuth upgrade.
 | Discovery and RS relationships | RS-facing discovery, introspection, resource-set registration and downstream token derivation have defined interfaces. [RFC 9767 §§3–4](https://www.rfc-editor.org/rfc/rfc9767.html#section-3) | OAuth has [introspection](https://www.rfc-editor.org/rfc/rfc7662.html), [AS metadata](https://www.rfc-editor.org/rfc/rfc8414.html), [protected resource metadata](https://www.rfc-editor.org/rfc/rfc9728.html), and [token exchange](https://www.rfc-editor.org/rfc/rfc8693.html). This is not an exhaustive comparison of other profiles. | Discoverability and cross-vendor RS integration. Do not present introspection, resource-first discovery or delegation as GNAP inventions. |
 | Lifecycle management | Per-token management and grant continuation are separate protocol interfaces. [RFC 9635 §§5–6](https://www.rfc-editor.org/rfc/rfc9635.html#section-6) | OAuth has [token revocation](https://www.rfc-editor.org/rfc/rfc7009.html) and refresh-token security guidance in [RFC 9700 §4.14](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14). Access-token replacement, refresh-token rotation and changing signing keys are different operations. | Whether the distinction is clear to developers and survives storage, concurrency and retry failures. |
 
+[UMA 2.0 federated authorization](https://docs.kantarainitiative.org/uma/wg/rec-oauth-uma-federated-authz-2.0.html)
+also defines resource registration, permissions and introspection interfaces in
+the OAuth ecosystem, and describes authorizations that can grow or shrink by
+resource and scope. It is a Kantara recommendation, not an IETF RFC or the same
+contract as GNAP. Evolving delegation and standardized AS/RS relationships are
+therefore not exclusive to GNAP.
+
 ## What is actually available here
 
-Baseline: local pre-publication revision `8510bd0`, before the ecosystem work
-described in this document. That history is not included in the public
-repository; this section records the starting point, not the current feature set.
-The [README scope](../README.md#what-is-implemented-and-what-is-not) is the place
-to check subsequent implementation changes.
+This snapshot describes public revision
+[07b0e2f](https://github.com/davlgd/gnap/commit/07b0e2f87614ea3c914ca011977cba46f50891ac).
+The [support matrix at that revision](https://github.com/davlgd/gnap/blob/07b0e2f87614ea3c914ca011977cba46f50891ac/docs/support-matrix.md)
+links the implementation and test evidence; the [current matrix](support-matrix.md)
+tracks later changes. This is a source snapshot, not a deployment inventory or
+a claim that work on other branches has been merged.
 
-- Local client/AS tests exercise initial requests, redirect interaction,
-  callbacks, polling, grant updates and revocation, HTTPSig/PS256, and token-value
-  rotation and revocation. The narrated [flow example](../crates/gnap-as/examples/flow.rs)
-  uses in-memory transport, not a network deployment.
-- The message model represents rich rights and multiple-token requests, but
-  the AS issues only one bound token per approval. It does not assign an
-  expiration duration. An array containing one token is not a multi-token demo.
-- There is no RS, RFC 9767 endpoint implementation, deployed conformance service,
-  durable store or production HTTP adapter in that baseline. Other interaction
-  start modes and changing the token's signing key are not implemented.
-- Consent, user authentication, application authorization semantics and key
-  provisioning are deployment responsibilities, not supplied by a signature
-  verifier. Local tests do not establish independent interoperability.
+- The HTTP delegation demo exercises HTTPSig/PS256, redirect consent, opaque
+  key-bound tokens with a 1,200-second lifetime, token-value rotation and
+  revocation, and approved grants that remain continuable. Its policy permits
+  downscope and requires new consent for expansion; that consent policy is not
+  a universal GNAP rule.
+- The same demo exercises RS discovery, authenticated introspection and signed
+  registration of immutable resource sets used by reference in grants. It
+  combines the roles in one process; protected reads use HTTP introspection,
+  not the AS token store. This does not demonstrate independent-vendor operation.
+- The Biscuit crate supplies a restricted file profile and an in-process
+  attenuation example, not an integrated AS grant flow. AS-mediated downstream
+  derivation is absent. The AS issues one token per approval; multiple-token
+  issuance, changing its bound key, mTLS adapters and JWT token implementations
+  remain missing, as do complete secondary-device interaction flows.
+- The web workbench provides selected diagnostics, not complete conformance
+  certification. The examples remain synthetic and volatile; durable storage,
+  real user authentication and production readiness are not supplied.
 
 ## Application experiments, not marketing demos
 
 These are proposed acceptance scenarios. Their presence here does not mean
 they already run. Use synthetic data and isolated test credentials throughout.
 
-| Experiment | Observable success and negative cases | Baseline gap to close |
+| Experiment | Observable success and negative cases | Further work and checks |
 |---|---|---|
-| Document workspace with progressive privileges | Start read-only; request editing when the user selects Edit. Record a new approval decision, reject editing before approval, and reject a stale callback after the request changes. | Web adapter, consent UI, actual document RS and application policy. |
-| Browser and terminal clients for the same API | Complete browser approval, then operate a terminal client without a callback listener. Record polling limits and cancellation; later add a genuine secondary-device code flow. | Network clients first; code-based interaction is a separate unimplemented step. |
-| Request-integrity laboratory | Change only the body, query, method or authorization value after signing; each invalid presentation is rejected. Replay an otherwise valid request and present the token with a different key. | RS integration and a network adversarial runner, not just a signing example. |
+| Document workspace with progressive privileges | Start read-only; request editing when the user selects Edit. Record a new approval decision, reject editing before approval, and reject a stale callback after the request changes. | Extend the synthetic two-resource read policy to actual editing and its authorization rules. |
+| Browser and terminal clients for the same API | Complete browser approval, then operate a terminal client without a callback listener. Record polling limits and cancellation; later add a genuine secondary-device code flow. | A terminal consumer; code-based interaction remains a separate unimplemented step. |
+| Request-integrity laboratory | Change only the body, query, method or authorization value after signing; each invalid presentation is rejected. Replay an otherwise valid request and present the token with a different key. | Build a visitor-facing runner from the existing signature and HTTP tests, with explicit target authorization. |
 | Synthetic expense approval | Request approval of one expense with an amount ceiling; deny another expense or a larger amount even with a valid signature. Show the effective approved rights to the user. | Explicit rights schema, policy and enforcement at the RS. |
 | Two-service dashboard | Obtain separately labeled document and calendar tokens. Handle partial approval, reject cross-service use, and revoke one without disabling the other. | Actual multi-token issuance, two RSs and lifecycle enforcement. |
-| Registered resource and downstream worker | Register a resource set, discover the AS, introspect a token, then obtain a narrower downstream token for a worker. Reject an unauthorized RS and a broader downstream request. | RFC 9767 implementation and deployment-specific trust/policy configuration. |
+| Registered resource and downstream worker | Register a resource set, discover the AS, introspect a token, then obtain a narrower downstream token for a worker. Reject an unauthorized RS and a broader downstream request. | Add AS-mediated derivation and a worker to the existing registration/introspection path, with explicit trust and policy. |
 
 For each experiment, ask an implementer who did not write the library to start
 from a clean checkout and its public documentation. Record commands attempted,

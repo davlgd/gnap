@@ -1,0 +1,4 @@
+{
+  "kind": "derivation_request",
+  "body": "{\"existing_access_token\":\"synthetic-parent-not-a-credential\",\"client\":\"synthetic-rs1-client-reference\",\"access_token\":{\"access\":[{\"type\":\"demo-downstream-api\",\"actions\":[\"read\"]}],\"label\":\"downstream\"}}"
+}

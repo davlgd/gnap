@@ -112,7 +112,7 @@ does not execute that authenticated scenario against imported targets.
 
 The workbench now independently checks selected JSON rules for RS-facing AS
 discovery, introspection requests/responses, resource registration
-requests/responses and RS-facing errors. It reuses the
+requests/responses, downstream derivation grant messages and RS-facing errors. It reuses the
 registry as reference data, not SDK validators as the oracle. Probes, consent
 and target allowlists are unchanged. Synthetic fixtures test the diagnostics,
 not live interoperability.
@@ -163,3 +163,29 @@ The new synthetic fixtures exercise these distinctions, nested duplicate-name
 ambiguity, parser limits and redacted HTTP reports. They do not attest a running
 registration endpoint, RS key ownership or reference persistence. Network probes
 and their consent/allowlist policy are unchanged.
+
+## Downstream derivation import feedback
+
+- RFC 9767 §4 reuses GNAP's ordinary grant messages and client role. An RS-facing
+  `resource_server` field cannot replace `client`; identifying RS1 is distinct
+  from proving its own key or the incoming token's suitability for it.
+- A diagnostic can select token requests without making `access_token` mandatory
+  for every possible GNAP grant request. Multiple-token arrays, interaction,
+  subject information and extensions must not be rejected merely because the
+  current application chooses a simpler deployment profile.
+- The grant response has no dedicated proof-of-derivation field. Its string
+  token value and rights cannot demonstrate parent-child lineage, downscope,
+  downstream audience, consent or linked revocation. Those require an actual
+  authenticated scenario; local token attenuation is a separate path.
+- Independent assertions need precise names and limits. The response value
+  assertion checks only string shape; its token68 encoding obligation stays
+  explicitly untested. Outer key, management, continuation, interaction and
+  error types likewise do not validate their contents or protocol applicability.
+- Request and response arrays have their own label requirements. A single
+  imported response cannot establish label correspondence or matching cardinality.
+  Empty arrays must not produce fictitious per-token passes. Responses with no
+  access token do not establish an issuance observation.
+
+The new fixtures and offline tests exercise these distinctions without querying
+an AS. They upload no private proof material, infer no network authority from
+declared context and leave the existing probe/consent/allowlist policy unchanged.

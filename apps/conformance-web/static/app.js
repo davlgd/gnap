@@ -9,7 +9,9 @@ const kindHelp = {
   introspection_response: 'An active response requires access (possibly empty) and iss. Inactive responses contain active: false only. Neither state nor cryptographic binding is verified.',
   rs_error_response: 'RS-facing errors use RFC 9767 section 3.5 and its separate error registry. The specified HTTP 400 can only be compared with a declared status.',
   resource_registration_request: 'Requires access and resource_server. Optional formats and introspection requirements are declarations: no AS compatibility or RS signature is verified, including for an empty format list. No comparison context is accepted.',
-  resource_registration_response: 'Requires a resource_reference string, not an access token. Optional instance_id and introspection_endpoint are checked as strings only. No reference resolution, URL fetch or actual registration is verified. No comparison context is accepted.'
+  resource_registration_response: 'Requires a resource_reference string, not an access token. Optional instance_id and introspection_endpoint are checked as strings only. No reference resolution, URL fetch or actual registration is verified. No comparison context is accepted.',
+  derivation_request: 'Selected token request: existing_access_token, client and access_token are required. RS1 must sign with its own key; JSON cannot prove that or the parent token validity. Interaction and extensions are not forbidden. No comparison context is accepted.',
+  derivation_response: 'Selected grant-response fields only. A missing token, continuation, interaction or error does not prove issuance. Token value checks are string-shape only, not token68 encoding. No effective rights, audience or revocation linkage is verified. No comparison context is accepted.'
 };
 const contextHelp = {
   rs_discovery: 'Allowed: grant_request_endpoint (expected exact client endpoint), discovery_url (declared publication URL). Example: {"grant_request_endpoint":"https://as.example/gnap","discovery_url":"https://as.example/.well-known/gnap-as-rs"}',

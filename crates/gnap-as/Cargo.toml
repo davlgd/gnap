@@ -13,6 +13,7 @@ readme.workspace = true
 documentation = "https://docs.rs/gnap-as"
 
 [dependencies]
+sha2.workspace = true
 gnap-types = { workspace = true }
 gnap-registry = { workspace = true }
 gnap-crypto = { workspace = true }

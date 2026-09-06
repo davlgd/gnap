@@ -153,9 +153,11 @@ def demo(base, outcomes):
     expect(body.get("state") == "approved" and body.get("token_present"), "No approved token after continuation")
     body = action("read")
     expect(bool(body.get("folder")), "Signed resource read returned no synthetic dossier")
+    check_metadata(action("read-metadata"))
     action("rotate")
     action("check-retired")
     action("read")
+    check_metadata(action("read-metadata"))
     body = action("revoke")
     expect(body.get("state") == "revoked" and not body.get("token_present"), "Revoked token remains usable in client")
     action("check-retired")
@@ -188,6 +190,20 @@ def wait_for_continuation(browser, base):
     expect(isinstance(wait, int) and not isinstance(wait, bool) and 0 <= wait <= 30, "Invalid continuation wait hint")
     if wait:
         time.sleep(wait + 0.1)
+
+
+def check_metadata(body):
+    folder = body.get("folder")
+    expect(isinstance(folder, dict), "Downstream read returned no dossier")
+    expect(folder.get("metadata") == {"source": "synthetic-archive", "document_count": 1},
+           "Downstream service did not return the expected synthetic metadata")
+    expect(folder.get("derived_right") == "archive-metadata:read",
+           "Downstream read did not use the expected separate right")
+    lifetime = folder.get("derived_lifetime_seconds")
+    expect(isinstance(lifetime, int) and not isinstance(lifetime, bool) and 1 <= lifetime <= 60,
+           "Downstream token lifetime left the selected profile")
+    # These are visible scenario results, not independent proof of AS policy.
+    # Cross-audience and state-race evidence comes from the HTTP/SDK tests.
 
 
 def ongoing_demo(base, outcomes):
@@ -241,6 +257,7 @@ def ongoing_demo(base, outcomes):
     action("check-retired")
     read("read", 200)
     read("read-archive", 401)
+    check_metadata(action("read-metadata"))
 
     wait_for_continuation(browser, base)
     body = action("expand")
@@ -284,6 +301,8 @@ def demo_alias(base, alias, outcomes):
         ("POST", "/continue/synthetic"),
         ("DELETE", "/token/synthetic"),
         ("GET", "/resource/folder"),
+        ("GET", "/resource/folder-metadata"),
+        ("GET", "/resource/archive-metadata"),
     ):
         status, headers, _, _ = request(browser, alias, path, method, browser_origin=base)
         expect(status == 421, "Noncanonical API or protocol request was not rejected")
@@ -451,6 +470,53 @@ def rs_api(base, outcomes):
     outcomes.append({"check": "rs-registration-rejects-unsigned", "status": "pass", "elapsed_ms": elapsed})
 
 
+def derivation_imports(base, outcomes):
+    """Inspect selected shapes without claiming a successful delegation chain."""
+    browser = client()
+    grant = {"client": "synthetic-rs1", "existing_access_token": "synthetic-parent",
+             "access_token": {"access": ["synthetic-metadata:read"]}}
+    cases = [
+        ("request", "derivation_request", grant,
+         {"derivation-request-parent": "pass", "derivation-request-client": "pass",
+          "derivation-request-access": "pass"}),
+        ("missing-parent", "derivation_request",
+         {key: value for key, value in grant.items() if key != "existing_access_token"},
+         {"derivation-request-parent": "fail"}),
+        ("wrong-parent-type", "derivation_request", grant | {"existing_access_token": 42},
+         {"derivation-request-parent": "fail"}),
+        ("missing-labels", "derivation_request",
+         grant | {"access_token": [{"access": ["a"]}, {"access": ["b"]}]},
+         {"derivation-request-labels": "fail"}),
+        ("response", "derivation_response",
+         {"access_token": {"value": "synthetic-child", "access": ["synthetic-metadata:read"]}},
+         {"derivation-response-value": "pass", "derivation-response-access": "pass"}),
+        ("missing-value", "derivation_response", {"access_token": {"access": ["a"]}},
+         {"derivation-response-value": "fail"}),
+        ("error-response", "derivation_response", {"error": "request_denied"},
+         {"derivation-response-token-shape": "not_tested"}),
+    ]
+    for label, kind, body, expected in cases:
+        status, headers, result, elapsed = request(browser, base, "/api/analyze", "POST",
+                                                   {"kind": kind, "body": json.dumps(body)})
+        expect(status == 200 and isinstance(result, dict) and result.get("certification") is False,
+               "Derivation import failed or claimed certification: " + label)
+        expect(headers.get("cache-control") == "no-store", "Derivation import is cacheable")
+        checks = {item["id"]: item["status"] for item in result["checks"]}
+        for name, expected_status in expected.items():
+            expect(checks.get(name) == expected_status,
+                   "Wrong derivation diagnostic: " + label + "/" + name)
+        expect(all(checks.get(name) == "not_tested" for name in (
+            "derivation-proof-and-parent-validity", "derivation-parent-rs-suitability",
+            "derivation-effective-rights-and-audience", "derivation-revocation-and-lineage",
+            "derivation-grant-exchange")),
+            "An imported derivation message was mistaken for an authenticated exchange")
+        rendered = json.dumps(result)
+        expect(all(value not in rendered for value in ("synthetic-parent", "synthetic-child")),
+               "Derivation report reflected a submitted credential")
+        outcomes.append({"check": "workbench-derivation-" + label,
+                         "status": "pass", "elapsed_ms": elapsed})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", type=origin)
@@ -473,6 +539,7 @@ def main():
             ready(args.workbench)
             workbench(args.workbench, outcomes)
             rs_imports(args.workbench, outcomes)
+            derivation_imports(args.workbench, outcomes)
     except (AssertionError, OSError, ValueError, TypeError, KeyError) as error:
         # Do not render arbitrary transport/parser errors, which may contain a
         # URL with a callback secret. Assertions above contain only fixed text.

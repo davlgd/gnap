@@ -13,6 +13,7 @@ fn invalid_rs_api_configuration_is_non_gnap_noncacheable_and_redacted() {
                 ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone()),
                 KnownKeys {
                     signer: app.signer.clone(),
+                    rs_key: app.rs_registration.key.clone(),
                     decisions: app.decisions.clone(),
                 },
                 app.storage.clone(),
@@ -206,6 +207,7 @@ async fn real_http_introspection_authenticates_rs_and_protects_resource_lifecycl
         // proof, while the independently registered RS key must not.
         let client_resolver = KnownKeys {
             signer: app.signer.clone(),
+            rs_key: app.rs_registration.key.clone(),
             decisions: app.decisions.clone(),
         };
         let resolved = client_resolver
@@ -323,7 +325,7 @@ async fn real_http_introspection_authenticates_rs_and_protects_resource_lifecycl
         axum::body::to_bytes(response.into_body(), 4096)
             .await
             .unwrap(),
-        r#"{"error":"introspection_unavailable"}"#
+        r#"{"error":"resource_unavailable"}"#
     );
 }
 

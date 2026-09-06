@@ -135,6 +135,7 @@ fn revocation_wins(allow_rotation: bool) {
     aggregate.tokens.insert(
         HANDLE.into(),
         TokenRecord {
+            derivation: None,
             issued_at: NOW,
             identifier: None,
             token: serde_json::from_value(serde_json::json!({

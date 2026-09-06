@@ -1,5 +1,7 @@
 //! Independent, bounded RFC 9767 JSON diagnostics, not state or proof validation.
 
+mod derivation;
+
 use crate::{check, observation, Check, Import, MessageKind, Report};
 use serde::{
     de::{MapAccess, SeqAccess, Visitor},
@@ -447,6 +449,30 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
                 "introspection_endpoint",
             ],
         ),
+        MessageKind::DerivationRequest => (
+            "gnap-derivation-request-import-v1",
+            derivation::RFC,
+            &[
+                "existing_access_token",
+                "client",
+                "access_token",
+                "subject",
+                "user",
+                "interact",
+            ],
+        ),
+        MessageKind::DerivationResponse => (
+            "gnap-derivation-response-import-v1",
+            derivation::RFC,
+            &[
+                "access_token",
+                "continue",
+                "interact",
+                "subject",
+                "instance_id",
+                "error",
+            ],
+        ),
         _ => return Err("Unsupported RFC 9767 import kind."),
     };
     let mut checks = Vec::new();
@@ -486,6 +512,8 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
             }
             MessageKind::ResourceRegistrationRequest => registration_request(o, &mut checks),
             MessageKind::ResourceRegistrationResponse => registration_response(o, &mut checks),
+            MessageKind::DerivationRequest => derivation::request(o, &mut checks),
+            MessageKind::DerivationResponse => derivation::response(o, &mut checks),
             _ => {}
         }
         add(
@@ -514,6 +542,12 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
         add(&mut checks, "registration-format-compatibility", None, "Not tested: if the AS supports none of the requested token formats, it MUST return an error. Registry membership, an omitted list or an empty list cannot establish an AS/RS format intersection or actual error behavior.", REGISTRATION);
         add(&mut checks, "registration-introspection-support", None, "Not tested: when introspection is required by the RS, the AS must support it for this RS or return an error. An imported declaration or endpoint string cannot establish that support or the AS's error behavior.", REGISTRATION);
         add(&mut checks, "registration-authentication-and-state", None, "Not tested: the RS MUST identify itself with its own key and sign the request. Key ownership, signature, authorization, resource registration, reference persistence/resolution and request-response correspondence require an authenticated exchange and state. Never upload private keys.", REGISTRATION);
+    }
+    if matches!(
+        input.kind,
+        MessageKind::DerivationRequest | MessageKind::DerivationResponse
+    ) {
+        derivation::unobservable(&mut checks);
     }
     add(&mut checks, "content-digest", input.content_digest.as_ref().map(|d| gnap_crypto::verify_content_digest(input.body.as_bytes(), d).is_ok()), "Separate shared gnap-crypto digest check against exact body bytes, if supplied. Not a signature or HTTP authentication check.", "https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.1");
     add(&mut checks, "rs-authentication-and-state", None, "Not tested: RS signature/authorization, client proof/key binding, issuer trust, actual token value, active state, expiration, revocation, audience, permissions or final resource decision. Never send private keys or production tokens.", INTRO);

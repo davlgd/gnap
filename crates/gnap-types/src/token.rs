@@ -47,6 +47,8 @@ pub struct TokenRequest {
     pub label: Option<String>,
     /// The token behaviours requested.
     pub flags: Vec<AccessTokenFlag>,
+    /// Unrecognized fields retained so a deployment can reject unsupported constraints.
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 fn check_unique_flags<E: de::Error>(flags: &[AccessTokenFlag]) -> Result<(), E> {
@@ -72,6 +74,8 @@ impl<'de> Deserialize<'de> for TokenRequest {
             label: Option<String>,
             #[serde(default)]
             flags: Vec<AccessTokenFlag>,
+            #[serde(flatten)]
+            extra: serde_json::Map<String, serde_json::Value>,
         }
         let r = Raw::deserialize(d)?;
         check_unique_flags(&r.flags)?;
@@ -79,6 +83,7 @@ impl<'de> Deserialize<'de> for TokenRequest {
             access: r.access,
             label: r.label,
             flags: r.flags,
+            extra: r.extra,
         })
     }
 }
@@ -93,6 +98,14 @@ impl Serialize for TokenRequest {
         }
         if !self.flags.is_empty() {
             m.serialize_entry("flags", &self.flags)?;
+        }
+        for (name, value) in &self.extra {
+            if matches!(name.as_str(), "access" | "label" | "flags") {
+                return Err(serde::ser::Error::custom(
+                    "token request extension shadows a defined field",
+                ));
+            }
+            m.serialize_entry(name, value)?;
         }
         m.end()
     }

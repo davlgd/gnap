@@ -364,12 +364,9 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
         let Ok(body) = serde_json::from_slice::<IntrospectionRequest>(bytes) else {
             return rs_error(RsErrorCode::InvalidRequest);
         };
-        if self
-            .authenticate(request, &body.resource_server, now)
-            .is_none()
-        {
+        let Some(authenticated) = self.authenticate(request, &body.resource_server, now) else {
             return rs_error(RsErrorCode::InvalidResourceServer);
-        }
+        };
         // RFC 9767 §3.3: "the AS MUST take all provided parameters into account
         // when evaluating if the token is active."
         if !body.extra.is_empty()
@@ -385,10 +382,15 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
         // are omitted." A storage failure is indeterminate, not intrinsic
         // token invalidity. Deployment storage adapters should record failures
         // without logging credentials; they are not revealed to the RS here.
-        self.inspect_token(&body, now)
+        self.inspect_token(&body, &authenticated.id, now)
     }
 
-    fn inspect_token(&self, body: &IntrospectionRequest, now: u64) -> HttpResponse {
+    fn inspect_token(
+        &self,
+        body: &IntrospectionRequest,
+        audience: &RsId,
+        now: u64,
+    ) -> HttpResponse {
         let Ok(Some(snapshot)) = self
             .storage
             .lookup(GrantSelector::AccessToken(body.access_token.as_str()))
@@ -407,6 +409,13 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
             return inactive();
         };
         if !token.is_valid_at(now) || token.identifier.is_some() || !token.token.extra.is_empty() {
+            return inactive();
+        }
+        if token
+            .derivation
+            .as_ref()
+            .is_some_and(|metadata| &metadata.audience != audience)
+        {
             return inactive();
         }
         let (access, key) =
@@ -454,35 +463,45 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
         identity: &ResourceServer,
         now: u64,
     ) -> Option<ResolvedResourceServer> {
-        let resolved = self.keys.resolve(identity)?;
-        let key = &resolved.key;
-        let verifier = public_verifier(key)?;
-        if let Some(presented) = identity.as_value().and_then(|rs| rs.key.as_value()) {
-            if presented != key {
-                return None;
-            }
-        }
-        let signed = SignedRequest {
-            method: &request.method,
-            target_uri: &request.url,
-            headers: &request.headers,
-            body: request.body.as_deref(),
-        };
-        let remember = |nonce: &str, at: u64| self.nonces.remember_nonce(nonce, at);
-        verify_request_with_policy(
-            &signed,
-            &verifier,
-            &Expectations {
-                now,
-                max_clock_skew: MAX_CLOCK_SKEW,
-                key_id: key.jwk_key_id(),
-            },
-            &remember,
-            &|params| params.nonce.as_ref().is_some_and(|nonce| !nonce.is_empty()),
-        )
-        .ok()?;
-        Some(resolved)
+        authenticate_rs(self.keys, self.nonces, request, identity, now)
     }
+}
+
+pub(crate) fn authenticate_rs(
+    keys: &impl ResourceServerResolver,
+    nonces: &dyn NonceStore,
+    request: &HttpRequest,
+    identity: &ResourceServer,
+    now: u64,
+) -> Option<ResolvedResourceServer> {
+    let resolved = keys.resolve(identity)?;
+    let key = &resolved.key;
+    let verifier = public_verifier(key)?;
+    if let Some(presented) = identity.as_value().and_then(|rs| rs.key.as_value()) {
+        if presented != key {
+            return None;
+        }
+    }
+    let signed = SignedRequest {
+        method: &request.method,
+        target_uri: &request.url,
+        headers: &request.headers,
+        body: request.body.as_deref(),
+    };
+    let remember = |nonce: &str, at: u64| nonces.remember_nonce(nonce, at);
+    verify_request_with_policy(
+        &signed,
+        &verifier,
+        &Expectations {
+            now,
+            max_clock_skew: MAX_CLOCK_SKEW,
+            key_id: key.jwk_key_id(),
+        },
+        &remember,
+        &|params| params.nonce.as_ref().is_some_and(|nonce| !nonce.is_empty()),
+    )
+    .ok()?;
+    Some(resolved)
 }
 
 fn json_request(request: &HttpRequest, max_bytes: usize) -> Option<&[u8]> {

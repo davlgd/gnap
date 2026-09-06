@@ -3,7 +3,7 @@
 use crate::client::Client;
 use crate::error::GnapError;
 use crate::interact::{InteractRequest, InteractResponse};
-use crate::token::{AccessTokenRequest, AccessTokenResponse, BoundToken};
+use crate::token::{AccessTokenRequest, AccessTokenResponse, BoundToken, TokenValue};
 use crate::user::{SubjectRequest, SubjectResponse, User};
 use serde::{de, Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -12,7 +12,7 @@ use std::fmt;
 ///
 /// Sent as a POST with `application/json` content — unless the proofing method
 /// says otherwise, as attached JWS (§7.3.4) does by wrapping the object.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct GrantRequest {
     /// The requesting client. Required on an initial request, never present
     /// on a continuation (§2.3, §5.3).
@@ -21,6 +21,15 @@ pub struct GrantRequest {
     /// The tokens requested.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub access_token: Option<AccessTokenRequest>,
+
+    /// Parent access-token value for downstream derivation (RFC 9767 §4).
+    /// This is sensitive request content, never a continuation credential.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "existing_token"
+    )]
+    pub existing_access_token: Option<TokenValue>,
 
     /// The information requested about the RO.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -37,6 +46,29 @@ pub struct GrantRequest {
     /// Extension fields, kept as they are (Appendix D).
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+fn existing_token<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<TokenValue>, D::Error> {
+    TokenValue::deserialize(deserializer).map(Some)
+}
+
+impl fmt::Debug for GrantRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GrantRequest")
+            .field("client", &self.client)
+            .field("access_token", &self.access_token)
+            .field(
+                "existing_access_token",
+                &self.existing_access_token.as_ref().map(|_| "[redacted]"),
+            )
+            .field("subject", &self.subject)
+            .field("user", &self.user)
+            .field("interact", &self.interact)
+            .field("extra", &self.extra)
+            .finish()
+    }
 }
 
 /// The AS response (§3).
