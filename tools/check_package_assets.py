@@ -40,7 +40,7 @@ def check_copies(root, mapping):
 
 def check_crate(crate):
     errors = []
-    package = tomllib.loads((crate / "Cargo.toml").read_text())["package"]
+    package = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))["package"]
     if package.get("readme") != "README.md" or not (crate / "README.md").is_file():
         errors.append(f"{crate.name}: a crate-local README.md is required")
     if package.get("documentation") != f"https://docs.rs/{crate.name}":
@@ -49,7 +49,7 @@ def check_crate(crate):
         errors.append(f"{crate.name}: inherit the SPDX license and include its text")
     for folder in ("src", "tests", "examples"):
         for source in (crate / folder).rglob("*.rs"):
-            for relative in re.findall(r'include_(?:str|bytes)!\(\s*"([^"\n]+)"\s*\)', source.read_text()):
+            for relative in re.findall(r'include_(?:str|bytes)!\(\s*"([^"\n]+)"\s*\)', source.read_text(encoding="utf-8")):
                 try:
                     included = (source.parent / relative).resolve()
                     if not included.is_relative_to(crate.resolve()) or not included.is_file():
@@ -61,8 +61,8 @@ def check_crate(crate):
 
 def main():
     try:
-        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]
-        mapping = json.loads((ROOT / "tools/package-assets.json").read_text())
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]
+        mapping = json.loads((ROOT / "tools/package-assets.json").read_text(encoding="utf-8"))
         errors = check_copies(ROOT, mapping)
         inside(ROOT, "LICENSE")
         for member in workspace["members"]:

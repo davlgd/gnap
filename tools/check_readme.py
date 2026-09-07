@@ -29,7 +29,7 @@ def check_transcript(guide):
     try:
         run = subprocess.run(
             ["cargo", "run", "-q", "--locked", "--example", "flow", "-p", "gnap-as"],
-            capture_output=True, text=True, cwd=ROOT, check=False, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", cwd=ROOT, check=False, timeout=300)
     except (OSError, subprocess.TimeoutExpired):
         print("The flow example could not be executed within the check's limits.")
         return 1

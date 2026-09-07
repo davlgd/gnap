@@ -35,6 +35,7 @@ class WalkthroughTests(unittest.TestCase):
                 self.assertIn("--locked", run.call_args.args[0])
                 self.assertEqual(run.call_args.kwargs["cwd"], checker.ROOT)
                 self.assertEqual(run.call_args.kwargs["timeout"], 300)
+                self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
 
     def test_missing_or_duplicate_transcripts_fail_without_running_cargo(self):
         for document in ("No transcript", guide() + guide()):

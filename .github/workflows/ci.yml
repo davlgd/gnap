@@ -59,6 +59,10 @@ jobs:
         with:
           # Published receipts verify source hashes against their earlier commit.
           fetch-depth: 0
+      - name: Install Python for the verification tools
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
       - uses: Swatinem/rust-cache@v2
       - name: Quotations are literal
         # The code quotes the RFCs to justify what it does. A drifted quotation

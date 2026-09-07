@@ -72,6 +72,19 @@ class PackageAssetTests(unittest.TestCase):
         (crate / "Cargo.toml").write_text('[package]\nreadme="../../README.md"\n')
         self.assertEqual(len(assets.check_crate(crate)), 3)
 
+    def test_non_ascii_sources_are_read_as_utf8(self):
+        crate = self.crate()
+        (crate / "src/épreuve").write_bytes("Données de test\n".encode("utf-8"))
+        (crate / "src/lib.rs").write_bytes('const A: &str = include_str!("épreuve");\n'.encode("utf-8"))
+        read_text = Path.read_text
+
+        def read_utf8(path, **options):
+            self.assertEqual(options.get("encoding"), "utf-8")
+            return read_text(path, **options)
+
+        with patch.object(Path, "read_text", read_utf8):
+            self.assertEqual(assets.check_crate(crate), [])
+
 
 if __name__ == "__main__":
     unittest.main()
