@@ -71,9 +71,56 @@ Machine-specific observations, unresolved dependency decisions and draft release
 coordination belong in ignored local notes. Public release evidence should name
 the reviewed revision and the checks actually performed.
 
+## Use the mise tasks
+
+The repository's [mise tasks](../mise.toml) use the Cargo already on your PATH;
+they do not install a toolchain. Use Cargo 1.98, as for the package checks above.
+Native workspace publishing requires at least
+[Cargo 1.90](https://blog.rust-lang.org/2025/09/18/Rust-1.90.0/#cargo-adds-native-support-for-workspace-publishing).
+Install [mise](https://mise.jdx.dev/getting-started.html) separately if needed,
+review `mise.toml`, and trust it with `mise trust` if prompted.
+
+Rehearse the whole workspace without uploading:
+
+```sh
+mise run publish:dry-run
+```
+
+This runs `cargo publish --workspace --registry crates-io --locked --dry-run`.
+Cargo handles dependency ordering and verifies unpublished workspace dependencies
+together. The dry-run builds archives and can access the registry, but uploads
+nothing; it is not an offline check or a guarantee of registry acceptance.
+Review warnings about yanked dependencies and future compiler incompatibilities
+before publishing; a successful dry-run does not resolve them.
+It keeps Cargo's clean-tree and lockfile checks enabled. See
+[cargo publish](https://doc.rust-lang.org/cargo/commands/cargo-publish.html).
+
+To inspect commands without running even the Cargo dry-run, use
+`mise run --dry-run publish:dry-run`. These are two different dry-run modes.
+
 ## Publish only after approval
 
-One valid order, including the current development dependencies, is:
+Publication is performed by the maintainer, not by the coding agents or CI.
+Once the release checks above are complete, the maintainer can run:
+
+```sh
+mise run publish
+```
+
+The task asks for confirmation (default: no), then runs
+`cargo publish --workspace --registry crates-io --locked`. Both tasks run from
+the repository root, select its SDK members and take versions from their
+manifests. They do not publish the standalone HTTP applications or create tags.
+No task is chained to the upload task; the dry-run never starts it.
+
+Workspace publication is not atomic. If an upload or index wait fails, inspect
+which versions reached crates.io before retrying; do not blindly rerun the
+whole workspace. For a partial release, publish only the remaining crates with
+`cargo publish -p <crate> --registry crates-io --locked`, after checking their
+prerequisites. Never use `--no-verify` to conceal a failing check.
+
+For manual publication or recovery, one valid order, including the current
+development dependencies, is:
 
 1. `gnap-registry`, `gnap-net` (independent roots).
 2. `gnap-types`.
@@ -82,11 +129,8 @@ One valid order, including the current development dependencies, is:
 5. `gnap-client`.
 6. `gnap-as`, `gnap-rs`, `gnap-biscuit`.
 
-Recompute the order when dependencies change. After the maintainer's explicit
-release approval, verify each prerequisite is visible in the registry before
-publishing a dependent crate. Use `cargo publish -p <crate> --dry-run --locked`
-as a final rehearsal, then the corresponding publish command only for the
-approved package and revision. Never use `--no-verify` to conceal a failing check.
+Recompute the manual order when dependencies change and verify each prerequisite
+is visible in the registry before publishing a dependent crate.
 
 After publication, verify registry versions, package contents and docs.rs builds,
 then update installation instructions and publish the approved release notes

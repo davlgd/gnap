@@ -2,6 +2,8 @@
 /rfc/
 /requirements/
 /.local/
+/mise.local.toml
+/.mise.local.toml
 /PLAN.md
 /spikes/
 /legacy/
