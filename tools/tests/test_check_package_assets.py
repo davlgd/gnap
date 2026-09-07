@@ -3,7 +3,10 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import runpy
+import sys
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "check_package_assets", Path(__file__).resolve().parents[1] / "check_package_assets.py")
@@ -29,6 +32,12 @@ class PackageAssetTests(unittest.TestCase):
         for name in ("missing", "../outside"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 assets.inside(self.root, name)
+
+    def test_missing_tomllib_explains_the_required_python_version(self):
+        with patch.dict(sys.modules, {"tomllib": None}):
+            with self.assertRaises(SystemExit) as error:
+                runpy.run_path(str(Path(assets.__file__)))
+        self.assertEqual(str(error.exception), "Package asset checks require Python 3.11 or newer.")
 
     def test_symlink_to_an_external_file_is_refused(self):
         with tempfile.TemporaryDirectory() as external:

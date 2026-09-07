@@ -1,9 +1,8 @@
 # Cryptographic test fixtures
 
-`rfc9421-b12.pkcs1.pem` and `rfc9421-b12.spki.pem` contain the example RSA key
+`rfc9421-b12.pkcs1.pem` contains the example RSA private key
 published in [RFC 9421, Appendix B.1.2](https://www.rfc-editor.org/rfc/rfc9421.html#appendix-B.1.2).
-The private key is converted to PKCS#1 for the test implementation; the public
-key uses SubjectPublicKeyInfo.
+It is converted to PKCS#1 for the test implementation.
 
 This private key is deliberately public. It is test material, not a deployment
 credential, and must never protect real data. The HTTP delegation application
@@ -19,10 +18,10 @@ is permitted pursuant to, and subject to the license terms contained in, the
 Revised BSD License set forth in Section 4.c of the IETF Trust's Legal Provisions
 Relating to IETF Documents (https://trustee.ietf.org/license-info).
 
-These files are package-local copies of the repository's canonical fixtures:
+This file is a package-local copy of the repository's canonical fixture:
 
 - [crates/gnap-crypto/tests/rfc9421-b12.pkcs1.pem](https://github.com/davlgd/gnap/blob/main/crates/gnap-crypto/tests/rfc9421-b12.pkcs1.pem)
 
-They keep tests and examples usable outside a workspace checkout. The package
-asset check verifies byte-for-byte equality with the canonical sources. Change
+It keeps tests usable outside a workspace checkout. The package
+asset check verifies byte-for-byte equality with the canonical source. Change
 the source and its copies together; do not invent independent fixture variants.

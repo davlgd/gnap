@@ -2,7 +2,8 @@
 
 Run commands from the repository root. The [CI workflow](../.github/workflows/ci.yml)
 is the authoritative list for pull requests; application READMEs document their
-separate toolchains and acceptance scenarios.
+separate toolchains and acceptance scenarios. Use Python 3.11 or newer for the
+repository's Python checks; no third-party Python packages are required.
 
 ## Documentation and source checks
 

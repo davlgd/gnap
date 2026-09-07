@@ -9,7 +9,11 @@ import json
 from pathlib import Path
 import re
 import sys
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    sys.exit("Package asset checks require Python 3.11 or newer.")
 
 ROOT = Path(__file__).resolve().parents[1]
 

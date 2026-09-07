@@ -14,7 +14,7 @@ permanent in its [publishing guide](https://doc.rust-lang.org/cargo/reference/pu
 
 Use a clean, reviewed revision with passing CI. The packaging workflow below
 has been exercised with Cargo 1.98; this release-tooling version is separate from
-the SDK's declared Rust 1.85 minimum.
+the SDK's declared Rust 1.85 minimum. The asset check requires Python 3.11 or newer.
 
 ```sh
 python3 -B tools/check_package_assets.py
