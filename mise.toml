@@ -1,0 +1,10 @@
+[tasks."publish:dry-run"]
+description = "Verify workspace publication without uploading crates"
+dir = "{{ config_root }}"
+run = "cargo publish --workspace --registry crates-io --locked --dry-run"
+
+[tasks.publish]
+description = "Publish the SDK workspace to crates.io (maintainer only)"
+dir = "{{ config_root }}"
+confirm = { message = "Publish all SDK workspace crates to crates.io? Uploaded versions cannot be replaced.", default = "no" }
+run = "cargo publish --workspace --registry crates-io --locked"
