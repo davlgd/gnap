@@ -1,13 +1,15 @@
 [package]
 name = "gnap-subject"
 version = "0.1.0"
+keywords = ["gnap","identity","jwt","authentication"]
+categories = ["authentication", "cryptography"]
 description = "Signed subject assertions for GNAP"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 readme = "README.md"
+documentation = "https://docs.rs/gnap-subject"
 
 [dependencies]
 gnap-crypto = { workspace = true }

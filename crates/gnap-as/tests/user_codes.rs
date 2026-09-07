@@ -21,8 +21,8 @@ mod storage_tests;
 
 const ENDPOINT: &str = "https://as.example/gnap";
 const ENTRY: &str = "https://as.example/code";
-const KEY: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
-const PUBLIC: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.spki.pem");
+const KEY: &str = include_str!("fixtures/rfc9421-b12.pkcs1.pem");
+const PUBLIC: &str = include_str!("fixtures/rfc9421-b12.spki.pem");
 
 struct Consent;
 impl Policy for Consent {

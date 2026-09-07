@@ -136,20 +136,36 @@ class BiscuitSmokeTests(unittest.TestCase):
         self.assertFalse(scenario.sessions)
 
     def test_expired_observation_windows_are_inconclusive(self):
-        with patch.object(smoke.time, "monotonic", return_value=100):
-            with self.assertRaises(smoke.Inconclusive):
-                smoke.Scenario.unexpired_descendant(0)
-        scenario = self.scenario()
-        with patch.object(smoke.time, "monotonic", side_effect=[scenario.started, scenario.started + 900]), \
-                patch.object(smoke, "exchange", return_value=(200, {}, {})) as delayed:
-            with self.assertRaises(smoke.Inconclusive):
-                scenario.call(object(), AS, "/health")
-            delayed.assert_called_once()
-        with patch.object(smoke.time, "monotonic", return_value=scenario.started + 900), \
-                patch.object(smoke, "exchange") as network:
-            with self.assertRaises(smoke.Inconclusive):
-                scenario.call(object(), AS, "/health")
-            network.assert_not_called()
+        # Fix the origin as well as observations: (started + 900) - started
+        # can round below 900 when started comes from the runner's real clock.
+        with patch.object(smoke.time, "monotonic", return_value=100.0):
+            scenario = self.scenario()
+        for extra in (0.0, 0.25):
+            with self.subTest(extra=extra):
+                with patch.object(smoke.time, "monotonic", return_value=200.0 + extra):
+                    with self.assertRaises(smoke.Inconclusive):
+                        smoke.Scenario.unexpired_descendant(100.0)
+                with patch.object(smoke.time, "monotonic", side_effect=[100.0, 1000.0 + extra]), \
+                        patch.object(smoke, "exchange", return_value=(200, {}, {})) as delayed:
+                    with self.assertRaises(smoke.Inconclusive):
+                        scenario.call(object(), AS, "/health")
+                    delayed.assert_called_once()
+                with patch.object(smoke.time, "monotonic", return_value=1000.0 + extra), \
+                        patch.object(smoke, "exchange") as network:
+                    with self.assertRaises(smoke.Inconclusive):
+                        scenario.call(object(), AS, "/health")
+                    network.assert_not_called()
+
+    def test_observations_just_before_expiry_are_allowed(self):
+        with patch.object(smoke.time, "monotonic", return_value=100.0):
+            scenario = self.scenario()
+        with patch.object(smoke.time, "monotonic", return_value=199.75):
+            smoke.Scenario.unexpired_descendant(100.0)
+        response = (200, {}, {})
+        with patch.object(smoke.time, "monotonic", return_value=999.75), \
+                patch.object(smoke, "exchange", return_value=response) as network:
+            self.assertEqual(scenario.call(object(), AS, "/health"), response)
+            network.assert_called_once()
 
     def test_missing_or_ambiguous_cookie_is_refused(self):
         self.assertTrue(smoke.session_cookie(headers(True), True))

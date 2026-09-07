@@ -6,7 +6,7 @@ use gnap_crypto::hash::{
 };
 use serde_json::Value;
 
-const CORPUS: &str = include_str!("../../../vectors/interaction-hash.json");
+const CORPUS: &str = include_str!("fixtures/interaction-hash.json");
 
 /// GNAP-9635-§4.2.3-M01 — the AS always supplies this hash, the client validates it.
 /// GNAP-9635-§4.2-M06 — the hash combines both nonces and the reference.

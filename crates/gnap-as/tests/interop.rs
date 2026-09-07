@@ -22,8 +22,8 @@ use gnap_types::message::GrantRequest;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-const RSA_PKCS1: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
-const RSA_SPKI: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.spki.pem");
+const RSA_PKCS1: &str = include_str!("fixtures/rfc9421-b12.pkcs1.pem");
+const RSA_SPKI: &str = include_str!("fixtures/rfc9421-b12.spki.pem");
 const GRANT: &str = "https://as.example/gnap";
 const CONTINUE: &str = "https://as.example/continue";
 const CLIENT_NONCE: &str = "VJLO6A4CATR0KRO";

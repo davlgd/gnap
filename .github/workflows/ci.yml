@@ -68,10 +68,12 @@ jobs:
         run: |
           python3 -B -m unittest discover -s tools/tests -v
           python3 tools/check_quotes.py
-      - name: The README still describes the code
-        # The transcript is the example's real output, and the sections listed
-        # as unimplemented are the ones actually excluded.
+      - name: The published walkthrough matches the example
+        # Keep the narrated guide checked against a locked execution; support
+        # claims live in the public matrix, not an ignored local perimeter.
         run: python3 tools/check_readme.py
+      - name: Crate documentation and embedded assets are self-contained
+        run: python3 -B tools/check_package_assets.py
       - name: Normative source inventory and evidence accounting
         run: |
           python3 -B tools/conformance_ledger.py check

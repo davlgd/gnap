@@ -7,7 +7,7 @@ use gnap_subject::{issue, verify, AssertionError, Expectations, Issuance, MAX_AS
 use gnap_types::user::Assertion;
 use serde_json::{json, Value};
 
-const PUBLIC_TEST_KEY: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
+const PUBLIC_TEST_KEY: &str = include_str!("fixtures/rfc9421-b12.pkcs1.pem");
 
 fn signer() -> Ps256Signer {
     Ps256Signer::from_pkcs1_pem(PUBLIC_TEST_KEY, "assertion-key").unwrap()
@@ -79,7 +79,7 @@ fn issuance_verification_and_redacted_identity_agree() {
 
 #[test]
 fn pem_keys_require_an_explicit_identifier_when_the_token_has_one() {
-    let pem = include_str!("../../gnap-crypto/tests/rfc9421-b12.spki.pem");
+    let pem = include_str!("fixtures/rfc9421-b12.spki.pem");
     let key = gnap_crypto::Ps256Verifier::from_public_key_pem(pem).unwrap();
     let assertion = issue(&signer(), &input()).unwrap();
     assert_eq!(

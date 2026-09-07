@@ -98,15 +98,16 @@ finding now states explicitly when the AS declares that feature unsupported.
 This was rechecked over the real network after rebuilding, without changing
 the assertions or claiming that any rotation was executed.
 
-## Next increments, after this bounded prototype
+## Authenticated scenarios and third-party targets
 
-Add a complete synthetic client/AS/RS scenario with consent, token binding,
-rotation and revocation before adding an unauthenticated arbitrary-target probe.
-For third-party self-service probes, add target ownership challenges, immutable
+The [authenticated workbench scenario](../../docs/authenticated-workbench.md)
+now exercises consent, token binding, resource access, rotation and revocation
+against operator-approved AS/RS pairs with a separately configured client key.
+It does not turn an imported target into an authorized network destination.
+Third-party self-service probes would additionally need target ownership challenges, immutable
 operation plans, distributed quotas, audit records without secrets, a reviewed
-egress policy, and tightly scoped synthetic credentials. Authenticated RFC 9767
-behavior now has a real HTTP consumer in the delegation demo, but the workbench
-does not execute that authenticated scenario against imported targets.
+egress policy, and tightly scoped synthetic credentials. Those controls are not
+supplied by the approved-pair scenario.
 
 ## RFC 9767 imported-message increment
 

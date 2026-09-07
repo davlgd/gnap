@@ -72,11 +72,8 @@ impl KeyResolver for Keys {
     }
 }
 fn signer() -> Ps256Signer {
-    Ps256Signer::from_pkcs1_pem(
-        include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem"),
-        "client-key",
-    )
-    .unwrap()
+    Ps256Signer::from_pkcs1_pem(include_str!("fixtures/rfc9421-b12.pkcs1.pem"), "client-key")
+        .unwrap()
 }
 
 fn server<P: Policy>(policy: P) -> AuthorizationServer<P, Keys, Faults, OsNonces> {

@@ -1,6 +1,7 @@
 /target
 /rfc/
 /requirements/
+/.local/
 /PLAN.md
 /spikes/
 /legacy/
