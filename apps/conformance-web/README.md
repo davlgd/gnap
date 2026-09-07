@@ -6,6 +6,11 @@ an operator-approved AS, an OPTIONS discovery request to that same AS endpoint,
 or a credential-free GET to an operator-declared protected RS endpoint. It does
 **not** certify AS, RS or client conformance.
 
+Try the [hosted workbench](https://gnap-conformance.cleverapps.io), or use
+[Run and test](#run-and-test) to start your own instance. The
+[documentation index](../../docs/README.md) links integration and verification
+guides. Submit only synthetic test messages, never production credentials.
+
 The opt-in [authenticated lifecycle scenario](../../docs/authenticated-workbench.md)
 adds a separate client key, manual owner consent and actual protected-resource,
 replay, rotation and revocation checks. It uses only operator-approved AS/RS

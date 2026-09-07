@@ -31,11 +31,8 @@ const CONTINUE: &str = "https://as.example/continue";
 const RESOURCE: &str = "https://rs.example/files";
 
 fn signer() -> Ps256Signer {
-    Ps256Signer::from_pkcs1_pem(
-        include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem"),
-        "client-key",
-    )
-    .unwrap()
+    Ps256Signer::from_pkcs1_pem(include_str!("fixtures/rfc9421-b12.pkcs1.pem"), "client-key")
+        .unwrap()
 }
 struct Keys;
 impl KeyResolver for Keys {

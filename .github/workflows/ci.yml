@@ -59,6 +59,10 @@ jobs:
         with:
           # Published receipts verify source hashes against their earlier commit.
           fetch-depth: 0
+      - name: Install Python for the verification tools
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
       - uses: Swatinem/rust-cache@v2
       - name: Quotations are literal
         # The code quotes the RFCs to justify what it does. A drifted quotation
@@ -68,10 +72,12 @@ jobs:
         run: |
           python3 -B -m unittest discover -s tools/tests -v
           python3 tools/check_quotes.py
-      - name: The README still describes the code
-        # The transcript is the example's real output, and the sections listed
-        # as unimplemented are the ones actually excluded.
+      - name: The published walkthrough matches the example
+        # Keep the narrated guide checked against a locked execution; support
+        # claims live in the public matrix, not an ignored local perimeter.
         run: python3 tools/check_readme.py
+      - name: Crate documentation and embedded assets are self-contained
+        run: python3 -B tools/check_package_assets.py
       - name: Normative source inventory and evidence accounting
         run: |
           python3 -B tools/conformance_ledger.py check

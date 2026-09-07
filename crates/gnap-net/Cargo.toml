@@ -1,13 +1,15 @@
 [package]
 name = "gnap-net"
 version = "0.1.0"
+keywords = ["gnap","network","ip-address","security"]
+categories = ["authentication", "network-programming"]
 description = "Conservative network address policies for GNAP example applications"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 readme = "README.md"
+documentation = "https://docs.rs/gnap-net"
 
 [lints]
 workspace = true

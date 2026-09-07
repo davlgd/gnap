@@ -1,12 +1,15 @@
 [package]
 name = "gnap-biscuit"
 version = "0.1.0"
+keywords = ["gnap","biscuit","authorization","cryptography"]
+categories = ["authentication", "cryptography"]
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "A bounded, proof-bound Biscuit profile for GNAP file access"
 readme = "README.md"
+documentation = "https://docs.rs/gnap-biscuit"
 
 [dependencies]
 biscuit-auth = { version = "=6.0.0", default-features = false, features = ["regex-full", "datalog-macro"] }

@@ -8,8 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
-readme.workspace = true
+readme = "README.md"
 documentation = "https://docs.rs/gnap-as"
 
 [dependencies]

@@ -33,11 +33,8 @@ const ENDPOINT: &str = "https://as.example/introspect";
 fn client() -> &'static Ps256Signer {
     static KEY: OnceLock<Ps256Signer> = OnceLock::new();
     KEY.get_or_init(|| {
-        Ps256Signer::from_pkcs1_pem(
-            include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem"),
-            "shared-kid",
-        )
-        .unwrap()
+        Ps256Signer::from_pkcs1_pem(include_str!("fixtures/rfc9421-b12.pkcs1.pem"), "shared-kid")
+            .unwrap()
     })
 }
 fn resource_server() -> &'static Ps256Signer {

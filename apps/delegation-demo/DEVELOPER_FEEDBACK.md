@@ -51,9 +51,10 @@ twenty-minute session cleanup; the SDK does not cancel remote grants on timeout.
 ## Scope and next consumer experiments
 
 The real resource read, key proof and retired-token rejection are implemented,
-but all components run under one application operator and one ephemeral client
-key. Next useful experiments are a separately operated RS, independently built
-client, real authenticated resource-owner consent, bounded durable persistence,
+but its internal client sessions share one ephemeral key. The separate workbench
+can use its own explicitly approved key; both applications remain under the same
+operator. Further experiments include a separately operated RS, an independently
+implemented client, real authenticated resource-owner consent, bounded durable persistence,
 and network fault/retry tests. A second team should implement those from public
 documentation without copying this application's internals.
 

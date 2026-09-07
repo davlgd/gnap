@@ -28,7 +28,7 @@ const GRANT_ENDPOINT: &str = "https://as.example/gnap";
 const CONTINUE_ENDPOINT: &str = "https://as.example/continue";
 
 /// The public half of the bundled test key.
-const PUBLIC_KEY: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.spki.pem");
+const PUBLIC_KEY: &str = include_str!("../tests/fixtures/rfc9421-b12.spki.pem");
 
 // ---------------------------------------------------------------------------
 // What the deployment decides. The RFC leaves all of this out of scope (§4),
@@ -125,7 +125,7 @@ fn main() {
     // The RSA key pair from RFC 9421 Appendix B.1.2. A real client keeps its
     // private key somewhere the AS never sees (§11.5).
     let signer = Ps256Signer::from_pkcs1_pem(
-        include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem"),
+        include_str!("../tests/fixtures/rfc9421-b12.pkcs1.pem"),
         "example-key",
     )
     .expect("the bundled test key should load");

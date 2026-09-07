@@ -1,89 +1,81 @@
 # Contributing
 
-Start with the [support matrix](docs/support-matrix.md). It separates the
-protocol's requirements from this project's choices and from what the code
-actually does. Examples should make a real application task possible and record
-the SDK or documentation friction they encounter.
+Contributions should make the libraries, examples or documentation easier to
+use correctly. Start with [Getting started](docs/getting-started.md), then
+consult the [support matrix](docs/support-matrix.md) for the profile you want to
+change.
 
-## Keep changes reviewable
+## Propose a focused change
 
-Use a branch for one coherent change. Explain why the change is useful, keep the
-implementation focused, and add regression tests for the failures it addresses.
-Update examples and support claims together. Do not add unused abstractions or
-hide incomplete behavior behind a successful check.
+Describe the user task, the problem and how to reproduce it. An integration
+report should include the relevant revision, a minimal example, expected and
+observed behavior, and enough context to distinguish protocol rules from
+application policy. Use synthetic data and remove credentials.
 
-Use plain language in commit messages and pull requests. A short account of the
-problem, the decision and the evidence is more useful than a catalogue of files
-or a copied test log. State meaningful limitations. Maintainer-authored commits
-use the maintainer's configured personal identity; contributors use their own.
+Keep each pull request focused. Explain why the change is useful, add regression
+tests for corrected failures, and update the affected guides and support claims.
+Do not add unused abstractions or report unsupported behavior as successful.
+The [application-driven method](docs/ecosystem-development.md) explains how
+consumer feedback informs SDK changes.
 
-The repository's Apache-2.0 license does not replace notices attached to
-third-party fixtures. Never commit deployment credentials, real user data or
-private development material. Public example keys must be identified as such.
+Write public documentation, commit subjects and pull requests in clear English.
+Use short, descriptive commit subjects and plain-language PR descriptions;
+explain the decision and useful evidence rather than listing every changed file.
+Keep commit messages to the subject line. Contributors use their own Git identity.
 
-## Maintainer-led review and merge
+## Verify your change
 
-The following workflow applies to autonomous maintainer work:
+The [CI workflow](.github/workflows/ci.yml) is the canonical command list.
+Common checks from the repository root are:
 
-1. Implement and test a bounded change, then request an adversarial review from
-   Claude. Supply the actual diff, source references, failing cases and known
-   limits. Reconcile findings explicitly; a timeout is not agreement.
-2. After consensus, open a pull request assigned to **davlgd** and request
-   **Copilot code review**. Request a reviewer, not the Copilot coding agent.
-3. Read every finding. Fix valid issues and reply with the correction and its
-   evidence. Explain any disagreement with a reproducible example or source;
-   do not change correct behavior just to silence a reviewer. Resolving a thread
-   alone is not evidence that the finding has been addressed.
-4. Re-run relevant checks, obtain renewed Claude review for material changes,
-   push the corrections and explicitly re-request Copilot review. Repeat until
-   an actual completed review of the latest head has no outstanding findings.
-   Silence, a failed review job, an empty reviewer list or a review of an older
-   commit does not satisfy this gate. If review is unavailable or a disagreement
-   remains unresolved, leave the PR open and notify the maintainer.
-5. Merge only after CI passes on the current PR head, the latest applicable
-   Claude consensus still holds, and Copilot has completed a clean review of
-   that head. Respect any additional repository protections and do not bypass
-   them. Recheck the head SHA immediately before merging. A material change
-   after review starts the review cycle again.
-
-GitHub may represent a completed Copilot review as `COMMENTED` rather than
-`APPROVED`, depending on settings. Inspect its actual findings and completion;
-do not fabricate an approval. Replies document the resolution for people, but
-are not a substitute for requesting a new review: Copilot does not converse in
-those threads. See [GitHub's code review documentation](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review).
-
-With a recent GitHub CLI, the explicit request is:
-
-```console
-gh pr edit <number> --repo davlgd/gnap --add-reviewer '@copilot'
+```sh
+cargo test --workspace --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo doc --workspace --no-deps --locked
+python3 -B -m unittest discover -s tools/tests -v
+python3 -B tools/check_readme.py
+python3 -B tools/check_quotes.py
+python3 -B tools/conformance_ledger.py check
 ```
 
-## Verification
+The standalone applications need their own test commands and Rust toolchain;
+see their READMEs. Network-bound changes need successful and refused requests,
+not only unit tests. Report local, CI and hosted results separately.
+[Verification tooling](docs/verification.md) explains what each check covers.
+The [release guide](docs/releasing.md) covers package preparation; publication
+requires a separate maintainer decision.
 
-Run the checks relevant to the change. The [CI workflow](.github/workflows/ci.yml)
-is the canonical command list: workspace tests, formatting, strict clippy,
-documentation, the minimum supported Rust build, registry reproduction and
-standalone application acceptance. Report local, GitHub-runner and deployed
-checks separately. Do not present self-interop or shared-parser diagnostics as
-an independent conformance audit.
+For generated data, change the generator or reviewed source input and reproduce
+the artifact before checking for upstream drift. Do not edit generated output
+to hide a mismatch. Protocol tests should cite the RFC requirement they exercise.
 
-When changing generated data, fix the generator and reproduce the artifact from
-the vendored input before checking for upstream changes. When changing a network
-boundary, exercise rejection paths as well as the successful application flow.
+## Document for the reader
 
-## Hosted test applications
+Keep the root README focused on what a user can do and where to begin.
+Put integration instructions in task-oriented guides, capability inventory in
+the support matrix, and dated observations in evidence records. Link to the
+authoritative description instead of maintaining competing status summaries.
 
-Use Clever Tools and only the maintainer-designated test account for this
-project. Every application needs a dedicated **M build instance**; runtime size
-is a separate choice. Use synthetic data and bounded, disposable state.
+Keep useful integration feedback and reproducible evidence public. Personal
+plans, draft reviews, account identifiers and temporary operational notes belong
+in ignored local files, not the public documentation. Never commit private keys,
+deployment credentials or real user data. Clearly identify public test fixtures
+and preserve their third-party notices.
 
-Choose meaningful, available `cleverapps.io` subdomains and retain existing
-working links during migrations. A domain change must account for canonical
-origins, callback URIs, cookies, request signatures and test target allowlists;
-an added DNS name alone does not establish a working application. Never claim
-an existing domain or change an unrelated application.
+## Review and publication
 
-Verify the account, actual deployed revision, build flavor, HTTPS behavior and
-application scenario after a deployment. Keep provider identifiers and account
-linkage in ignored local configuration. Deploy reviewed code, not an unrelated
-working branch, and keep a known-good revision available for recovery.
+Open a pull request with the relevant checks and meaningful limitations.
+Address review findings with a correction or reproducible evidence for a
+disagreement. Maintainers merge reviewed changes after the current revision's
+CI checks pass; an older review or a resolved thread does not verify new code.
+Maintainer-led work includes adversarial and automated code review before a
+regular merge commit. Personal review coordination stays in local maintainer notes.
+
+A contribution does not authorize deployments or changes to external services.
+Hosted tests require explicit permission for the target and their side effects.
+The [application guides](docs/README.md#applications) document the public
+sandboxes and their safety boundaries.
+
+The repository is licensed under [Apache-2.0](LICENSE); third-party fixture
+notices remain applicable.

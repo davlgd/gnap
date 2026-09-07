@@ -126,7 +126,7 @@ mod tests {
     fn grant_rotation_and_revocation_resolve_the_presented_jwk() {
         // Public test material from RFC 9421 Appendix B.1.2.
         let signer = Ps256Signer::from_pkcs1_pem(
-            include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem"),
+            include_str!("../tests/fixtures/rfc9421-b12.pkcs1.pem"),
             "test-client",
         )
         .unwrap();
@@ -138,7 +138,7 @@ mod tests {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
         let signer = Ps256Signer::from_pkcs1_pem(
-            include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem"),
+            include_str!("../tests/fixtures/rfc9421-b12.pkcs1.pem"),
             "test-client",
         )
         .unwrap();

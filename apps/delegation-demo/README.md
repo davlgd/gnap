@@ -11,6 +11,11 @@ with new consent, or revoke the entire grant through its continuation endpoint.
 This is a public teaching sandbox, not an authenticated document service or a
 claim of full GNAP conformance. No personal data or private key fixtures are used.
 
+Try the [hosted lab](https://gnap-delegation.cleverapps.io), or start with
+[Run](#run) for local setup. The [documentation index](../../docs/README.md)
+links the SDK guides for multiple tokens, resource servers, push callbacks and
+identity assertions. Deployment and protocol details follow the usage examples.
+
 ## HTTP push finish
 
 **Start with a server-to-client callback** opens consent in the browser, then

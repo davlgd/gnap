@@ -1,0 +1,305 @@
+{
+  "$comment": "GNAP (de)serialization vector corpus. Each entry cites the requirement it attests, identified in the project's requirements base. Consumed by crates/gnap-types/tests/vectors.rs.",
+  "vectors": [
+    {
+      "id": "deser-accept-001",
+      "type": "GrantRequest",
+      "expect": "accept",
+      "description": "Client by value, JWK key, named proof",
+      "requirements": [
+        "GNAP-9635-§2-R03"
+      ],
+      "input": {
+        "client": {
+          "key": {
+            "proof": "httpsig",
+            "jwk": {
+              "kty": "RSA",
+              "alg": "PS256",
+              "kid": "k1",
+              "e": "AQAB",
+              "n": "abc"
+            }
+          }
+        },
+        "access_token": {
+          "access": [
+            "dolphin-metadata"
+          ]
+        }
+      }
+    },
+    {
+      "id": "deser-accept-002",
+      "type": "GrantRequest",
+      "expect": "accept",
+      "description": "Client by instance reference (§2.3.1)",
+      "requirements": [
+        "GNAP-9635-§2-R03"
+      ],
+      "input": {
+        "client": "client-541-ab",
+        "access_token": {
+          "access": [
+            "read"
+          ]
+        }
+      }
+    },
+    {
+      "id": "deser-accept-003",
+      "type": "GrantRequest",
+      "expect": "accept",
+      "description": "Proof in detailed form, parameters preserved (§7.3)",
+      "requirements": [
+        "GNAP-9635-§7.1-M03"
+      ],
+      "input": {
+        "client": {
+          "key": {
+            "proof": {
+              "method": "httpsig",
+              "alg": "ecdsa-p384-sha384",
+              "content-digest-alg": "sha-512"
+            },
+            "cert": "MIIC..."
+          }
+        }
+      }
+    },
+    {
+      "id": "deser-accept-004",
+      "type": "GrantRequest",
+      "expect": "accept",
+      "description": "Rights mixing references and objects in one array (§8.1)",
+      "requirements": [],
+      "input": {
+        "client": "c",
+        "access_token": {
+          "access": [
+            "read",
+            {
+              "type": "photo-api",
+              "actions": [
+                "read",
+                "write"
+              ],
+              "geolocation": [
+                {
+                  "lat": -32.364
+                }
+              ]
+            },
+            "dolphin-metadata"
+          ]
+        }
+      }
+    },
+    {
+      "id": "deser-accept-005",
+      "type": "GrantResponse",
+      "expect": "accept",
+      "description": "Error response in string form, equivalent to the object (§3.6)",
+      "requirements": [],
+      "input": {
+        "error": "user_denied"
+      }
+    },
+    {
+      "id": "deser-accept-006",
+      "type": "GrantResponse",
+      "expect": "accept",
+      "description": "Unregistered error code: preserved, not rejected (Appendix D)",
+      "requirements": [],
+      "input": {
+        "error": {
+          "code": "x_erreur_maison",
+          "description": "extension"
+        }
+      }
+    },
+    {
+      "id": "deser-reject-001",
+      "type": "GrantRequest",
+      "expect": "reject",
+      "description": "Multiple tokens with no label",
+      "requirements": [
+        "GNAP-9635-§2.1.2-M02"
+      ],
+      "expect_error_contains": [
+        "label",
+        "invalid_request",
+        "§2.1.2"
+      ],
+      "input": {
+        "client": "c",
+        "access_token": [
+          {
+            "access": [
+              "a"
+            ]
+          },
+          {
+            "access": [
+              "b"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "deser-reject-002",
+      "type": "GrantRequest",
+      "expect": "reject",
+      "description": "Duplicate labels in a multiple request",
+      "requirements": [
+        "GNAP-9635-§2.1.2-M02"
+      ],
+      "expect_error_contains": [
+        "duplicate",
+        "invalid_request"
+      ],
+      "input": {
+        "client": "c",
+        "access_token": [
+          {
+            "label": "t",
+            "access": [
+              "a"
+            ]
+          },
+          {
+            "label": "t",
+            "access": [
+              "b"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "deser-reject-003",
+      "type": "GrantRequest",
+      "expect": "reject",
+      "description": "Flag repeated in the request",
+      "requirements": [
+        "GNAP-9635-§2.1.1-M07"
+      ],
+      "expect_error_contains": [
+        "bearer",
+        "invalid_flag",
+        "§2.1.1"
+      ],
+      "input": {
+        "client": "c",
+        "access_token": {
+          "access": [
+            "a"
+          ],
+          "flags": [
+            "bearer",
+            "bearer"
+          ]
+        }
+      }
+    },
+    {
+      "id": "deser-reject-004",
+      "type": "GrantResponse",
+      "expect": "reject",
+      "description": "Token value outside the token68 set",
+      "requirements": [
+        "GNAP-9635-§3.2.1-M01"
+      ],
+      "expect_error_contains": [
+        "token68",
+        "§3.2.1"
+      ],
+      "input": {
+        "access_token": {
+          "value": "abc def",
+          "access": [
+            "a"
+          ]
+        }
+      }
+    },
+    {
+      "id": "deser-reject-005",
+      "type": "GrantRequest",
+      "expect": "reject",
+      "description": "Empty client reference",
+      "requirements": [],
+      "expect_error_contains": [
+        "client",
+        "empty"
+      ],
+      "input": {
+        "client": ""
+      }
+    },
+    {
+      "id": "deser-reject-006",
+      "type": "GrantRequest",
+      "expect": "reject",
+      "description": "Nested error: the diagnostic must name proof, not the client",
+      "requirements": [],
+      "expect_error_contains": [
+        "method"
+      ],
+      "input": {
+        "client": {
+          "key": {
+            "proof": 42
+          }
+        }
+      }
+    },
+    {
+      "id": "deser-reject-007",
+      "type": "GrantRequest",
+      "expect": "reject",
+      "description": "Structured right with no type field (§8)",
+      "requirements": [],
+      "expect_error_contains": [
+        "type",
+        "§8"
+      ],
+      "input": {
+        "client": "c",
+        "access_token": {
+          "access": [
+            {
+              "actions": [
+                "read"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deser-reject-008",
+      "type": "GrantResponse",
+      "expect": "reject",
+      "description": "Multiple tokens in the response, with no label",
+      "requirements": [
+        "GNAP-9635-§3.2.2-MN03"
+      ],
+      "expect_error_contains": [
+        "label",
+        "§3.2.2"
+      ],
+      "input": {
+        "access_token": [
+          {
+            "value": "AAA"
+          },
+          {
+            "value": "BBB"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -11,11 +11,8 @@ const NOW: u64 = 1_700_000_000;
 const URL: &str = "https://rs.example/files/a%2Fb?mode=read&x=%41";
 
 fn signer() -> Ps256Signer {
-    Ps256Signer::from_pkcs1_pem(
-        include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem"),
-        "client-key",
-    )
-    .unwrap()
+    Ps256Signer::from_pkcs1_pem(include_str!("fixtures/rfc9421-b12.pkcs1.pem"), "client-key")
+        .unwrap()
 }
 
 fn verifies(request: &HttpRequest, seen: &RefCell<HashSet<String>>) -> bool {

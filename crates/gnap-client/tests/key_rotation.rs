@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-const RSA_PKCS1: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
+const RSA_PKCS1: &str = include_str!("fixtures/rfc9421-b12.pkcs1.pem");
 const ENDPOINT: &str = "https://server.example.com/gnap";
 const MANAGE_URI: &str = "https://as.example/token/PRY5NM33O";
 const MANAGE_TOKEN: &str = "B8CDFONP21-4TB8N6.BW7ONM";

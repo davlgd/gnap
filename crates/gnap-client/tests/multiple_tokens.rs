@@ -10,7 +10,7 @@ use gnap_crypto::ps256::Ps256Signer;
 use gnap_types::message::{ContinueRequest, GrantRequest};
 use std::cell::RefCell;
 
-const RSA_PKCS1: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
+const RSA_PKCS1: &str = include_str!("fixtures/rfc9421-b12.pkcs1.pem");
 const ENDPOINT: &str = "https://server.example.com/gnap";
 
 /// An AS that replies from a script, and records what it was sent.

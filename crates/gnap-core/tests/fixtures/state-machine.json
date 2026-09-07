@@ -1,0 +1,241 @@
+{
+  "$comment": "The GNAP grant state machine, derived from RFC 9635 §1.5 and the normative requirements of §3, §4 and §5. This file is the specification the implementation is written against, not a description of it: the scenarios in crates/gnap-core/tests are generated from it. Every rule cites the requirement it comes from.",
+  "reference": "RFC 9635 §1.5, Figure 2",
+
+  "states": [
+    {
+      "name": "processing",
+      "description": "The AS is deciding what the request needs. A grant request enters here on creation, on modification, and when interaction completes. It must leave this state before any response is returned.",
+      "initial": true,
+      "terminal": false
+    },
+    {
+      "name": "pending",
+      "description": "Approval from an RO, or interaction with the end user, is required. No token and no subject information may be released while here.",
+      "initial": false,
+      "terminal": false
+    },
+    {
+      "name": "approved",
+      "description": "The request has been approved and no further interaction is required. Tokens and subject information may be issued.",
+      "initial": false,
+      "terminal": false
+    },
+    {
+      "name": "finalized",
+      "description": "The request is dead and cannot be revived. Entered on revocation, on denial, or when no further processing is possible.",
+      "initial": false,
+      "terminal": true
+    }
+  ],
+
+  "transitions": [
+    {
+      "id": "T01", "from": null, "to": "processing",
+      "trigger": "grant_request",
+      "description": "A request to the grant endpoint creates a grant request in the processing state.",
+      "requirements": []
+    },
+    {
+      "id": "T02", "from": "processing", "to": "pending",
+      "trigger": "as_requires_interaction",
+      "description": "Approval is required: the AS returns a continuation response and any interaction responses.",
+      "requirements": ["GNAP-9635-§3.1-R14"]
+    },
+    {
+      "id": "T03", "from": "processing", "to": "approved",
+      "trigger": "as_needs_no_interaction",
+      "description": "No approval is required, or access has already been fulfilled.",
+      "requirements": []
+    },
+    {
+      "id": "T04", "from": "processing", "to": "finalized",
+      "trigger": "as_cannot_proceed",
+      "description": "A timeout or an unrecoverable error ends the request.",
+      "requirements": []
+    },
+    {
+      "id": "T05", "from": "pending", "to": "pending",
+      "trigger": "continue_poll",
+      "description": "Polling while approval is still outstanding. The response carries a fresh continuation.",
+      "requirements": ["GNAP-9635-§5-M11"]
+    },
+    {
+      "id": "T06", "from": "pending", "to": "processing",
+      "trigger": "continue_with_interact_ref",
+      "description": "Interaction has finished, whether the RO approved or denied: the AS re-evaluates the full context.",
+      "requirements": []
+    },
+    {
+      "id": "T07", "from": "pending", "to": "processing",
+      "trigger": "out_of_band_ro_decision",
+      "description": "Information reached the AS outside the protocol, such as an asynchronous RO approval.",
+      "requirements": []
+    },
+    {
+      "id": "T08", "from": "pending", "to": "finalized",
+      "trigger": "revoke",
+      "description": "The client revokes the request, or no interaction method remains usable.",
+      "requirements": []
+    },
+    {
+      "id": "T09", "from": "approved", "to": "approved",
+      "trigger": "continue_poll",
+      "description": "Polling while approved may issue new access tokens.",
+      "requirements": []
+    },
+    {
+      "id": "T10", "from": "approved", "to": "processing",
+      "trigger": "modify",
+      "description": "A modification request sends the grant back for re-evaluation in its new context.",
+      "requirements": ["GNAP-9635-§5.3-M02"]
+    },
+    {
+      "id": "T11", "from": "pending", "to": "processing",
+      "trigger": "modify",
+      "description": "A modification is also allowed while pending.",
+      "requirements": ["GNAP-9635-§5.3-M01", "GNAP-9635-§5.3-M02"]
+    },
+    {
+      "id": "T12", "from": "approved", "to": "finalized",
+      "trigger": "revoke",
+      "description": "The client revokes, or the AS decides no further token or update will be accepted.",
+      "requirements": []
+    }
+  ],
+
+  "response_constraints": [
+    {
+      "id": "R01", "state": "approved", "field": "access_token", "rule": "allowed",
+      "text": "The grant request MUST be in the approved state to include this field in the response.",
+      "requirements": ["GNAP-9635-§3.2-M01"]
+    },
+    {
+      "id": "R02", "state": "approved", "field": "subject", "rule": "allowed",
+      "text": "The grant request MUST be in the approved state to return this field in the response.",
+      "requirements": ["GNAP-9635-§3.4-M17"]
+    },
+    {
+      "id": "R03", "state": "pending", "field": "interact", "rule": "allowed",
+      "text": "The grant request MUST be in the pending state to include this field in the response.",
+      "requirements": ["GNAP-9635-§3.3-M11"]
+    },
+    {
+      "id": "R04", "state": "pending", "field": "access_token", "rule": "forbidden",
+      "text": "In the pending state the response MUST NOT contain access tokens or subject information.",
+      "requirements": ["GNAP-9635-§5.1-MN07", "GNAP-9635-§5.2-MN05"]
+    },
+    {
+      "id": "R05", "state": "pending", "field": "subject", "rule": "forbidden",
+      "text": "In the pending state the response MUST NOT contain access tokens or subject information.",
+      "requirements": ["GNAP-9635-§5.1-MN07", "GNAP-9635-§5.2-MN05"]
+    },
+    {
+      "id": "R06", "state": "pending", "field": "continue", "rule": "required",
+      "text": "A grant request in the pending state is always associated with a continuation access token.",
+      "requirements": ["GNAP-9635-§3.1-R14"]
+    },
+    {
+      "id": "R07", "state": "finalized", "field": "access_token", "rule": "forbidden",
+      "text": "Once finalized, no new access tokens can be issued and no subject information returned.",
+      "requirements": []
+    },
+    {
+      "id": "R08", "state": "finalized", "field": "subject", "rule": "forbidden",
+      "text": "Once finalized, no new access tokens can be issued and no subject information returned.",
+      "requirements": []
+    },
+    {
+      "id": "R09", "state": "finalized", "field": "interact", "rule": "forbidden",
+      "text": "Once finalized, no interactions can take place.",
+      "requirements": []
+    }
+  ],
+
+  "guards": [
+    {
+      "id": "G01",
+      "trigger": "continue_with_interact_ref",
+      "condition": "state != pending",
+      "outcome": { "error": "too_many_attempts", "then": "finalized" },
+      "text": "If the AS detects a client submitting an interaction reference when the request is not pending, it MUST return too_many_attempts and SHOULD finalize the request.",
+      "requirements": ["GNAP-9635-§5.1-M03"]
+    },
+    {
+      "id": "G02",
+      "trigger": "modify",
+      "condition": "state not in (approved, pending)",
+      "outcome": { "error": "invalid_continuation" },
+      "text": "A grant request associated with a modification request MUST be in the approved or pending state.",
+      "requirements": ["GNAP-9635-§5.3-M01"]
+    },
+    {
+      "id": "G03",
+      "trigger": "any_continuation",
+      "condition": "state == finalized",
+      "outcome": { "error": "invalid_continuation" },
+      "text": "Once finalized, the grant request MUST NOT be moved to any other state.",
+      "requirements": ["GNAP-9635-§5.4-MN03"]
+    },
+    {
+      "id": "G04",
+      "trigger": "any_continuation",
+      "condition": "wait period not elapsed",
+      "outcome": { "error": "too_fast" },
+      "text": "If the client does not respect the given wait period, the AS MUST return the too_fast error.",
+      "requirements": ["GNAP-9635-§5-M09"]
+    },
+    {
+      "id": "G05",
+      "trigger": "any_continuation",
+      "condition": "no continuation was offered in the previous response",
+      "outcome": { "error": "invalid_continuation" },
+      "text": "If the AS does not return a new continuation response, the client MUST NOT make an additional continuation request; if it does, the AS MUST return invalid_continuation.",
+      "requirements": ["GNAP-9635-§5-MN13"]
+    },
+    {
+      "id": "G06",
+      "trigger": "continue_with_interact_ref",
+      "condition": "interaction reference already consumed",
+      "outcome": { "error": "invalid_interaction" },
+      "text": "The interaction reference MUST be one-time-use, to prevent interception and replay.",
+      "requirements": ["GNAP-9635-§4.2-M05"]
+    },
+    {
+      "id": "G07",
+      "trigger": "interaction_start",
+      "condition": "another start mode already completed",
+      "outcome": { "error": "invalid_interaction" },
+      "text": "If one interaction start mode has completed, the AS MUST reject attempts to use the others.",
+      "requirements": ["GNAP-9635-§4.1-M03", "GNAP-9635-§4-M04"]
+    }
+  ],
+
+  "invariants": [
+    {
+      "id": "I01",
+      "text": "finalized is absorbing: no transition leaves it.",
+      "requirements": ["GNAP-9635-§5.4-MN03"]
+    },
+    {
+      "id": "I02",
+      "text": "No access token and no subject information is ever released while pending.",
+      "requirements": ["GNAP-9635-§5.1-MN07", "GNAP-9635-§5.2-MN05"]
+    },
+    {
+      "id": "I03",
+      "text": "An interaction reference is consumed at most once.",
+      "requirements": ["GNAP-9635-§4.2-M05"]
+    },
+    {
+      "id": "I04",
+      "text": "A response is never emitted while processing: the state machine always settles first.",
+      "requirements": []
+    },
+    {
+      "id": "I05",
+      "text": "Every reachable state is reachable from the initial state, and finalized is reachable from every state.",
+      "requirements": []
+    }
+  ]
+}

@@ -67,8 +67,10 @@ The remaining limits are deliberate and visible: one configured grant-client
 identity, synthetic shared files, fixed immediate approval, authority-wide revocation,
 bounded in-memory state. Local tests alone do not establish hosted behavior;
 the [delivery guide](../../docs/biscuit-public-delivery.md) separates those checks.
-Local attenuation
-preserves the client's key and is not RFC 9767 downstream token derivation.
+The [public delivery record](https://github.com/davlgd/gnap/pull/32#issuecomment-5562885907)
+documents HTTPS acceptance and maintenance for its identified revision.
+Local attenuation preserves the client's key and is not RFC 9767 downstream
+token derivation.
 
 The SDK's former take/restore management sequence exposed another concurrency
 problem: a failed operation could restore a record while another caller was

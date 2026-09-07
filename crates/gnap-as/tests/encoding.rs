@@ -23,8 +23,8 @@ use std::{
 };
 
 const ENDPOINT: &str = "https://as.example/gnap";
-const PRIVATE: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.pkcs1.pem");
-const PUBLIC: &str = include_str!("../../gnap-crypto/tests/rfc9421-b12.spki.pem");
+const PRIVATE: &str = include_str!("fixtures/rfc9421-b12.pkcs1.pem");
+const PUBLIC: &str = include_str!("fixtures/rfc9421-b12.spki.pem");
 
 struct ReadOnly;
 impl Policy for ReadOnly {

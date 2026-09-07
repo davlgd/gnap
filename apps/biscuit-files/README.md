@@ -6,6 +6,11 @@ server, a resource server and a browser-facing client. The AS uses the SDK's
 one locally, then prove possession of its key while presenting that exact
 descendant to the RS.
 
+Try the [hosted client](https://gnap-biscuit.cleverapps.io), or follow
+[Run locally](#run-locally) for the three-process setup. The
+[delivery guide](../../docs/biscuit-public-delivery.md) covers deployment and
+acceptance; the [documentation index](../../docs/README.md) links other SDK guides.
+
 The files are synthetic. The fixed AS policy immediately grants **read notes**
 and **write draft** for 1200 seconds, initially bound to one configured client
 key. It does not request resource-owner consent or identify a human user. The two rights remain
