@@ -1358,8 +1358,8 @@ fn the_push_finish_method_yields_a_json_callback() {
     assert_eq!(uri, "https://client.example.net/push");
 
     let callback: InteractCallback = serde_json::from_slice(&body).unwrap();
-    assert!(!callback.hash.is_empty());
-    assert!(!callback.interact_ref.is_empty());
+    assert_ne!(callback.hash, "");
+    assert_ne!(callback.interact_ref, "");
 }
 
 /// GNAP-9635-§7.3.1-M15 — "If the signer's key presented is a JWK, the keyid

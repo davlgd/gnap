@@ -1,7 +1,7 @@
 # Getting started
 
 Run commands from the repository root unless a section says otherwise.
-The SDK workspace requires Rust 1.85 or newer. The HTTP applications are separate
+The SDK workspace requires Rust 1.88 or newer. The HTTP applications are separate
 Cargo workspaces with their own lockfiles and tested toolchains documented in
 their guides. Biscuit files requires Rust 1.98 and Unix.
 

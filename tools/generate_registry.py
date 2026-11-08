@@ -100,7 +100,7 @@ def render_enum(type_name, doc, values):
     L.append("")
     L.append("    /// The on-the-wire representation.")
     L.append("    #[must_use]")
-    L.append("    pub fn as_str(&self) -> &str {")
+    L.append("    pub const fn as_str(&self) -> &str {")
     L.append("        match self {")
     for v in values:
         L.append(f'            Self::{variant(v)} => "{v}",')

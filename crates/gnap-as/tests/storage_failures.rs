@@ -110,7 +110,7 @@ fn storage_failure_never_returns_a_success_or_an_absence_error() {
     };
     let refused = server.handle(&grant(), 1_000);
     assert_eq!(refused.status, 503);
-    assert!(refused.body.is_empty());
+    assert_eq!(refused.body, Vec::<u8>::new());
     assert!(refused.has_no_store());
     server.storage().fault.set(Fault::None);
     let issued = server.handle(&grant(), 1_000);
@@ -141,7 +141,7 @@ fn storage_failure_never_returns_a_success_or_an_absence_error() {
             let before = server.storage().inner.remembered_nonces().unwrap();
             let refused = server.handle(&request, 1_001);
             assert_eq!(refused.status, 503);
-            assert!(refused.body.is_empty());
+            assert_eq!(refused.body, Vec::<u8>::new());
             assert!(refused.has_no_store());
             if fault == Fault::Read {
                 assert_eq!(
@@ -212,7 +212,7 @@ fn continuation_and_interaction_responses_require_a_committed_revision() {
             .unwrap();
             let refused = server.handle(&request, 1_010);
             assert_eq!(refused.status, 503);
-            assert!(refused.body.is_empty());
+            assert_eq!(refused.body, Vec::<u8>::new());
             assert!(refused.has_no_store());
         }
         assert!(matches!(

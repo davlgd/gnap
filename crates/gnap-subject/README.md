@@ -31,3 +31,5 @@ responsibility. `gnap-client::Session::verify_subject` derives audience and
 nonce from the actual session under the documented project convention.
 See the [profile and integration guide](https://github.com/davlgd/gnap/blob/main/docs/subject-assertions.md) for
 the release policy, context binding, limits and demonstration boundaries.
+
+Part of [gnap](https://github.com/davlgd/gnap). Rust 1.88 or newer; Apache-2.0.

@@ -212,7 +212,7 @@ fn a_collision_with_another_grant_publishes_neither_issuance_nor_rotation() {
         assert_eq!(f.server.handle(&grant(1_000), 1_000).status, 200);
         let response = f.server.handle(&grant(1_001), 1_001);
         assert_eq!(response.status, 500);
-        assert!(response.body.is_empty());
+        assert_eq!(response.body, Vec::<u8>::new());
         assert!(f.server.storage().get_token("nonce0002").is_some());
         assert!(f.server.storage().get_token("nonce0005").is_none());
     }

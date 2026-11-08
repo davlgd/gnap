@@ -9,7 +9,7 @@ exclude = ["spikes/httpsig-vectors", "spikes/serde-polymorphism"]
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/davlgd/gnap"
 

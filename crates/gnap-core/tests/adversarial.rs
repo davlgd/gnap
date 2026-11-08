@@ -3,7 +3,7 @@
 //! These exercise the MUST NOT requirements that do not need a network: a
 //! client checking an AS response, and an AS checking a client's calls.
 
-use gnap_core::{check_response, Event, Grant, State};
+use gnap_core::{check_response, Event, Grant, State, Violation};
 use gnap_types::message::GrantResponse;
 
 /// GNAP-9635-§5.1-MN07 — an AS handing out a token while the grant is pending.
@@ -28,7 +28,10 @@ fn an_as_that_issues_a_token_while_pending_is_caught() {
     );
 
     // The same response is fine once the grant is approved.
-    assert!(check_response(State::Approved, &response).is_empty());
+    assert_eq!(
+        check_response(State::Approved, &response),
+        Vec::<Violation>::new()
+    );
 }
 
 /// GNAP-9635-§3.4-M17 — subject information released outside the approved state.
@@ -69,8 +72,14 @@ fn a_response_that_is_both_approved_and_pending_is_caught() {
     .unwrap();
 
     // Whichever state the client believes it is in, one field is wrong.
-    assert!(!check_response(State::Approved, &response).is_empty());
-    assert!(!check_response(State::Pending, &response).is_empty());
+    assert_ne!(
+        check_response(State::Approved, &response),
+        Vec::<Violation>::new()
+    );
+    assert_ne!(
+        check_response(State::Pending, &response),
+        Vec::<Violation>::new()
+    );
 }
 
 /// GNAP-9635-§5.4-MN03 — a client that keeps calling after revoking.
@@ -175,7 +184,10 @@ fn an_error_response_carrying_anything_else_is_caught() {
             "access_token":{"value":"BBB"}}}"#,
     )
     .unwrap();
-    assert!(check_response(State::Pending, &recoverable).is_empty());
+    assert_eq!(
+        check_response(State::Pending, &recoverable),
+        Vec::<Violation>::new()
+    );
     assert!(
         !check_response(State::Finalized, &recoverable).is_empty(),
         "a finalized grant cannot be continued (§5.4)"

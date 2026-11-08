@@ -51,7 +51,7 @@ macro_rules! object_or_reference {
 
         impl $name {
             /// The reference, when the value was sent in that form.
-            pub fn as_reference(&self) -> Option<&str> {
+            pub const fn as_reference(&self) -> Option<&str> {
                 match self {
                     Self::ByReference(r) => Some(r.as_str()),
                     Self::ByValue(_) => None,
