@@ -24,7 +24,7 @@ fn registration_preserves_omission_false_empty_lists_and_unknown_parameters() {
     .unwrap();
     assert_eq!(request.token_introspection_required, Some(false));
     // Empty access is represented by the type and refused by the selected SDK profile.
-    assert!(request.access.is_empty());
+    assert_eq!(request.access, Vec::<gnap_types::access::AccessItem>::new());
 }
 
 #[test]

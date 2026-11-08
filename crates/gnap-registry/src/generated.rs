@@ -23,7 +23,7 @@ impl AccessTokenFlag {
 
     /// The on-the-wire representation.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Bearer => "bearer",
             Self::Durable => "durable",
@@ -71,7 +71,7 @@ impl AssertionFormat {
 
     /// The on-the-wire representation.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::IdToken => "id_token",
             Self::Saml2 => "saml2",
@@ -155,7 +155,7 @@ impl ErrorCode {
 
     /// The on-the-wire representation.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::InvalidRequest => "invalid_request",
             Self::InvalidClient => "invalid_client",
@@ -225,7 +225,7 @@ impl InteractionFinishMethod {
 
     /// The on-the-wire representation.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Redirect => "redirect",
             Self::Push => "push",
@@ -278,7 +278,7 @@ impl InteractionStartMode {
 
     /// The on-the-wire representation.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Redirect => "redirect",
             Self::App => "app",
@@ -332,7 +332,7 @@ impl KeyFormat {
 
     /// The on-the-wire representation.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Jwk => "jwk",
             Self::Cert => "cert",
@@ -386,7 +386,7 @@ impl KeyProofingMethod {
 
     /// The on-the-wire representation.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Httpsig => "httpsig",
             Self::Mtls => "mtls",
@@ -444,7 +444,7 @@ impl RsErrorCode {
 
     /// The on-the-wire representation.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::InvalidRequest => "invalid_request",
             Self::InvalidResourceServer => "invalid_resource_server",
@@ -501,7 +501,7 @@ impl TokenFormat {
 
     /// The on-the-wire representation.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::JwtSigned => "jwt-signed",
             Self::JwtEncrypted => "jwt-encrypted",
