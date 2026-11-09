@@ -585,7 +585,8 @@ fn access_token<'r>(request: &'r SignedRequest<'_>) -> Result<Option<&'r str>, S
         .trim_matches([' ', '\t'])
         .split_once(' ')
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("GNAP"))
-        .map(|(_, token)| token)
+        // RFC 9110 §11.4: one or more spaces, and no tab, separate the two.
+        .map(|(_, token)| token.trim_start_matches(' '))
         .filter(|token| is_token68(token))
         .map(Some)
         .ok_or_else(|| "Authorization must present one GNAP access token".into())

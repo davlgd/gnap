@@ -698,6 +698,15 @@ fn ath_binds_the_presented_access_token() {
     let mut scheme = Wire::new(proof(Some("token")), CONTENT, None);
     scheme.header("Authorization", "gnap token");
     check(&scheme).expect("the scheme is case-insensitive");
+    let mut spaces = Wire::new(proof(Some("token")), CONTENT, None);
+    spaces.header("Authorization", "GNAP   token");
+    check(&spaces).expect("one or more spaces separate the scheme and the token");
+    let mut tab = Wire::new(proof(Some("token")), CONTENT, None);
+    tab.header("Authorization", "GNAP\ttoken");
+    assert!(
+        rejection(check(&tab)).contains("Authorization"),
+        "a tab isn't a separator"
+    );
 }
 
 /// Where a proof may travel, and what may travel with it.
