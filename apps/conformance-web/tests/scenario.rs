@@ -1406,3 +1406,71 @@ fn a_malformed_rotation_refusal_fails() {
         }
     }
 }
+
+/// A wall clock set back after a failed revocation can't make cleanup
+/// repeat its proof: cleanup waits past it, within its bound, or doesn't
+/// send it.
+#[test]
+fn a_retried_revocation_never_repeats_its_proof() {
+    for (set_back, retried) in [(1, true), (60, false)] {
+        let clock = Jumping::by(0);
+        let refused = Cell::new(false);
+        let proofs: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let tamper = |request: &HttpRequest, forward: &dyn Fn() -> HttpResponse| {
+            if request.method == "DELETE" && request.url.starts_with("https://as.example/manage") {
+                let proof = request
+                    .headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("detached-jws"))
+                    .map(|(_, value)| value.clone())
+                    .unwrap();
+                proofs.borrow_mut().push(proof);
+                if !refused.replace(true) {
+                    clock.now.set(clock.now.get() - set_back);
+                    return HttpResponse {
+                        status: 500,
+                        headers: vec![],
+                        body: vec![],
+                    };
+                }
+            }
+            let mut response = forward();
+            if request.method == "POST" && request.url == GRANT {
+                let mut body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+                body.as_object_mut().unwrap().remove("continue");
+                response.body = serde_json::to_vec(&body).unwrap();
+            }
+            response
+        };
+        let server = server(false, false);
+        let (report, _) = run_on(
+            &clock,
+            &server,
+            &plan("jwsd", "EdDSA", false, false),
+            &|_| {},
+            live_tokens,
+            &tamper,
+        );
+        let proofs = proofs.into_inner();
+        assert!(
+            proofs.windows(2).all(|pair| pair[0] != pair[1]),
+            "a proof was repeated"
+        );
+        let cleanup = outcome(&report, "token-cleanup");
+        if retried {
+            assert_eq!(proofs.len(), 2);
+            assert_eq!(cleanup, Some(Outcome::Passed), "{}", report.text());
+        } else {
+            assert_eq!(proofs.len(), 1);
+            assert_eq!(cleanup, Some(Outcome::Inconclusive), "{}", report.text());
+        }
+    }
+}
+
+/// An access object is read whole: a member given twice is refused, not
+/// silently replaced by its last value.
+#[test]
+fn an_access_object_with_a_repeated_member_is_refused() {
+    let access = ["{\"type\":\"files\",\"type\":\"photos\"}".to_owned()];
+    assert!(Plan::new(GRANT, "httpsig", "ES256", &access, None, false, 30).is_err());
+}

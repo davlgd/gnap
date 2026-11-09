@@ -108,16 +108,18 @@ impl Plan {
                     return Err("an access entry is too long");
                 }
                 // RFC 8259 §2 — JSON whitespace may come before an object.
-                let value = if entry
+                if entry
                     .trim_start_matches([' ', '\t', '\n', '\r'])
                     .starts_with('{')
                 {
-                    serde_json::from_str(entry).map_err(|_| "an access object isn't JSON")?
+                    // Read whole, so that serde refuses a member given twice.
+                    serde_json::from_str(entry)
+                        .map_err(|_| "an access object isn't a GNAP access entry")
                 } else {
-                    json!(entry)
-                };
-                serde_json::from_value(value)
-                    .map_err(|_| "an access entry isn't a GNAP access entry")
+                    // A reference, kept byte for byte.
+                    serde_json::from_value(json!(entry))
+                        .map_err(|_| "an access entry isn't a GNAP access entry")
+                }
             })
             .collect::<Result<Vec<AccessItem>, _>>()?;
         if wait > MAX_WAIT {
@@ -315,6 +317,9 @@ struct Run<'a, T: HttpTransport> {
     /// The second the last resource proof was signed at: the next one has
     /// to be later, so that it never repeats a proof's replay identity.
     last_read: std::cell::Cell<u64>,
+    /// The second the scenario's own token revocation was signed at, which
+    /// a retry at cleanup has to come after.
+    last_revocation: std::cell::Cell<Option<u64>>,
 }
 
 impl<T: HttpTransport> Run<'_, T> {
@@ -479,6 +484,7 @@ pub fn lifecycle<T: HttpTransport>(
         obtained: false,
         current: Arc::clone(&key),
         last_read: std::cell::Cell::new(0),
+        last_revocation: std::cell::Cell::new(None),
     };
 
     if run.clock.interrupted() {
@@ -784,7 +790,9 @@ pub fn lifecycle<T: HttpTransport>(
     if run.clock.interrupted() {
         return finish(run, transport, started);
     }
-    let revoked = run.session.revoke_token(None, clock.now());
+    let revoking_at = clock.now();
+    run.last_revocation.set(Some(revoking_at));
+    let revoked = run.session.revoke_token(None, revoking_at);
     run.push(
         "token-revocation",
         judged(&revoked),
@@ -855,14 +863,29 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
         // no earlier request was signed at, so that a retried revocation
         // has its own replay identity, and (§5) until the continuation's
         // wait has passed.
-        let fresh = now.saturating_add(1);
+        let fresh = now
+            .max(run.last_revocation.get().unwrap_or(0))
+            .saturating_add(1);
         let ready = continuation.map_or(fresh, |wait| {
             fresh.max(run.continued_at.saturating_add(wait))
         });
         run.clock.pause(ready.min(now.saturating_add(CLEANUP_WAIT)));
     }
-    if managed {
-        let revoked = run.session.revoke_token(None, run.clock.now());
+    // A retry signed at the second of the revocation it retries would repeat
+    // its proof: when the wall clock went back too far to wait it out, the
+    // scenario doesn't send it.
+    let retry_at = run.clock.now();
+    let repeats = run.last_revocation.get().is_some_and(|at| retry_at <= at);
+    if managed && repeats {
+        run.push(
+            "token-cleanup",
+            Outcome::Inconclusive,
+            REVOCATION,
+            "The scenario couldn't sign a new proof to revoke the token it still held, since the \
+             wall clock went back past its revocation: the token may remain live.",
+        );
+    } else if managed {
+        let revoked = run.session.revoke_token(None, retry_at);
         run.push(
             "token-cleanup",
             judged(&revoked),
