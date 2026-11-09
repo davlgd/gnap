@@ -110,10 +110,16 @@ pub enum JwsProof {
 /// An empty `content` means the request has none: a `jwsd` proof then signs
 /// an empty payload, and a `jws` proof travels in [`DETACHED_JWS_HEADER`].
 ///
+/// The header carries the signer's [`Signer::key_id`] as `kid`, which RFC 9635
+/// requires for a key presented as a JWK. A signer with an empty identifier
+/// signs without `kid`, for a key presented otherwise: verify its proofs with
+/// a verifier that expects no `kid`.
+///
 /// # Errors
 ///
 /// Fails for a signer whose algorithm isn't one of [`JWS_ALGORITHMS`], for a
-/// method or URI the proof can't carry, or when the signer fails.
+/// method, URI, access token, or key identifier the proof can't carry, for a
+/// proof longer than the verifier's bounds, or when the signer fails.
 pub fn sign_jws(
     method: JwsMethod,
     params: &JwsParams<'_>,
@@ -546,8 +552,8 @@ fn header(
     })
 }
 
-/// Signs a compact JWS within the bounds its verifier applies, so that this
-/// crate never produces a proof it would refuse.
+/// Signs a compact JWS within the bounds its verifier applies, so that no
+/// proof this crate signs is refused for its size.
 fn compact(
     header: &Header,
     payload: &[u8],

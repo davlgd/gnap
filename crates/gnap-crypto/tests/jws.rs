@@ -1340,3 +1340,33 @@ fn the_signer_refuses_what_its_verifier_refuses() {
     assert!(!debug.contains("synthetic-secret-token"), "{debug}");
     assert!(debug.contains("<redacted>"), "{debug}");
 }
+
+/// A signer without identifier signs without `kid`, for a key that isn't
+/// presented as a JWK: a verifier that expects no `kid` accepts the proof.
+#[test]
+fn a_signer_without_identifier_signs_without_kid() {
+    let signer = Ed25519Signer::from_pkcs8_pem(ED25519_PKCS8, "").unwrap();
+    let JwsProof::Detached(compact) =
+        sign_jws(JwsMethod::Jwsd, &params(None), CONTENT, &signer).unwrap()
+    else {
+        panic!("jwsd is detached");
+    };
+    let header: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(compact.split('.').next().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(header.get("kid").is_none(), "{header}");
+    let verifier =
+        gnap_crypto::Ed25519Verifier::from_public_key_pem(include_str!("rfc9421-b14.spki.pem"))
+            .unwrap();
+    let wire = Wire::new(JwsProof::Detached(compact), CONTENT, None);
+    verify_jws_request(
+        JwsMethod::Jwsd,
+        &wire.request(),
+        &key(&verifier, "pem-key"),
+        &forgetful(),
+    )
+    .expect("a verifier without kid expectation accepts it");
+}
