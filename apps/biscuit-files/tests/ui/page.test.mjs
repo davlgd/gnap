@@ -237,3 +237,25 @@ test('the panel says how many blocks a token may still take', async () => {
   assert.equal(lab.nodes.get('#restrictions').textContent, 'None yet, of 8 at most');
 });
 
+test('only 401 and 403 read as refusals; another status is the server failing to decide', async () => {
+  for (const [status, line, kind] of [
+    [403, 'Read the notes: refused, the file server answered 403', 'refused'],
+    [401, 'Read the notes: refused, the file server answered 401', 'refused'],
+    [503, 'Read the notes: not decided, the file server answered 503', 'failed'],
+    [500, 'Read the notes: not decided, the file server answered 500', 'failed'],
+    [204, 'Read the notes: accepted, the file server answered 204', 'accepted'],
+    [42, 'Read the notes: the client relayed no valid status', undefined],
+    [700, 'Read the notes: the client relayed no valid status', undefined],
+    ['403', 'Read the notes: the client relayed no valid status', undefined],
+  ]) {
+    const lab = page();
+    lab.reply(0, 200, held());
+    await settle();
+    const read = lab.button('read').click();
+    lab.reply(1, 200, { ...held(), status, result: { error: 'request refused' } });
+    await read;
+    assert.equal(lab.nodes.get('#outcome').textContent, line, String(status));
+    assert.equal(lab.nodes.get('#outcome').dataset.outcome, kind, String(status));
+  }
+});
+

@@ -76,19 +76,25 @@ function event(text) {
   while (list.children.length > MAX_EVENTS) list.children[0].remove();
 }
 
+// Only 401 and 403 are refusals of access; another failure is the server's
+// own, such as a 503 when it can't reach the authorization server.
+const OUTCOMES = { accepted: 'accepted', refused: 'refused', failed: 'not decided' };
+function outcomeOf(status) {
+  if (!Number.isInteger(status) || status < 100 || status > 599) return 'unknown';
+  if (status >= 200 && status < 300) return 'accepted';
+  return status === 401 || status === 403 ? 'refused' : 'failed';
+}
+
 // The file server's answer, which the client relays inside its own, under
 // the name of the button that asked for it.
 function renderResource(data, asked) {
   if (!Object.hasOwn(data, 'status')) return;
   const outcome = node('#outcome');
-  if (!count(data.status)) {
-    outcome.textContent = 'The client relayed an answer without a status.';
-    delete outcome.dataset.outcome;
-  } else {
-    const accepted = data.status >= 200 && data.status < 300;
-    outcome.textContent = `${asked}: ${accepted ? 'accepted' : 'refused'}, the file server answered ${data.status}`;
-    outcome.dataset.outcome = accepted ? 'accepted' : 'refused';
-  }
+  const kind = outcomeOf(data.status);
+  outcome.textContent = kind === 'unknown'
+    ? `${asked}: the client relayed no valid status`
+    : `${asked}: ${OUTCOMES[kind]}, the file server answered ${data.status}`;
+  if (kind === 'unknown') delete outcome.dataset.outcome; else outcome.dataset.outcome = kind;
   node('#result').textContent = JSON.stringify(data.result ?? null, null, 2);
 }
 

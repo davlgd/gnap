@@ -281,6 +281,7 @@ details > summary { cursor: pointer; color: var(--accent); margin-top: 1rem; }
 .outcome[data-outcome] { display: inline-block; padding: 0.15rem 0.6rem; border-radius: var(--radius); font-weight: 600; }
 .outcome[data-outcome="accepted"] { background: var(--pass-soft); color: var(--pass); }
 .outcome[data-outcome="refused"] { background: var(--fail-soft); color: var(--fail); }
+.outcome[data-outcome="failed"] { background: var(--unsure-soft); color: var(--unsure); }
 .output:empty { display: none; }
 
 /* Two fields side by side that wrap on a narrow screen. */
