@@ -743,10 +743,15 @@ fn an_unavailable_nonce_source_fails_without_publishing() {
         let (_, response) = transport.exchanges.borrow().last().unwrap().clone();
         assert_eq!(response.status, 500, "draw {position}");
         assert!(String::from_utf8_lossy(&response.body).contains("nonce source"));
-        assert_eq!(as_.storage().len().unwrap(), 0, "draw {position}");
+        // `len` counts continuable grants only; the Debug count covers every grant.
+        assert!(
+            format!("{:?}", as_.storage()).contains("grants: 0"),
+            "draw {position}"
+        );
 
         let mut client = Session::new(&transport, &signer, GRANT);
         client.start(&request(), 1_000).unwrap();
+        assert!(format!("{:?}", as_.storage()).contains("grants: 1"));
         fail_at.set(Some(position));
         assert!(client.rotate_token(None, 1_001).is_err(), "draw {position}");
         let (_, response) = transport.exchanges.borrow().last().unwrap().clone();

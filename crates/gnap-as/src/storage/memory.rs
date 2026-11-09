@@ -11,7 +11,7 @@ use crate::server::MAX_CLOCK_SKEW;
 use gnap_types::token::TokenValue;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::{Mutex, TryLockError};
 
 const NONCE_MEMORY: u64 = 2 * MAX_CLOCK_SKEW;
 
@@ -259,14 +259,18 @@ pub struct MemoryStorage {
 
 impl fmt::Debug for MemoryStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `try_lock`: formatting the store from code that already holds its
+        // lock, such as a clock callback, must not deadlock.
         let mut shown = f.debug_struct("MemoryStorage");
-        match self.state.lock() {
+        match self.state.try_lock() {
             Ok(state) => shown.field("grants", &state.grants.len()),
-            Err(_) => shown.field("grants", &"<poisoned>"),
+            Err(TryLockError::WouldBlock) => shown.field("grants", &"<locked>"),
+            Err(TryLockError::Poisoned(_)) => shown.field("grants", &"<poisoned>"),
         };
-        match self.nonces.lock() {
+        match self.nonces.try_lock() {
             Ok(nonces) => shown.field("reserved_nonces", &nonces.len()),
-            Err(_) => shown.field("reserved_nonces", &"<poisoned>"),
+            Err(TryLockError::WouldBlock) => shown.field("reserved_nonces", &"<locked>"),
+            Err(TryLockError::Poisoned(_)) => shown.field("reserved_nonces", &"<poisoned>"),
         };
         shown.finish()
     }
@@ -637,6 +641,11 @@ mod tests {
         let shown = format!("{storage:?}");
         assert!(!shown.contains("SECRET"), "a credential leaked: {shown}");
         assert!(shown.contains("grants: 1"), "{shown}");
+
+        // Formatting under the store's own lock reports it instead of waiting.
+        let held = storage.state.lock().unwrap();
+        assert!(format!("{storage:?}").contains("<locked>"));
+        drop(held);
     }
 
     #[test]
