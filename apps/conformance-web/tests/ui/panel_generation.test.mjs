@@ -17,9 +17,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const html = readFileSync(new URL('../../static/index.html', import.meta.url), 'utf8');
-const script = readFileSync(new URL('../../static/app.js', import.meta.url), 'utf8');
+// The page loads the suite's shared helpers first, as its script tags do.
+const script = [
+  readFileSync(new URL('../../../ui/gnap.js', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../static/app.js', import.meta.url), 'utf8'),
+].join('\n');
 
-const WRITABLE = new Set(['value', 'checked', 'hidden', 'disabled', 'textContent', 'href', 'rel', 'download']);
+const WRITABLE = new Set(['value', 'checked', 'hidden', 'disabled', 'textContent', 'href', 'rel', 'download', 'className', 'title', 'ariaHidden', 'ariaPressed']);
 
 function element(tagName, id, attrs = '') {
   const state = {
@@ -27,7 +31,8 @@ function element(tagName, id, attrs = '') {
     value: '', checked: false,
     hidden: /\bhidden\b/.test(attrs),
     disabled: /\bdisabled\b/.test(attrs),
-    textContent: '', href: '', rel: '', download: '',
+    textContent: '', href: '', rel: '', download: '', className: '', title: '', ariaHidden: null,
+    ariaPressed: (/aria-pressed="(true|false)"/.exec(attrs) || [])[1] ?? null,
     dataset: {}, children: [], listeners: new Map(), clicks: 0,
     selectedIndex: -1,
   };

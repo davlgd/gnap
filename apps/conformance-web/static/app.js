@@ -37,24 +37,28 @@ function updateKind() {
 byId('kind').addEventListener('change', () => { clearReport(); updateKind(); });
 updateKind();
 // Clearing invalidates late results, not requests already sent to the server.
-const clearReport = () => { reportGeneration += 1; currentReport = null; byId('report').replaceChildren(); byId('summary').textContent = ''; byId('download').disabled = true; };
+const FILTERS = ['all', 'pass', 'fail', 'not_tested'];
+let rows = [];
+function showOnly(status) {
+  for (const name of FILTERS) byId(`filter-${name}`).ariaPressed = String(name === status);
+  GNAP.filterRows(rows, status);
+}
+for (const name of FILTERS) byId(`filter-${name}`).addEventListener('click', () => showOnly(name));
+const clearReport = () => {
+  reportGeneration += 1; currentReport = null; rows = [];
+  byId('report').replaceChildren(); byId('tally').replaceChildren(); byId('summary').textContent = '';
+  byId('report-empty').hidden = false; byId('filters').hidden = true; byId('download').disabled = true; showOnly('all');
+};
 function renderReport(report) {
   currentReport = report;
   const counts = { pass: 0, fail: 0, not_tested: 0 };
-  for (const check of currentReport.checks) {
-    counts[check.status] += 1;
-    const article = document.createElement('article');
-    const heading = document.createElement('h3');
-    heading.textContent = `${check.status.toUpperCase()} — ${check.id}`;
-    const detail = document.createElement('p'); detail.textContent = check.detail;
-    const ref = document.createElement('a');
-    // Imported values never become HTML or executable URLs.
-    if (/^https:\/\/www\.rfc-editor\.org\/rfc\/rfc[0-9]+\.html(?:#[a-zA-Z0-9.-]+)?$/.test(check.reference)) ref.href = check.reference;
-    ref.textContent = check.reference; ref.rel = 'noreferrer';
-    article.append(heading, detail, ref);
-    if (check.remediation) { const advice = document.createElement('p'); advice.textContent = `Next action: ${check.remediation}`; article.append(advice); }
-    byId('report').append(article);
-  }
+  for (const check of currentReport.checks) counts[GNAP.statusOf(check.status)] += 1;
+  rows = currentReport.checks.map(GNAP.checkRow);
+  byId('report').replaceChildren(...rows);
+  byId('tally').replaceChildren(...GNAP.tallyCells(currentReport.checks));
+  byId('report-empty').hidden = true;
+  byId('filters').hidden = false;
+  showOnly('all');
   const provenance = currentReport.observation;
   byId('summary').textContent = `${counts.pass} passed checks; ${counts.fail} failed checks; ${counts.not_tested} not tested. No overall conformance verdict. Source: ${provenance.source}; version ${provenance.harness_version}; revision ${provenance.revision}; ${new Date(provenance.observed_at_unix_seconds_utc * 1000).toISOString()}.`;
   byId('download').disabled = false;
