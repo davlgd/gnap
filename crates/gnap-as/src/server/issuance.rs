@@ -82,7 +82,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             if released.ground == SubjectGround::RoInteractedHere
                 && !aggregate.record.interaction_completed
             {
-                return misconfigured("subject release claims an interaction that did not occur");
+                return misconfigured(
+                    "subject release claims that the RO interacted, on a grant that has been through no interaction",
+                );
             }
             if let Err(error) = released.subject.validate() {
                 return misconfigured(&error.to_string());

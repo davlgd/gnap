@@ -38,9 +38,9 @@ pub enum Decision {
     ///
     /// The access granted may differ from the access requested; §3.2.1 requires
     /// the response to reflect what was actually granted.
-    /// This compatibility variant issues one token, using the first requested
-    /// slot when the request contains several. Use `ApproveTokens` to select
-    /// slots explicitly and keep their rights separate.
+    /// A shorthand for a request of exactly one token: the server refuses it,
+    /// as a configuration fault, when the request holds several. Use
+    /// `ApproveTokens` to select among several and keep their rights separate.
     Approve {
         /// The rights attached to the issued token.
         access: Vec<AccessItem>,

@@ -10,7 +10,7 @@ For example, a policy can approve a `reports` token without approving the `docum
 
 The selection must contain between 1 and 64 tokens, with unique labels drawn from the request. This is a bound on this SDK's policy output, not a GNAP limit on request arrays. Invalid policy output produces a non-GNAP server failure without issuing tokens. To refuse the grant or request consent, return `Deny` or `RequireInteraction`; there is no per-label pending state.
 
-`Decision::Approve` issues a single token, for the first requested slot. A policy that serves several resources uses `ApproveTokens`, which makes the selection and the separation of rights explicit.
+`Decision::Approve` is a shorthand for a request of a single token, and the server refuses it as a configuration fault when the request holds several. A policy that serves several resources uses `ApproveTokens`, which makes the selection and the separation of rights explicit.
 
 ## Publish and manage the tokens
 

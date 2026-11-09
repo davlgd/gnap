@@ -1,23 +1,19 @@
 //! Grant requests: classification, policy evaluation, issuance, and interaction offers.
 
 use super::{
-    error, issuance, method_not_allowed, misconfigured, modifies, not_found, ok,
-    require_json_content, storage_failure, AuthorizationServer, PreparedToken,
-    INTERACTION_LIFETIME,
+    error, method_not_allowed, misconfigured, modifies, not_found, ok, require_json_content,
+    storage_failure, AuthorizationServer, INTERACTION_LIFETIME,
 };
 use crate::encoding::TokenEncoder;
 use crate::nonce::Nonces;
-use crate::policy::{
-    Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, SubjectGround,
-};
-use crate::storage::{GrantAggregate, GrantRecord, GrantSnapshot, Storage, TokenRecord};
+use crate::policy::{Decision, EvaluationContext, KeyResolver, Policy, TokenApproval};
+use crate::storage::{GrantAggregate, GrantRecord, GrantSnapshot, Storage};
 use gnap_core::{Event, Grant, State};
 use gnap_registry::{ErrorCode, InteractionFinishMethod};
-use gnap_types::access::AccessItem;
 use gnap_types::http::{HttpRequest, HttpResponse};
 use gnap_types::interact::{InteractFinish, InteractResponse, UserCodeUri};
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
-use gnap_types::token::{AccessToken, AccessTokenResponse, BoundToken, TokenManage, TokenValue};
+use gnap_types::token::{BoundToken, TokenValue};
 
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     AuthorizationServer<P, K, S, N, E>
@@ -167,7 +163,24 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
 
         match decision {
             Decision::Approve { access, subject } => {
-                self.approve(aggregate, access, subject, now, authenticated)
+                // A shorthand for the only requested token: a policy facing
+                // several slots must say which ones it approves.
+                let slots = record
+                    .request
+                    .access_token
+                    .as_ref()
+                    .map(|a| a.tokens.as_slice());
+                let Some([slot]) = slots else {
+                    return misconfigured(
+                        "Decision::Approve needs exactly one requested token; \
+                         select tokens with Decision::ApproveTokens",
+                    );
+                };
+                let tokens = vec![TokenApproval {
+                    requested_label: slot.label.clone(),
+                    access,
+                }];
+                self.approve_selected(aggregate, tokens, subject, now, authenticated)
             }
             Decision::ApproveTokens { tokens, subject } => {
                 self.approve_selected(aggregate, tokens, subject, now, authenticated)
@@ -183,122 +196,6 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 }
             }
         }
-    }
-
-    /// Prepares replacement access; the caller publishes it with the grant CAS.
-    fn approve(
-        &self,
-        aggregate: &mut GrantAggregate,
-        access: Vec<AccessItem>,
-        subject: Option<ReleasedSubject>,
-        now: u64,
-        authenticated: Option<&GrantSnapshot>,
-    ) -> HttpResponse {
-        let record = &mut aggregate.record;
-        let request = &record.request;
-        let interacted = record.interaction_completed;
-        let mut response = GrantResponse::default();
-        if let Some(released) = &subject {
-            if released.ground == SubjectGround::RoInteractedHere && !interacted {
-                return misconfigured(
-                    "subject information released on the ground that the RO \
-                     interacted, on a grant that has been through no interaction",
-                );
-            }
-            if let Err(e) = released.subject.validate() {
-                return misconfigured(&e.to_string());
-            }
-        }
-        let keep_open = self.policy.keep_grant_open(request);
-        let PreparedToken {
-            encoded,
-            expires_in,
-            management,
-            management_token,
-            continuation,
-        } = match self.encode_issued_token(request, &access, now, keep_open, authenticated) {
-            Ok(encoded) => encoded,
-            Err(response) => return response,
-        };
-
-        // §3.2.1 — the management API the client may call to rotate or
-        // revoke this token (§6). Both halves were reserved before
-        // encoding: the URI handle and the credential protecting it.
-        let manage = TokenManage {
-            uri: format!(
-                "{}/{}",
-                self.endpoints.token_management.trim_end_matches('/'),
-                management
-            ),
-            access_token: BoundToken::new(management_token.clone()),
-        };
-
-        let token = AccessToken {
-            value: encoded.value,
-            label: request
-                .access_token
-                .as_ref()
-                .and_then(|a| a.tokens.first())
-                .and_then(|t| t.label.clone()),
-            manage: Some(manage),
-            access: Some(access),
-            expires_in,
-            key: None,
-            flags: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        // TokenManage validation also rejects an encoded access value
-        // equal to its management credential before anything is stored.
-        if let Err(e) = token.validate() {
-            return misconfigured(&e.to_string());
-        }
-        // §6 — the AS has to find this token again from the management
-        // URI and the management token, so it remembers both.
-        if aggregate.tokens.contains_key(&management) {
-            return misconfigured("token management handle collision");
-        }
-        // §5.3 permits revoking previous tokens after modification.
-        // This SDK replaces the complete set only on successful
-        // approval, in the same CAS that publishes the new token.
-        aggregate.tokens.clear();
-        aggregate.tokens.insert(
-            management,
-            TokenRecord {
-                derivation: None,
-                identifier: encoded.identifier,
-                issued_at: now,
-                token: token.clone(),
-                client: request.client.clone(),
-                management_token: management_token.as_str().to_owned(),
-            },
-        );
-
-        // §3.2.1, §3.2.2 — the response mirrors the request's shape.
-        let cardinality = request
-            .access_token
-            .as_ref()
-            .map_or(gnap_types::Cardinality::Single, |a| a.cardinality);
-        response.access_token = Some(AccessTokenResponse {
-            cardinality,
-            tokens: vec![token],
-        });
-        // §3.4-M01 — the AS returns `subject` "only in cases where the
-        // AS is sure that the RO and the end user are the same party",
-        // and names interaction as how that is established. The one
-        // ground this server can check is that one: a grant that has
-        // been through no interaction cannot claim it. The check is on
-        // the deployment's claim, not on the client's request, so it
-        // reports a server fault rather than blaming the caller.
-        issuance::complete_approval(
-            record,
-            &mut response,
-            subject,
-            continuation,
-            now,
-            &self.endpoints.continuation,
-        );
-
-        ok(&response)
     }
 
     /// Generates a code not currently indexed, with a bounded collision budget.

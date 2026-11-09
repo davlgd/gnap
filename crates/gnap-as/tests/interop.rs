@@ -59,10 +59,18 @@ struct AlwaysInteract {
 }
 
 impl Policy for AlwaysInteract {
-    fn evaluate(&self, _request: &GrantRequest) -> Decision {
+    /// Approves the first requested token, whatever the request holds.
+    fn evaluate(&self, request: &GrantRequest) -> Decision {
         if self.interacted.get() {
-            Decision::Approve {
-                access: vec![AccessItem::Reference("dolphin-metadata".into())],
+            let first = request
+                .access_token
+                .as_ref()
+                .and_then(|requested| requested.tokens.first());
+            Decision::ApproveTokens {
+                tokens: vec![gnap_as::TokenApproval {
+                    requested_label: first.and_then(|token| token.label.clone()),
+                    access: vec![AccessItem::Reference("dolphin-metadata".into())],
+                }],
                 subject: None,
             }
         } else {
@@ -3584,6 +3592,44 @@ fn an_unknown_user_reference_in_a_modification_is_refused() {
         response.r#continue.is_some(),
         "the pending grant can still continue"
     );
+}
+
+/// `Decision::Approve` names no token, so a request for several is a policy
+/// fault: the server refuses it instead of picking one.
+#[test]
+fn a_shorthand_approval_of_several_requested_tokens_is_refused() {
+    struct ApproveAll;
+    impl Policy for ApproveAll {
+        fn evaluate(&self, _request: &GrantRequest) -> Decision {
+            Decision::Approve {
+                access: vec![AccessItem::Reference("read".into())],
+                subject: None,
+            }
+        }
+    }
+    let as_ = AuthorizationServer::new(
+        ApproveAll,
+        OneKey(RSA_SPKI),
+        MemoryStorage::new(),
+        Counted(Cell::new(0)),
+        Endpoints {
+            grant: GRANT.into(),
+            continuation: CONTINUE.into(),
+            interaction: "https://as.example/i".into(),
+            token_management: "https://as.example/token".into(),
+        },
+    );
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    let body = serde_json::json!({"client": "client-541-ab", "access_token": [
+        {"label": "first", "access": ["read"]},
+        {"label": "second", "access": ["write"]},
+    ]});
+    let response = as_.handle(
+        &signed_grant(&signer, &serde_json::to_vec(&body).unwrap(), 1_000),
+        1_000,
+    );
+    assert_eq!(response.status, 500, "{}", body_of(&response));
+    assert!(body_of(&response).contains("ApproveTokens"));
 }
 
 /// GNAP-9635-§3.2.1-MN31 and GNAP-9635-§3.2.2-M04 — an AS that grants
