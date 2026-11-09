@@ -7,7 +7,7 @@ Check opaque GNAP access tokens on a resource server. `gnap-rs` asks a trusted a
 1. Configure `TrustedAs::new` with the exact HTTPS grant and introspection endpoints your deployment approves
 2. Supply the resource server's identity and signer, an `HttpTransport`, and a replay `NonceMemory`
 3. Choose an `AudiencePolicy`, and write an `AccessPolicy` for the rights your resource needs
-4. Call `Authorizer::authorize` with the original request, and perform the operation only on `Ok(())`
+4. Call `Authorizer::authorize` with the original request, and perform the operation only on the `Authorized` content it returns
 
 The resource server's signer authenticates the introspection request, while the client's key comes from the authorization server's answer: a valid request signature alone doesn't establish the token's rights or audience. Each request makes a discovery and an introspection exchange, with no positive result cached. Run `cargo doc -p gnap-rs --open` for the API documentation and a complete example.
 
@@ -15,7 +15,7 @@ The resource server's signer authenticates the introspection request, while the 
 
 Your transport authenticates HTTPS, keeps the signed bytes intact, refuses redirects and unapproved destinations, and bounds buffering and time. Your replay memory reserves nonces atomically, and must be shared or durable when you run replicas or need restart recovery.
 
-The profile accepts `httpsig` signatures with public PS256, ES256, or Ed25519 keys, and introspection responses with integer `iat` and `exp` claims. It doesn't support bearer tokens, Biscuit introspection, registration, or derivation. The [resource-server guide](https://github.com/davlgd/gnap/blob/main/docs/resource-server-sdk.md) explains the access policy, the audience policies, the failure cases, and every limit of the profile.
+The profile accepts `httpsig` signatures with public PS256, ES256, or Ed25519 keys, and, after `with_jose_proofs`, `jws` and `jwsd` proofs with public RS256, ES256, or Ed25519 keys, and introspection responses with integer `iat` and `exp` claims. It doesn't support bearer tokens, Biscuit introspection, registration, or derivation. The [resource-server guide](https://github.com/davlgd/gnap/blob/main/docs/resource-server-sdk.md) explains the access policy, the audience policies, the failure cases, and every limit of the profile.
 
 ## Verification
 

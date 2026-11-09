@@ -117,12 +117,15 @@ fn authorize(
 ) -> Result<(), AuthorizationError> {
     let trusted = TrustedAs::new(GRANT, INTROSPECT).unwrap();
     let identity = ResourceServer::ByReference("rs-registration-not-audience".into());
-    Authorizer::new(&trusted, &identity, transport, rs(), nonces, audience).authorize(
-        request,
-        &[right()],
-        policy,
-        clock,
-    )
+    Authorizer::new(&trusted, &identity, transport, rs(), nonces, audience)
+        .authorize(request, &[right()], policy, clock)
+        .map(|authorized| {
+            // With `httpsig`, the authenticated content is the body as sent.
+            assert_eq!(
+                authorized.content(),
+                request.body.as_deref().unwrap_or_default()
+            );
+        })
 }
 
 #[test]
@@ -852,7 +855,8 @@ fn by_value_rs_identity_is_serialized_without_becoming_the_audience_or_client_ke
             &nonces,
             &AudiencePolicy::Exact("resource-audience".into())
         )
-        .authorize(&request(), &[right()], &permit, || 1000),
+        .authorize(&request(), &[right()], &permit, || 1000)
+        .map(drop),
         Ok(())
     );
     let calls = transport.calls.borrow();

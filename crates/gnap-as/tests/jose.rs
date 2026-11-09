@@ -1282,3 +1282,127 @@ fn a_jose_key_change_reserves_its_proofs_before_the_policy() {
         granted(&permitting.handle(&fresh, NOW + 2));
     }
 }
+
+/// The resource server of the introspection tests, which proves with
+/// `httpsig`. Its ES256 key is one the JOSE proofs take too, so that only the
+/// method its declaration names keeps it to `httpsig`.
+fn resource_server() -> &'static Es256Signer {
+    static KEY: OnceLock<Es256Signer> = OnceLock::new();
+    KEY.get_or_init(|| Es256Signer::generate("files-rs").unwrap())
+}
+
+/// Resolves the `files` resource server, its key declared with `proof`.
+struct FilesRs(&'static str);
+impl gnap_as::ResourceServerResolver for FilesRs {
+    fn resolve(
+        &self,
+        rs: &gnap_types::rs::ResourceServer,
+    ) -> Option<gnap_as::ResolvedResourceServer> {
+        (rs.as_reference() == Some("files")).then(|| gnap_as::ResolvedResourceServer {
+            id: gnap_as::RsId("files".into()),
+            key: serde_json::from_value(json!({
+                "proof": self.0, "jwk": resource_server().public_jwk().unwrap()
+            }))
+            .unwrap(),
+        })
+    }
+}
+
+/// Discloses a token's rights and the key it is bound to: its own binding,
+/// or the client's key.
+struct Bound;
+impl gnap_as::IntrospectionPolicy for Bound {
+    fn evaluate(
+        &self,
+        _: &gnap_types::rs::ResourceServer,
+        token: &gnap_as::TokenRecord,
+        _: Option<&[gnap_types::access::AccessItem]>,
+    ) -> gnap_as::IntrospectionDecision {
+        let key = token.token.key.as_ref().map_or_else(
+            || {
+                token
+                    .client
+                    .as_value()
+                    .and_then(|client| client.key.as_value())
+            },
+            gnap_types::key::Key::as_value,
+        );
+        gnap_as::IntrospectionDecision::Active {
+            access: token.token.access.clone().unwrap_or_default(),
+            key: key.cloned(),
+        }
+    }
+}
+
+fn introspect(server: &Server<MemoryStorage>, rs: &FilesRs, value: &str, now: u64) -> Value {
+    let nonces = MemoryStorage::new();
+    let api = server
+        .resource_server_api(rs, &Bound, &nonces, "https://as.example/introspect")
+        .unwrap();
+    let body =
+        serde_json::to_vec(&json!({"resource_server": "files", "access_token": value})).unwrap();
+    let request = gnap_client::sign_request(
+        HttpRequest::new("POST", "https://as.example/introspect").json_body(body),
+        resource_server(),
+        None,
+        now,
+    )
+    .unwrap();
+    let response = api.handle(&request, now);
+    serde_json::from_slice(&response.body).unwrap_or_default()
+}
+
+/// Introspection reports a token bound to a JOSE key as active, with that
+/// key, and after a key change with the new one; the resource server itself
+/// still proves with `httpsig`, whatever its key declares.
+#[test]
+fn introspection_reports_the_jose_key_a_token_is_bound_to() {
+    let (old, new) = (&signers()[0], &signers()[1]);
+    for method in [JwsMethod::Jws, JwsMethod::Jwsd] {
+        let case = method.name();
+        let server = rotating(true);
+        let body = grant_body(old.as_ref(), &method_name(method));
+        let response =
+            granted(&server.handle(&grant_call(&body).signed(method, old.as_ref()), NOW));
+        let token = &response.access_token.unwrap().tokens[0];
+        let wire = introspect(&server, &FilesRs("httpsig"), token.value.as_str(), NOW + 1);
+        assert_eq!(wire["active"], true, "{case}: {wire}");
+        assert_eq!(wire["key"]["proof"], method.name(), "{case}");
+        assert_eq!(wire["key"]["jwk"]["kid"], old.key_id(), "{case}");
+
+        let refused = introspect(
+            &server,
+            &FilesRs(method.name()),
+            token.value.as_str(),
+            NOW + 1,
+        );
+        assert!(
+            refused.get("active").is_none(),
+            "{case}: a JOSE RS key proves nothing over httpsig"
+        );
+
+        let manage = token.manage.clone().unwrap();
+        let content = Change::body(&presented_key(new.as_ref(), method));
+        let call = Call {
+            method: "POST",
+            uri: &manage.uri,
+            content: &content,
+            token: Some(manage.access_token.value.as_str()),
+            created: NOW + 2,
+        };
+        let rotated =
+            granted(&server.handle(&call.rotation(method, old.as_ref(), new.as_ref()), NOW + 2));
+        let rotated = &rotated.access_token.unwrap().tokens[0];
+        let wire = introspect(
+            &server,
+            &FilesRs("httpsig"),
+            rotated.value.as_str(),
+            NOW + 3,
+        );
+        assert_eq!(
+            wire["key"]["jwk"]["kid"],
+            new.key_id(),
+            "{case}: the new key is introspected"
+        );
+    }
+}

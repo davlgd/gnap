@@ -32,8 +32,8 @@ use gnap_types::token::TokenValue;
 ///
 /// # Errors
 ///
-/// Rejects pre-existing Authorization, Signature, Signature-Input or
-/// Content-Digest headers, regardless of case. Also fails if secure randomness
+/// Rejects pre-existing Authorization, Signature, Signature-Input,
+/// Content-Digest or Detached-JWS headers, regardless of case. Also fails if secure randomness
 /// or signing fails. It never silently replaces a supplied security header.
 pub fn sign_request(
     request: HttpRequest,
@@ -59,11 +59,12 @@ pub(crate) fn sign_request_labelled(
     now: u64,
     label: &str,
 ) -> Result<HttpRequest, ClientError> {
-    const RESERVED: [&str; 4] = [
+    const RESERVED: [&str; 5] = [
         "Authorization",
         "Signature",
         "Signature-Input",
         "Content-Digest",
+        DETACHED_JWS_HEADER,
     ];
     if request.headers.iter().any(|(name, _)| {
         RESERVED
@@ -71,7 +72,7 @@ pub(crate) fn sign_request_labelled(
             .any(|reserved| name.eq_ignore_ascii_case(reserved))
     }) {
         return Err(ClientError::Usage(
-            "sign_request requires a request without Authorization, Signature, Signature-Input or Content-Digest headers"
+            "sign_request requires a request without Authorization, Signature, Signature-Input, Content-Digest or Detached-JWS headers"
                 .into(),
         ));
     }
@@ -265,4 +266,104 @@ pub(crate) fn signed_view(request: &HttpRequest) -> SignedRequest<'_> {
         headers: &request.headers,
         body: request.body.as_deref(),
     }
+}
+
+/// Adds a `jws` or `jwsd` proof and, when supplied, an access token
+/// (RFC 9635 §7.2, §7.3.3, §7.3.4), as [`sign_request`] does for `httpsig`.
+///
+/// Signs but does not send, and proves possession of `signer`'s key: the
+/// caller chooses that key, the method its JWK declares, and the token, and
+/// this function doesn't check the key against a JWK. A `jwsd` proof covers
+/// the body's exact bytes and leaves the body and its `Content-Type` as they
+/// are, whatever the media type. A `jws` proof attaches a JSON body: the body
+/// becomes the compact JWS, of type `application/jose`, a declared
+/// `Content-Length` takes its length, and a `Content-Type` other than
+/// `application/json` is refused. A request without a body is
+/// proven in `Detached-JWS` either way. A proof of the same request signed
+/// in the same second is the same proof to a verifier's replay protection.
+///
+/// # Errors
+///
+/// Fails for a request that already carries `Authorization`, `Signature`,
+/// `Signature-Input`, `Content-Digest`, or `Detached-JWS`, for a body or a
+/// `Content-Type` the method can't carry, and when the signer fails.
+pub fn sign_jose_request(
+    mut request: HttpRequest,
+    method: JwsMethod,
+    signer: &dyn Signer,
+    token: Option<&TokenValue>,
+    now: u64,
+) -> Result<HttpRequest, ClientError> {
+    const RESERVED: [&str; 5] = [
+        "Authorization",
+        "Signature",
+        "Signature-Input",
+        "Content-Digest",
+        DETACHED_JWS_HEADER,
+    ];
+    if request.headers.iter().any(|(name, _)| {
+        RESERVED
+            .iter()
+            .any(|reserved| name.eq_ignore_ascii_case(reserved))
+    }) {
+        return Err(ClientError::Usage(
+            "sign_jose_request requires a request without Authorization, Signature, \
+             Signature-Input, Content-Digest or Detached-JWS headers"
+                .into(),
+        ));
+    }
+    let proof = sign_jws(
+        method,
+        &JwsParams {
+            method: &request.method,
+            target_uri: &request.url,
+            created: now,
+            access_token: token.map(TokenValue::as_str),
+        },
+        request.body.as_deref().unwrap_or_default(),
+        signer,
+    )?;
+    match proof {
+        JwsProof::Detached(value) => request = request.header(DETACHED_JWS_HEADER, value),
+        JwsProof::Attached(value) => {
+            let json = |value: &str| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .eq_ignore_ascii_case("application/json")
+            };
+            let mut types = request
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"));
+            let single = types.next().is_none_or(|(_, value)| json(value));
+            if !single || types.next().is_some() {
+                return Err(ClientError::Usage(
+                    "a jws proof attaches JSON content; the request needs at most one \
+                     Content-Type, application/json (RFC 9635 §7.3.4)"
+                        .into(),
+                ));
+            }
+            request
+                .headers
+                .retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
+            request = request.header("Content-Type", JOSE_MEDIA_TYPE);
+            // The compact JWS is longer than the content it replaces: a
+            // declared length follows it, or a transport would cut it.
+            let length = value.len().to_string();
+            for (name, declared) in &mut request.headers {
+                if name.eq_ignore_ascii_case("content-length") {
+                    declared.clone_from(&length);
+                }
+            }
+            request.body = Some(value.into_bytes());
+        }
+    }
+    if let Some(value) = token {
+        // GNAP-9635-§7.2-M03 — present the token using the GNAP scheme.
+        request = request.header("Authorization", format!("GNAP {}", value.as_str()));
+    }
+    Ok(request)
 }

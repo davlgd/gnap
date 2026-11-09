@@ -457,7 +457,8 @@ pub(crate) fn authenticate_rs(
 ) -> Option<ResolvedResourceServer> {
     let resolved = keys.resolve(identity)?;
     let key = &resolved.key;
-    let verifier = public_verifier(key)?;
+    // The RS proves itself with `httpsig`, the method discovery announces.
+    let verifier = rs_verifier(key)?;
     if let Some(presented) = identity.as_value().and_then(|rs| rs.key.as_value()) {
         if presented != key {
             return None;
@@ -503,15 +504,28 @@ fn json_request(request: &HttpRequest, max_bytes: usize) -> Option<&[u8]> {
         .filter(|bytes| bytes.len() <= max_bytes)
 }
 
-fn public_verifier(key: &KeyObject) -> Option<gnap_crypto::PublicKey> {
+/// The verifier of a resource server's own key, which proves with `httpsig`.
+fn rs_verifier(key: &KeyObject) -> Option<gnap_crypto::PublicKey> {
+    (key.proof.method() == &KeyProofingMethod::Httpsig)
+        .then(|| client_key(key))
+        .flatten()
+}
+
+/// The public key a client proves possession of to the RS: `httpsig`, `jws`,
+/// or `jwsd`, without parameters, as a JWK the method takes.
+fn client_key(key: &KeyObject) -> Option<gnap_crypto::PublicKey> {
     key.validate().ok()?;
-    if key.proof.method() != &KeyProofingMethod::Httpsig {
-        return None;
-    }
     if matches!(&key.proof, MethodOrObject::Detailed { params, .. } if !params.is_empty()) {
         return None;
     }
-    gnap_crypto::PublicKey::for_httpsig(key.jwk.as_ref()?).ok()
+    let jwk = key.jwk.as_ref()?;
+    match key.proof.method() {
+        KeyProofingMethod::Httpsig => gnap_crypto::PublicKey::for_httpsig(jwk).ok(),
+        KeyProofingMethod::Jws | KeyProofingMethod::Jwsd => {
+            gnap_crypto::PublicKey::for_jws(jwk).ok()
+        }
+        _ => None,
+    }
 }
 
 fn binding_matches(
@@ -525,7 +539,7 @@ fn binding_matches(
     let Some(key) = key else {
         return false;
     };
-    if public_verifier(key).is_none() || proof.is_some_and(|proof| proof != key.proof.method()) {
+    if client_key(key).is_none() || proof.is_some_and(|proof| proof != key.proof.method()) {
         return false;
     }
     let known = token.token.key.as_ref().map_or_else(

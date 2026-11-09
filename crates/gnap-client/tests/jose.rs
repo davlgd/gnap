@@ -1,7 +1,9 @@
 //! What a session refuses to sign with `jws` or `jwsd`, before it sends
 //! anything (RFC 9635 §2.3, §7.3.3, §7.3.4).
 
-use gnap_client::{ClientError, HttpRequest, HttpResponse, HttpTransport, Session};
+use gnap_client::{
+    sign_jose_request, ClientError, HttpRequest, HttpResponse, HttpTransport, Session,
+};
 use gnap_crypto::{Es256Signer, JwkSigner, Ps256Signer};
 use gnap_types::message::GrantRequest;
 use serde_json::{json, Value};
@@ -151,4 +153,96 @@ fn references_prove_with_httpsig_and_a_lost_start_can_be_retried() {
         2,
         "an inconclusive start can be tried again"
     );
+}
+
+/// The JOSE request helper refuses a request that already carries a proof
+/// header, in any case, and a `jws` body of another type than JSON.
+#[test]
+fn the_jose_request_helper_refuses_what_it_would_overwrite() {
+    use gnap_crypto::jws::JwsMethod;
+    let es256 = Es256Signer::generate("es256-key").unwrap();
+    for name in [
+        "authorization",
+        "SIGNATURE",
+        "Signature-Input",
+        "content-digest",
+        "detached-JWS",
+    ] {
+        let request = HttpRequest::new("GET", "https://rs.example/a").header(name, "x");
+        let result = sign_jose_request(request, JwsMethod::Jwsd, &es256, None, 1_000);
+        assert!(matches!(result, Err(ClientError::Usage(_))), "{name}");
+    }
+    let mut text =
+        HttpRequest::new("POST", "https://rs.example/a").header("Content-Type", "text/plain");
+    text.body = Some(br#"{"looks":"like json"}"#.to_vec());
+    let result = sign_jose_request(text, JwsMethod::Jws, &es256, None, 1_000);
+    assert!(matches!(result, Err(ClientError::Usage(_))), "{result:?}");
+
+    let mut twice = HttpRequest::new("POST", "https://rs.example/a")
+        .header("Content-Type", "application/json")
+        .header("content-type", "application/json");
+    twice.body = Some(br#"{"a":1}"#.to_vec());
+    let result = sign_jose_request(twice, JwsMethod::Jws, &es256, None, 1_000);
+    assert!(
+        matches!(result, Err(ClientError::Usage(_))),
+        "two types are ambiguous"
+    );
+
+    let detached = HttpRequest::new("GET", "https://rs.example/a").header("detached-jws", "x");
+    let result = gnap_client::sign_request(detached, &es256, None, 1_000);
+    assert!(
+        matches!(result, Err(ClientError::Usage(_))),
+        "httpsig refuses a JOSE field"
+    );
+}
+
+/// A `jwsd` proof keeps the body's bytes and type, a `jws` one replaces a
+/// JSON body with the compact JWS, and no body and an empty one are alike.
+#[test]
+fn the_jose_request_helper_places_each_proof() {
+    use gnap_crypto::jws::JwsMethod;
+    let es256 = Es256Signer::generate("es256-key").unwrap();
+    let header = |request: &HttpRequest, name: &str| {
+        request
+            .headers
+            .iter()
+            .filter(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut binary =
+        HttpRequest::new("PUT", "https://rs.example/a").header("Content-Type", "image/png");
+    binary.body = Some(vec![137, 80, 78, 71]);
+    let binary = binary.header("Content-Length", "4");
+    let signed = sign_jose_request(binary, JwsMethod::Jwsd, &es256, None, 1_000).unwrap();
+    assert_eq!(
+        header(&signed, "content-length"),
+        ["4"],
+        "a detached proof keeps it"
+    );
+    assert_eq!(signed.body.as_deref(), Some(&[137, 80, 78, 71][..]));
+    assert_eq!(header(&signed, "content-type"), ["image/png"]);
+    assert_eq!(header(&signed, "detached-jws").len(), 1);
+
+    let json = HttpRequest::new("POST", "https://rs.example/a")
+        .json_body(br#"{"a":1}"#.to_vec())
+        .header("Content-Length", "7");
+    let signed = sign_jose_request(json, JwsMethod::Jws, &es256, None, 1_000).unwrap();
+    assert_eq!(header(&signed, "content-type"), ["application/jose"]);
+    assert_eq!(
+        header(&signed, "content-length"),
+        [signed.body.as_ref().unwrap().len().to_string()],
+        "the declared length follows the attached JWS"
+    );
+    assert_eq!(header(&signed, "detached-jws"), Vec::<String>::new());
+    let compact = String::from_utf8(signed.body.unwrap()).unwrap();
+    assert_eq!(compact.split('.').count(), 3, "a compact JWS");
+
+    for body in [None, Some(Vec::new())] {
+        let mut request = HttpRequest::new("DELETE", "https://rs.example/a");
+        request.body = body;
+        let signed = sign_jose_request(request, JwsMethod::Jws, &es256, None, 1_000).unwrap();
+        assert_eq!(header(&signed, "detached-jws").len(), 1);
+        assert_eq!(header(&signed, "content-type"), Vec::<String>::new());
+    }
 }
