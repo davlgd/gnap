@@ -153,7 +153,7 @@ mod tests {
             "n".into(),
             serde_json::json!(URL_SAFE_NO_PAD.encode(modulus)),
         );
-        assert!(Ps256Verifier::from_public_jwk(&public).is_ok());
+        assert!(PublicKey::for_httpsig(&public).is_ok());
         let request: GrantRequest = serde_json::from_value(serde_json::json!({
             "client": {"key": {"proof": "httpsig", "jwk": public}},
             "access_token": {"access": ["synthetic-read"]}
