@@ -10,12 +10,16 @@ use crate::jwk;
 use crate::proof::{JwkSigner, ProofError, Signer, Verifier};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey};
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 /// Length, in bytes, of an Ed25519 public key and of its private seed.
 const KEY_BYTES: usize = 32;
+
+/// Length, in bytes, of an Ed25519 signature (RFC 8032 §5.1.6). The type of
+/// `Signature::from_bytes` must agree with it, or this crate doesn't compile.
+const SIGNATURE_BYTES: usize = 64;
 
 /// An Ed25519 private key used for `EdDSA` signatures.
 pub struct Ed25519Signer {
@@ -171,8 +175,8 @@ impl Ed25519Verifier {
 
 impl Verifier for Ed25519Verifier {
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), ProofError> {
-        let bytes: &[u8; SIGNATURE_LENGTH] = signature.try_into().map_err(|_| {
-            ProofError::Verification(format!("an Ed25519 signature has {SIGNATURE_LENGTH} bytes"))
+        let bytes: &[u8; SIGNATURE_BYTES] = signature.try_into().map_err(|_| {
+            ProofError::Verification(format!("an Ed25519 signature has {SIGNATURE_BYTES} bytes"))
         })?;
         self.inner
             .verify_strict(data, &Signature::from_bytes(bytes))
