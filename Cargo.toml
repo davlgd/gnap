@@ -34,6 +34,7 @@ rsa = "0.10"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 ed25519-dalek = { version = "3.0", default-features = false, features = ["fast", "zeroize", "pem"] }
 p256 = { version = "0.14", default-features = false, features = ["std", "ecdsa", "pem"] }
+zeroize = "1"
 
 [workspace.lints.rust]
 missing_docs = "deny"

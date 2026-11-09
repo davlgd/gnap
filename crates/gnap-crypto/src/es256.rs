@@ -17,6 +17,7 @@ use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use p256::pkcs8::DecodePrivateKey;
 use p256::pkcs8::DecodePublicKey;
 use serde_json::{Map, Value};
+use zeroize::Zeroizing;
 
 /// Length, in bytes, of a P-256 field element, and so of each coordinate and
 /// of each half of a signature.
@@ -41,10 +42,10 @@ impl Es256Signer {
     /// Fails when the random source is unavailable.
     pub fn generate(key_id: impl Into<String>) -> Result<Self, ProofError> {
         for _ in 0..MAX_GENERATION_DRAWS {
-            let mut scalar = [0u8; FIELD_BYTES];
-            getrandom::fill(&mut scalar)
+            let mut scalar = Zeroizing::new([0u8; FIELD_BYTES]);
+            getrandom::fill(scalar.as_mut())
                 .map_err(|e| ProofError::Key(format!("generation: {e}")))?;
-            if let Ok(inner) = SigningKey::from_slice(&scalar) {
+            if let Ok(inner) = SigningKey::from_slice(scalar.as_ref()) {
                 return Ok(Self {
                     inner,
                     key_id: key_id.into(),

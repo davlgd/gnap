@@ -353,8 +353,9 @@ fn every_key_type_signs_and_verifies_a_gnap_request() {
     }
 }
 
-/// The identity point is a weak Ed25519 key: with it, a signature of zeros
-/// passes the permissive check. Neither import builds a verifier from it, so
+/// The identity point is a weak Ed25519 key: with it, the signature whose `R`
+/// is the identity and whose `s` is zero, a byte 1 then 63 zeros, passes the
+/// permissive check. Neither import builds a verifier from it, so
 /// no such key reaches the strict verifier.
 #[test]
 fn neither_ed25519_import_accepts_the_identity_key() {

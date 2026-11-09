@@ -12,6 +12,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey};
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SIGNATURE_LENGTH};
 use serde_json::{Map, Value};
+use zeroize::Zeroizing;
 
 /// Length, in bytes, of an Ed25519 public key and of its private seed.
 const KEY_BYTES: usize = 32;
@@ -29,8 +30,8 @@ impl Ed25519Signer {
     ///
     /// Fails when the random source is unavailable.
     pub fn generate(key_id: impl Into<String>) -> Result<Self, ProofError> {
-        let mut seed = [0u8; KEY_BYTES];
-        getrandom::fill(&mut seed).map_err(|e| ProofError::Key(format!("generation: {e}")))?;
+        let mut seed = Zeroizing::new([0u8; KEY_BYTES]);
+        getrandom::fill(seed.as_mut()).map_err(|e| ProofError::Key(format!("generation: {e}")))?;
         Ok(Self {
             inner: SigningKey::from_bytes(&seed),
             key_id: key_id.into(),
