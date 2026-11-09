@@ -2,7 +2,7 @@
 
 HTTP Message Signature proofs, content digests and interaction hashes for GNAP. Use this crate to sign requests and verify the cryptographic binding between a request, its key, its content and any presented token.
 
-The supplied key adapter uses RSA-PSS with SHA-256 (PS256). It can generate keys, import supported PEM material, export a public JWK and build a verifier from a validated public JWK. Key possession doesn't establish identity or authorization.
+The key adapters cover RSA-PSS with SHA-256 (PS256), ECDSA on P-256 (ES256), and Ed25519 (EdDSA). Each can generate a key, import PEM material, and export a public JWK, and `PublicKey::from_jwk` builds the verifier that a public JWK's `kty`, `crv`, and `alg` call for. Key possession doesn't establish identity or authorization.
 
 ## Explore request signing
 

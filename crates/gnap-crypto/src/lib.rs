@@ -7,20 +7,26 @@
 //! [9635]: https://www.rfc-editor.org/rfc/rfc9635
 
 pub mod digest;
+pub mod ed25519;
+pub mod es256;
 pub mod hash;
 pub mod httpsig;
+pub mod jwk;
 pub mod proof;
 pub mod ps256;
 pub mod rotation;
 pub mod verify;
 
 pub use digest::{content_digest, verify_content_digest, DigestAlgorithm};
+pub use ed25519::{Ed25519Signer, Ed25519Verifier};
+pub use es256::{Es256Signer, Es256Verifier};
 pub use hash::{
     interaction_hash, interaction_hash_named, verify_interaction_hash, HashError, HashMethod,
     InteractionHashInput,
 };
 pub use httpsig::{parse_signature_params, parse_signatures, LabelledSignature, ReceivedParams};
-pub use proof::{ProofError, Signer, Verifier};
+pub use jwk::PublicKey;
+pub use proof::{JwkSigner, ProofError, Signer, Verifier};
 pub use ps256::{Ps256Signer, Ps256Verifier, MAX_MODULUS_BITS, MIN_MODULUS_BITS};
 pub use rotation::{verify_key_rotation, AcceptedRotation, RotationNonceMemory, RotationProof};
 pub use verify::{

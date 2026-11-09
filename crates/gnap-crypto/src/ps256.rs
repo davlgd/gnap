@@ -10,7 +10,8 @@
 //! That is also why the `httpsig` crate cannot provide it: its `AlgorithmName`
 //! follows the registry. So it is implemented here.
 
-use crate::proof::{ProofError, Signer, Verifier};
+use crate::jwk;
+use crate::proof::{JwkSigner, ProofError, Signer, Verifier};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
@@ -19,7 +20,7 @@ use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier as _};
 use rsa::traits::PublicKeyParts;
 use rsa::{BoxedUint, PrivateKey, PublicKey};
 use serde_json::{Map, Value};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 /// An RSA private key used with `PS256`.
 pub struct Ps256Signer {
@@ -110,7 +111,7 @@ impl Ps256Signer {
     /// Fails if the key identifier is outside the limits that
     /// [`Ps256Verifier::from_public_jwk`] accepts.
     pub fn public_jwk(&self) -> Result<Map<String, Value>, ProofError> {
-        validate_key_id(&self.key_id)?;
+        jwk::validate_key_id(&self.key_id)?;
         Ok(Map::from_iter([
             ("kty".into(), Value::String("RSA".into())),
             (
@@ -129,6 +130,16 @@ impl Ps256Signer {
             ("kid".into(), Value::String(self.key_id.clone())),
             ("key_ops".into(), serde_json::json!(["verify"])),
         ]))
+    }
+}
+
+impl JwkSigner for Ps256Signer {
+    fn public_jwk(&self) -> Result<Map<String, Value>, ProofError> {
+        Self::public_jwk(self)
+    }
+
+    fn thumbprint(&self) -> String {
+        Self::thumbprint(self)
     }
 }
 
@@ -154,6 +165,7 @@ impl Signer for Ps256Signer {
 }
 
 /// An RSA public key used with `PS256`.
+#[derive(Clone)]
 pub struct Ps256Verifier {
     inner: VerifyingKey<Sha256>,
     key_id: Option<String>,
@@ -206,28 +218,13 @@ impl Ps256Verifier {
     /// Returns [`ProofError::Key`] for unsupported metadata, private material,
     /// malformed integers or an RSA key outside the constraints above.
     pub fn from_public_jwk(jwk: &Map<String, Value>) -> Result<Self, ProofError> {
-        if jwk_string(jwk, "kty")? != "RSA" || jwk_string(jwk, "alg")? != "PS256" {
-            return Err(jwk_error("expected kty RSA and alg PS256"));
+        if jwk::string(jwk, "kty")? != "RSA" || jwk::string(jwk, "alg")? != "PS256" {
+            return Err(jwk::error("expected kty RSA and alg PS256"));
         }
-        let key_id = jwk_string(jwk, "kid")?;
-        validate_key_id(key_id)?;
-        for field in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
-            if jwk.contains_key(field) {
-                return Err(jwk_error("private key parameters are not accepted"));
-            }
-        }
-        for field in ["x5c", "x5u", "x5t", "x5t#S256"] {
-            if jwk.contains_key(field) {
-                return Err(jwk_error(
-                    "certificate parameters need a certificate-aware adapter",
-                ));
-            }
-        }
-        validate_jwk_usage(jwk)?;
+        let key_id = jwk::common(jwk, &["d", "p", "q", "dp", "dq", "qi", "oth", "k"])?;
         let n = jwk_uint(jwk, "n", MAX_MODULUS_BITS / 8)?;
         let e = jwk_uint(jwk, "e", MAX_EXPONENT_BYTES)?;
-        let public =
-            PublicKey::new(n, e).map_err(|error| ProofError::Key(format!("JWK: {error}")))?;
+        let public = PublicKey::new(n, e).map_err(|error| jwk::error(&error.to_string()))?;
         check_modulus_bits(public.n().bit_width() as usize)?;
         Ok(Self {
             inner: VerifyingKey::<Sha256>::from(public),
@@ -281,25 +278,6 @@ impl Verifier for Ps256Verifier {
     }
 }
 
-fn jwk_error(message: &str) -> ProofError {
-    ProofError::Key(format!("JWK: {message}"))
-}
-
-fn jwk_string<'a>(jwk: &'a Map<String, Value>, field: &str) -> Result<&'a str, ProofError> {
-    jwk.get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| jwk_error(&format!("{field} must be a string")))
-}
-
-fn validate_key_id(key_id: &str) -> Result<(), ProofError> {
-    if key_id.is_empty() || key_id.len() > MAX_KEY_ID_BYTES {
-        return Err(jwk_error(&format!(
-            "kid must contain 1–{MAX_KEY_ID_BYTES} bytes"
-        )));
-    }
-    Ok(())
-}
-
 /// Smallest RSA modulus, in bits, that this profile accepts for any key.
 pub const MIN_MODULUS_BITS: usize = 2048;
 
@@ -309,15 +287,6 @@ pub const MIN_MODULUS_BITS: usize = 2048;
 /// constant moved from 4096 to 8192 in rsa 0.10, so borrowing it would have
 /// silently widened what this profile accepts.
 pub const MAX_MODULUS_BITS: usize = 4096;
-
-/// Longest `kid`, in bytes.
-const MAX_KEY_ID_BYTES: usize = 1024;
-
-/// Longest `key_ops` entry, in bytes.
-const MAX_KEY_OPERATION_BYTES: usize = 1024;
-
-/// Most `key_ops` entries in an imported JWK.
-const MAX_KEY_OPERATIONS: usize = 32;
 
 /// Longest public exponent, in bytes: the `rsa` backend accepts at most 2³³−1.
 const MAX_EXPONENT_BYTES: usize = 5;
@@ -337,67 +306,27 @@ fn jwk_uint(
     field: &str,
     max_bytes: usize,
 ) -> Result<BoxedUint, ProofError> {
-    let encoded = jwk_string(jwk, field)?;
+    let encoded = jwk::string(jwk, field)?;
     if encoded.is_empty() || encoded.len() > (max_bytes * 8).div_ceil(6) {
-        return Err(jwk_error(&format!(
+        return Err(jwk::error(&format!(
             "{field} has an unsupported encoded size"
         )));
     }
     let bytes = URL_SAFE_NO_PAD
         .decode(encoded)
-        .map_err(|_| jwk_error(&format!("{field} must be unpadded base64url")))?;
+        .map_err(|_| jwk::error(&format!("{field} must be unpadded base64url")))?;
     if bytes.first() == Some(&0) || bytes.len() > max_bytes {
-        return Err(jwk_error(&format!(
+        return Err(jwk::error(&format!(
             "{field} must be a minimal positive integer"
         )));
     }
     Ok(BoxedUint::from_be_slice_vartime(&bytes))
 }
 
-fn validate_jwk_usage(jwk: &Map<String, Value>) -> Result<(), ProofError> {
-    if jwk.contains_key("use") && jwk_string(jwk, "use")? != "sig" {
-        return Err(jwk_error("use must be sig for signature verification"));
-    }
-    let Some(operations) = jwk.get("key_ops") else {
-        return Ok(());
-    };
-    let operations = operations
-        .as_array()
-        .ok_or_else(|| jwk_error("key_ops must be an array"))?;
-    if operations.len() > MAX_KEY_OPERATIONS {
-        return Err(jwk_error(&format!(
-            "key_ops exceeds the {MAX_KEY_OPERATIONS}-operation limit"
-        )));
-    }
-    let mut seen = std::collections::HashSet::new();
-    for operation in operations {
-        let operation = operation
-            .as_str()
-            .ok_or_else(|| jwk_error("key_ops entries must be strings"))?;
-        if operation.len() > MAX_KEY_OPERATION_BYTES || !seen.insert(operation) {
-            return Err(jwk_error(
-                "key_ops contains a duplicate or oversized operation",
-            ));
-        }
-        if matches!(
-            operation,
-            "encrypt" | "decrypt" | "wrapKey" | "unwrapKey" | "deriveKey" | "deriveBits"
-        ) {
-            return Err(jwk_error("key_ops includes an incompatible operation"));
-        }
-    }
-    if !seen.contains("verify") {
-        return Err(jwk_error("key_ops does not permit verification"));
-    }
-    Ok(())
-}
 fn thumbprint(key: &PublicKey) -> String {
-    // Base64url integers contain no JSON escapes; this fixes member order even
-    // when a consumer enables serde_json's preserve_order feature.
     let e = URL_SAFE_NO_PAD.encode(key.e().to_be_bytes_trimmed_vartime());
     let n = URL_SAFE_NO_PAD.encode(key.n().to_be_bytes_trimmed_vartime());
-    let canonical = format!(r#"{{"e":"{e}","kty":"RSA","n":"{n}"}}"#);
-    URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()))
+    jwk::thumbprint(&[("e", &e), ("kty", "RSA"), ("n", &n)])
 }
 
 #[cfg(test)]
