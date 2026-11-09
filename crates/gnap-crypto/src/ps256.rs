@@ -93,7 +93,7 @@ impl Ps256Signer {
     ///
     /// Includes `kty`, `n`, `e`, `alg: PS256`, `kid` and `key_ops: [verify]`.
     /// The returned map can be assigned directly to `KeyObject::jwk` in
-    /// `gnap-types`; this crate has no dependency on GNAP message types.
+    /// `gnap-types`.
     ///
     /// # Errors
     ///

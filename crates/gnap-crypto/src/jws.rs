@@ -20,10 +20,12 @@ mod replay;
 
 pub use replay::{JwsReplayMemory, ReplayCache, ReplayId};
 
-use crate::jwk::{PublicKey, JWS_ALGORITHMS};
+use crate::jwk::{PublicKey, JWS_ALGORITHMS, MAX_KEY_ID_BYTES};
 use crate::proof::{ProofError, Signer, Verifier};
 use crate::verify::{Expectations, SignedRequest, VerifyError};
 use compact::{decode, encode, typ, Header, Role, Segments};
+use gnap_types::token::TokenValue;
+use gnap_types::uri;
 use sha2::{Digest as _, Sha256};
 use std::borrow::Cow;
 
@@ -68,16 +70,28 @@ impl JwsMethod {
 }
 
 /// What a JWS proof covers of the request it signs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct JwsParams<'a> {
     /// The HTTP method, which the proof compares case-sensitively.
     pub method: &'a str,
-    /// The absolute target URI, without fragment.
+    /// The target URI: an `absolute-URI` of RFC 3986 §4.3, which has no
+    /// fragment.
     pub target_uri: &'a str,
     /// The creation time, in seconds since the Unix epoch.
     pub created: u64,
     /// The access token the request presents in `Authorization`, if any.
     pub access_token: Option<&'a str>,
+}
+
+impl core::fmt::Debug for JwsParams<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("JwsParams")
+            .field("method", &self.method)
+            .field("target_uri", &self.target_uri)
+            .field("created", &self.created)
+            .field("access_token", &self.access_token.map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// A signed JWS proof, and where the request carries it.
@@ -450,10 +464,10 @@ impl<'c> Parsed<'c> {
                 return Err(format!("the JWS kid must be {expected}"));
             }
         }
-        if header.htm != request.method {
+        if header.htm != request.method || !is_token(&header.htm) {
             return Err("the JWS htm must be the request method".into());
         }
-        if header.uri != request.target_uri || !absolute_without_fragment(&header.uri) {
+        if header.uri != request.target_uri || !uri::is_absolute(&header.uri) {
             return Err("the JWS uri must be the absolute request URI, without fragment".into());
         }
         let Expectations {
@@ -505,12 +519,22 @@ fn header(
             "the request method isn't a token".into(),
         ));
     }
-    if !absolute_without_fragment(params.target_uri) {
+    if !uri::is_absolute(params.target_uri) {
         return Err(ProofError::Signing(
             "the target URI must be absolute, without fragment".into(),
         ));
     }
+    if params.access_token.is_some_and(|token| !is_token68(token)) {
+        return Err(ProofError::Signing(
+            "the access token isn't a token68 value".into(),
+        ));
+    }
     let kid = signer.key_id();
+    if kid.len() > MAX_KEY_ID_BYTES {
+        return Err(ProofError::Signing(format!(
+            "the key identifier is longer than {MAX_KEY_ID_BYTES} bytes"
+        )));
+    }
     Ok(Header {
         alg: alg.into(),
         kid: (!kid.is_empty()).then(|| kid.into()),
@@ -593,26 +617,9 @@ fn access_token<'r>(request: &'r SignedRequest<'_>) -> Result<Option<&'r str>, S
 }
 
 /// Whether a value is a `token68` (RFC 9110 §11.2), the syntax of an access
-/// token value (RFC 9635 §3.2.1), as `gnap_types::token::TokenValue` checks it: a
-/// test holds the two to the same answers.
+/// token value (RFC 9635 §3.2.1).
 fn is_token68(value: &str) -> bool {
-    let body = value.trim_end_matches('=');
-    !body.is_empty()
-        && body
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-._~+/".contains(&b))
-}
-
-/// Whether a URI is absolute and has no fragment (RFC 3986 §4.3).
-fn absolute_without_fragment(uri: &str) -> bool {
-    let Some((scheme, rest)) = uri.split_once(':') else {
-        return false;
-    };
-    let mut scheme = scheme.bytes();
-    scheme.next().is_some_and(|b| b.is_ascii_alphabetic())
-        && scheme.all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
-        && !rest.is_empty()
-        && uri.bytes().all(|b| b.is_ascii_graphic() && b != b'#')
+    TokenValue::new(value).is_ok()
 }
 
 /// Whether a method is an HTTP token (RFC 9110 §5.6.2).

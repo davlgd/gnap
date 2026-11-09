@@ -70,7 +70,7 @@ const fn params(token: Option<&str>) -> JwsParams<'_> {
 
 /// A request as it travels: its headers, and the content it carries.
 struct Wire {
-    method: &'static str,
+    method: String,
     uri: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
@@ -79,7 +79,7 @@ struct Wire {
 impl Wire {
     fn new(proof: JwsProof, content: &[u8], token: Option<&str>) -> Self {
         let mut wire = Self {
-            method: "POST",
+            method: "POST".into(),
             uri: URI.into(),
             headers: Vec::new(),
             body: Vec::new(),
@@ -112,7 +112,7 @@ impl Wire {
 
     fn request(&self) -> SignedRequest<'_> {
         SignedRequest {
-            method: self.method,
+            method: &self.method,
             target_uri: &self.uri,
             headers: &self.headers,
             body: Some(&self.body),
@@ -859,7 +859,7 @@ fn the_method_and_uri_match_the_request() {
         CONTENT,
         None,
     );
-    put.method = "PUT";
+    put.method = "PUT".into();
     assert!(rejection(check(&put)).contains("htm"));
     let mut elsewhere = Wire::new(
         sign_jws(JwsMethod::Jwsd, &params(None), CONTENT, &signer).unwrap(),
@@ -894,7 +894,7 @@ fn the_method_and_uri_match_the_request() {
         CONTENT,
         None,
     );
-    delete.method = "DELETE";
+    delete.method = "DELETE".into();
     check(&delete).expect("a method usually without content may still have some");
 }
 
@@ -1029,8 +1029,8 @@ fn a_detached_rotation_binds_the_content_through_the_inner_proof() {
     assert!(cache.is_empty());
 }
 
-/// The access token grammar is `token68`, the one `gnap_types::TokenValue`
-/// enforces: the two give the same answer for every sample.
+/// The access token grammar is the `token68` of `gnap_types::token::TokenValue`,
+/// for the verifier as for the signer.
 #[test]
 fn the_access_token_grammar_is_the_one_of_token_values() {
     let signer = ed25519();
@@ -1048,11 +1048,27 @@ fn the_access_token_grammar_is_the_one_of_token_values() {
         "é",
         "a%20b",
     ] {
-        let wire = Wire::new(
-            sign_jws(JwsMethod::Jwsd, &params(Some(token)), CONTENT, &signer).unwrap(),
-            CONTENT,
-            Some(token),
+        let valid = gnap_types::token::TokenValue::new(token).is_ok();
+        assert_eq!(
+            sign_jws(JwsMethod::Jwsd, &params(Some(token)), CONTENT, &signer).is_ok(),
+            valid,
+            "signing with {token:?}"
         );
+        let reference =
+            sign_jws(JwsMethod::Jwsd, &params(Some("token")), CONTENT, &signer).unwrap();
+        let JwsProof::Detached(compact) = reference else {
+            panic!("jwsd is detached");
+        };
+        let mut header = jwsd_header(&signer);
+        header["ath"] = json!(URL_SAFE_NO_PAD.encode(digest(token.as_bytes())));
+        let forged = forge(
+            &header,
+            &URL_SAFE_NO_PAD
+                .decode(compact.split('.').nth(1).unwrap())
+                .unwrap(),
+            &signer,
+        );
+        let wire = Wire::new(JwsProof::Detached(forged), CONTENT, Some(token));
         let accepted = verify_jws_request(
             JwsMethod::Jwsd,
             &wire.request(),
@@ -1060,11 +1076,7 @@ fn the_access_token_grammar_is_the_one_of_token_values() {
             &forgetful(),
         )
         .is_ok();
-        assert_eq!(
-            accepted,
-            gnap_types::token::TokenValue::new(token).is_ok(),
-            "{token:?}"
-        );
+        assert_eq!(accepted, valid, "verifying with {token:?}");
     }
 }
 
@@ -1253,4 +1265,78 @@ fn signing_applies_the_verifier_bounds() {
         &signer,
     )
     .expect("a detached proof signs only the digest");
+}
+
+/// The verifier holds `htm` and `uri` to the grammar the signer applies,
+/// even when the request carries the same malformed value.
+#[test]
+fn the_verifier_applies_the_signer_grammars() {
+    let signer = ed25519();
+    let public = PublicKey::for_jws(&signer.public_jwk().unwrap()).unwrap();
+    for method in ["PO ST", "", "MÉTHOD"] {
+        let mut header = jwsd_header(&signer);
+        header["htm"] = json!(method);
+        let mut wire = Wire::new(
+            JwsProof::Detached(forge(&header, &digest(CONTENT), &signer)),
+            CONTENT,
+            None,
+        );
+        wire.method = method.into();
+        let reason = rejection(verify_jws_request(
+            JwsMethod::Jwsd,
+            &wire.request(),
+            &key(&public, "client"),
+            &forgetful(),
+        ));
+        assert!(reason.contains("htm"), "{method:?}: {reason}");
+        let params = JwsParams {
+            method,
+            ..params(None)
+        };
+        assert!(
+            sign_jws(JwsMethod::Jwsd, &params, CONTENT, &signer).is_err(),
+            "{method:?}"
+        );
+    }
+    for uri in [
+        "https://server.example.com/%ZZ",
+        "https://[broken/gnap",
+        "https://server.example.com/{bad}",
+        "https://server.example.com/gnap#part",
+    ] {
+        let mut header = jwsd_header(&signer);
+        header["uri"] = json!(uri);
+        let mut wire = Wire::new(
+            JwsProof::Detached(forge(&header, &digest(CONTENT), &signer)),
+            CONTENT,
+            None,
+        );
+        wire.uri = uri.into();
+        let reason = rejection(verify_jws_request(
+            JwsMethod::Jwsd,
+            &wire.request(),
+            &key(&public, "client"),
+            &forgetful(),
+        ));
+        assert!(reason.contains("uri"), "{uri}: {reason}");
+        let params = JwsParams {
+            target_uri: uri,
+            ..params(None)
+        };
+        assert!(
+            sign_jws(JwsMethod::Jwsd, &params, CONTENT, &signer).is_err(),
+            "{uri}"
+        );
+    }
+}
+
+/// The signer refuses a key identifier its verifier would refuse, and the
+/// `Debug` output of the parameters hides the access token.
+#[test]
+fn the_signer_refuses_what_its_verifier_refuses() {
+    let long = Ed25519Signer::from_pkcs8_pem(ED25519_PKCS8, "k".repeat(1025)).unwrap();
+    assert!(sign_jws(JwsMethod::Jwsd, &params(None), CONTENT, &long).is_err());
+    let debug = format!("{:?}", params(Some("synthetic-secret-token")));
+    assert!(!debug.contains("synthetic-secret-token"), "{debug}");
+    assert!(debug.contains("<redacted>"), "{debug}");
 }
