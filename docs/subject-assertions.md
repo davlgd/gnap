@@ -1,107 +1,48 @@
 # Identity assertions in a GNAP grant
 
-GNAP can return information about the resource owner alongside access tokens.
-These serve different purposes: a subject assertion identifies a party under an
-issuer; an access token authorizes a resource request. Neither substitutes for
-the other. The rules are in [RFC 9635 §3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.4),
-which refers to the [OpenID Connect ID Token format](https://openid.net/specs/openid-connect-core-1_0.html#IDToken).
+GNAP can return information about the resource owner alongside access tokens, and the two serve different purposes: a subject assertion identifies a party under an issuer, while an access token authorizes a resource request. Neither replaces the other. [RFC 9635 §3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.4) gives the rules, and refers to the [OpenID Connect ID Token format](https://openid.net/specs/openid-connect-core-1_0.html#IDToken).
 
-`gnap-subject` supplies a bounded PS256 issuer and verifier. It does not implement
-an OpenID Provider, OpenID Connect discovery, JWT access tokens or encrypted
-assertions. `gnap-types::Assertion::issuer_subject` remains a decoding helper
-for consistency checks; it must not authenticate a user.
+`gnap-subject` issues and verifies PS256-signed assertions within a bounded profile. It doesn't implement an OpenID Provider, OpenID Connect discovery, JWT access tokens, or encrypted assertions. `gnap-types::Assertion::issuer_subject` only decodes an assertion for consistency checks, and must never authenticate a user.
 
-## Trust belongs to the application
+## Configure the trust
 
-Configure an exact GNAP grant endpoint, an exact HTTPS issuer and that issuer's
-dedicated public assertion key together, using `gnap_subject::Trust`. Do not
-build this configuration from a received JWT. The library permits a separately
-configured issuer at another origin; that is an explicit trust decision, not a
-discovery result. The demo uses its own HTTPS origin as issuer.
+Pair an exact GNAP grant endpoint, an exact HTTPS issuer, and that issuer's dedicated public assertion key in a `gnap_subject::Trust`, and never build this configuration from a received JWT. The issuer can sit at another origin than the authorization server, as an explicit trust decision rather than a discovery result. The delegation lab uses its own HTTPS origin as issuer.
 
-The client convenience method `Session::verify_subject` is available for a
-`Ps256Signer`. It checks the retained subject response using:
+## Verify from a client session
 
-- the actual endpoint contacted by the session;
-- the SHA-256 [RFC 7638 thumbprint](https://www.rfc-editor.org/rfc/rfc7638.html)
-  of its original HTTP proof key as audience;
-- its retained interaction finish nonce as the assertion nonce;
-- the caller's current time and configured assertion lifetime/age limits.
+For a `Ps256Signer`, `Session::verify_subject` checks the subject response that the session retained, using:
 
-The audience and nonce mappings are **project conventions**, agreed by this
-AS and client. GNAP does not define an OAuth `client_id` or require either
-mapping. A polling-only session without a finish nonce cannot use this
-convenience method. Rotating a resource token's key does not change the
-original grant key or assertion audience.
+- The endpoint the session actually contacted
+- The SHA-256 [RFC 7638 thumbprint](https://www.rfc-editor.org/rfc/rfc7638.html) of its original proof key, as audience
+- Its interaction finish nonce, as the assertion nonce
+- Your current time, and your limits on lifetime and age
 
-On success, the client returns only checked identity and time claims, together
-with the responding AS endpoint. Use the complete `(AS endpoint, issuer,
-subject)` attribution when identifying an account. An email or an opaque value
-alone is not a globally unique account key, a contact address or a credential.
-Recheck an assertion at the time of use; the result records expiration but is
-not an automatically expiring application login session.
+The audience and nonce mappings are **conventions of this project**, which its authorization server and client agree on: GNAP defines no OAuth `client_id`, and requires neither mapping. A session that only polls, without a finish nonce, can't use this method. Rotating the key of a resource token changes neither the grant key nor the audience of the assertion.
 
-## Selected verification profile
+On success, the client returns the checked identity and time claims, with the endpoint of the authorization server that answered. Identify an account by the whole `(AS endpoint, issuer, subject)` triple: an email or an opaque value alone isn't a globally unique account key, a contact address, or a credential. Recheck an assertion when you use it: the result records its expiry, but isn't a self-expiring login session.
 
-The verifier checks the exact compact JWS signature before interpreting claims.
-It accepts only PS256 with a pinned 2048–4096-bit RSA key, and caps the compact
-assertion at 8192 bytes. Duplicate top-level JSON members, malformed encodings,
-critical JOSE extensions and JWT-supplied key material or URLs are refused.
-No keys are fetched during validation. A present `kid` must match the pinned
-verifier; a PEM import therefore needs `with_key_id` when the token carries one.
-An absent `kid` can use the single configured key.
+## Verification profile
 
-Required claims are `iss`, `sub`, `aud`, `nonce`, `iat`, `exp` and `auth_time`.
-This profile requires integral, nonnegative Unix seconds; `auth_time` may not
-follow `iat`, and `exp` must follow it. A subject has 1–255 ASCII characters.
-The audience must contain only the configured client identifier. If supplied,
-`azp` must identify that same client, and `nbf` must not be in the future beyond
-the configured clock tolerance. Tolerance is capped at 300 seconds.
-`max_age` bounds both assertion age and issued lifetime; it is **not** the
-OpenID Connect authentication-request parameter of that name and does not
-enforce recent user authentication.
+The verifier checks the compact JWS signature before it reads any claim. It accepts only PS256, with a pinned RSA key of 2048 to 4096 bits, and assertions of up to 8,192 bytes. It refuses duplicate top-level JSON members, malformed encodings, critical JOSE extensions, and key material or URLs supplied by the JWT, and fetches no key. A `kid` that's present must match the pinned verifier, so import a PEM key with `with_key_id` when the tokens carry one; without a `kid`, the single configured key applies.
 
-`Trust::verify_subject` requires exactly one assertion. Every accompanying
-`iss_sub` identifier must exactly match the verified `(iss, sub)`. This is
-stricter than GNAP, which allows different identifiers if they represent the
-same party. Other formats, including `opaque`, are not independently verified
-or returned as verified claims. Their relationship to the identity is the AS
-policy's responsibility, not something a signature check can discover.
+The required claims are `iss`, `sub`, `aud`, `nonce`, `iat`, `exp`, and `auth_time`, and the three dates are nonnegative integer Unix seconds. `auth_time` can't follow `iat`, and `exp` must follow it. A subject has 1 to 255 ASCII characters, and the audience must contain only the configured client identifier. A supplied `azp` must name that same client, and a supplied `nbf` can't be in the future beyond the clock tolerance, which is capped at 300 seconds.
 
-Unknown noncritical claims are ignored and not exposed as trusted data.
-Returned errors and the verified identity's debug representation omit claims,
-nonces and token values. Applications must apply the same care when logging
-raw GNAP wire messages.
+`max_age` bounds both the age of an assertion and its issued lifetime. It isn't the OpenID Connect authentication-request parameter of the same name, and doesn't enforce a recent user authentication.
 
-## Release and demonstration boundaries
+`Trust::verify_subject` requires exactly one assertion, and each accompanying `iss_sub` identifier must match the verified `(iss, sub)` exactly. That's stricter than GNAP, which allows different identifiers for the same party. Other formats, `opaque` included, aren't verified or returned as verified claims: their link to the identity is a policy decision of the authorization server, which no signature check can discover.
 
-The existing AS `ReleasedSubject` policy boundary remains mandatory. Issuing
-a valid signature does not establish that the end user and resource owner are
-the same person. The policy must establish a release ground and authorize the
-requested disclosure. Assertions sent by a client are only untrusted hints;
-this profile does not let them bypass consent.
+The verifier ignores unknown noncritical claims, without exposing them as trusted data. Errors, and the debug output of a verified identity, leave out claims, nonces, and token values; apply the same care when you log raw GNAP messages.
 
-The delegation demo's identity option illustrates explicit consent for one
-fictional owner and this application's shared proof key. Identity disclosure
-is restricted to enrolled demo client references: a by-value
-client key or another key impersonating a reference is refused. Its dedicated
-assertion key and opaque identifier are generated in memory, not loaded from
-test fixtures. They change on restart. This is not real user authentication,
-general pairwise-identifier management, persistent account linking or an
-independent-vendor interoperability test. Its identity grant closes after
-issuance; the ID Token is never presented to a resource server.
+## Release the identity
+
+The authorization server's `ReleasedSubject` policy stays mandatory. A valid signature doesn't establish that the end user and the resource owner are the same person: the policy must establish a ground for release and authorize the requested disclosure. Assertions that a client sends are untrusted hints, which can't bypass consent in this profile.
+
+The identity option of the delegation lab shows explicit consent for one fictional owner and the lab's shared proof key. It discloses identity only to enrolled client references, and refuses a client key sent by value or a key that impersonates a reference. Its assertion key and opaque identifier are generated in memory at startup, not loaded from test fixtures, and change on restart. The identity grant closes after issuance, and the ID Token never reaches a resource server.
+
+This option isn't a real user authentication, a general pairwise-identifier service, a persistent account linking, or an interoperability test with an independent vendor.
 
 ## Evidence
 
-The [assertion tests](../crates/gnap-subject/tests/id_token.rs) cover issuance,
-pinned keys, hostile headers/claims, time boundaries, encoding, size and
-identity consistency. The [client tests](../crates/gnap-client/tests/flow/subject_assertions.rs)
-exercise endpoint, key and nonce binding through the real session state
-machine with a scripted transport. They do not exercise a network or establish
-full C1/C2 profile conformance.
+The [assertion tests](../crates/gnap-subject/tests/id_token.rs) cover issuance, pinned keys, hostile headers and claims, time boundaries, encoding, size, and identity consistency. The [client tests](../crates/gnap-client/tests/flow/subject_assertions.rs) check the binding to the endpoint, key, and nonce through the real session state machine and a scripted transport, without a network, and don't establish full conformance to the C1 or C2 profile.
 
-The [demo tests](../apps/delegation-demo/src/identity/tests.rs) drive its actual
-AS policy and client through an in-memory transport: consent and refusal,
-closed continuation, wrong recipients and key impersonation, disclosure and
-expiry. This is executable integration evidence, not a deployed HTTPS or
-browser-engine identity test.
+The [lab tests](../apps/delegation-demo/src/identity/tests.rs) drive its real authorization-server policy and client through an in-memory transport: consent and refusal, closed continuation, wrong recipients and impersonated keys, disclosure, and expiry. That's executable integration evidence, not an identity test over deployed HTTPS or in a real browser engine.
