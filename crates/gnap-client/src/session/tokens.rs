@@ -133,28 +133,36 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         presented: &Key,
         now: u64,
     ) -> Result<AccessToken, ClientError> {
-        let (object, verifier) = rotation::presentable(presented, replacement.as_ref())?;
+        let (object, verifier) =
+            rotation::presentable(presented, replacement.as_ref(), self.session_proof())?;
         let (index, manage) = self.managed(label)?;
         let previous_value = self.held_value(index)?;
         let (proof, current) = self.presentation(index)?;
-        if proof != SessionProof::Httpsig {
-            return Err(ClientError::Usage(
-                "this session proves the token's key with jws or jwsd, and changing such a \
-                 key isn't supported (RFC 9635 §7.3.3.1, §7.3.4.1)"
-                    .into(),
-            ));
-        }
         let body = serde_json::to_vec(&serde_json::json!({ "key": object }))
             .map_err(|e| ClientError::Usage(format!("serializing the new key: {e}")))?;
-        let http = HttpRequest::new("POST", &manage.uri).json_body(body);
-        let http = rotation::sign_key_rotation(
-            http,
-            current,
-            replacement.as_ref(),
-            &verifier,
-            &manage.access_token.value,
-            now,
-        )?;
+        let http = match proof {
+            SessionProof::Httpsig => rotation::sign_key_rotation(
+                HttpRequest::new("POST", &manage.uri).json_body(body),
+                current,
+                replacement.as_ref(),
+                &verifier,
+                &manage.access_token.value,
+                now,
+            )?,
+            SessionProof::Jose(method) => {
+                let previous = self.current_key(index)?;
+                rotation::sign_jose_rotation(
+                    &manage.uri,
+                    method,
+                    body,
+                    current,
+                    replacement.as_ref(),
+                    (&previous, &verifier),
+                    &manage.access_token.value,
+                    now,
+                )?
+            }
+        };
         let response = self.round_trip(http)?;
         let parsed = grant_response(&response)?;
 
@@ -203,8 +211,9 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             .map(|(_, signer)| signer)
     }
 
-    /// The proof method and the signer that present a token's key: a rotated
-    /// token's own key, with `httpsig`, or the session's, with its method.
+    /// The proof method and the signer that present a token's key: the
+    /// session's method, which a key change keeps (§6.1.1), and the key the
+    /// token was rotated to, or the session's.
     fn presentation(&self, index: usize) -> Result<(SessionProof, &dyn Signer), ClientError> {
         let token = &self.held(index)?.1;
         if token.is_bearer() {
@@ -213,7 +222,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             ));
         }
         if let Some(signer) = self.rotated.get(token.value.as_str()) {
-            return Ok((SessionProof::Httpsig, signer.as_ref()));
+            return Ok((self.session_proof(), signer.as_ref()));
         }
         if token.key.is_some() {
             return Err(ClientError::Usage(
@@ -223,6 +232,24 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             ));
         }
         Ok((self.session_proof(), &self.signer))
+    }
+
+    /// The public JWK of a token's current key, for the session's own JOSE
+    /// proofs: the key the token was rotated to, or the first request's.
+    fn current_key(&self, index: usize) -> Result<gnap_crypto::PublicKey, ClientError> {
+        let token = &self.held(index)?.1;
+        let key = if self.rotated.contains_key(token.value.as_str()) {
+            token.key.as_ref().and_then(gnap_types::key::Key::as_value)
+        } else {
+            self.protocol.key.as_ref()
+        };
+        key.and_then(|key| key.jwk.as_ref())
+            .and_then(|jwk| gnap_crypto::PublicKey::for_jws(jwk).ok())
+            .ok_or_else(|| {
+                ClientError::Usage(
+                    "the session doesn't know the public JWK of the token's current key".into(),
+                )
+            })
     }
 
     fn management_signer(&self, index: usize) -> Result<(SessionProof, &dyn Signer), ClientError> {

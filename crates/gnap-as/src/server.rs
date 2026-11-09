@@ -595,21 +595,15 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             presented: &public,
             resolved: verifier,
         };
-        let key = JwsKey {
-            verifier: &both,
-            identity: public.thumbprint().into(),
-            // The JWK's `kid` comes through `BothKeys`; the resolver's, if it
-            // names one, binds the proof as it binds an `httpsig` signature.
-            expectations: Expectations {
-                now,
-                max_clock_skew: MAX_CLOCK_SKEW,
-                key_id: verifier.expected_key_id(),
-            },
-        };
         let reserve = |ids: &[ReplayId], at: u64| reserve(&self.storage, ids, at);
-        verify_jws_request(method, &signed_request(request), &key, &reserve)
-            .map(|accepted| Cow::Owned(accepted.content))
-            .map_err(|e| error(ErrorCode::InvalidClient, &e.to_string()))
+        verify_jws_request(
+            method,
+            &signed_request(request),
+            &both.jws_key(now),
+            &reserve,
+        )
+        .map(|accepted| Cow::Owned(accepted.content))
+        .map_err(|e| error(ErrorCode::InvalidClient, &e.to_string()))
     }
 
     /// Verifies the request's signature (§7.3.1), with this server's policy.
@@ -646,6 +640,23 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
 struct BothKeys<'a> {
     presented: &'a PublicKey,
     resolved: &'a dyn Verifier,
+}
+
+impl BothKeys<'_> {
+    /// The key a JOSE verifier takes: the JWK's thumbprint scopes the replay
+    /// protection, and the resolver's `kid`, if it names one, binds the proof
+    /// as it binds an `httpsig` signature.
+    fn jws_key(&self, now: u64) -> JwsKey<'_> {
+        JwsKey {
+            verifier: self,
+            identity: self.presented.thumbprint().into(),
+            expectations: Expectations {
+                now,
+                max_clock_skew: MAX_CLOCK_SKEW,
+                key_id: self.resolved.expected_key_id(),
+            },
+        }
+    }
 }
 
 impl Verifier for BothKeys<'_> {
