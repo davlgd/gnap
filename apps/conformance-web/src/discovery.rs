@@ -191,6 +191,15 @@ pub fn checks(
         check("discovery-endpoint", document.and_then(|_| endpoint.map_or(Some(false), https_endpoint)), if userinfo { "Safe discovery profile: userinfo (including an empty userinfo before @) is rejected. RFC 9110 section 4.2.4 recommends that recipients treat userinfo in an untrusted received URI as an error (SHOULD). This is not an additional GNAP MUST or an assertion that JSON members are HTTP field values." } else if endpoint.is_some_and(|e| https_endpoint(e).is_none()) { "Not tested: endpoint passes raw URI syntax prechecks but its interpretation is unsupported by this URL parser (for example IPvFuture, oversized numeric port or a registered name). This coverage limit is neither a normative failure nor full URI validation; host encoding/production semantics remain unresolved. Exact endpoint identity is checked separately." } else { "Required grant_request_endpoint is a string containing an absolute HTTPS URL with a host, valid URL syntax and no fragment. HTTP loopback remains nonconformant, even if labelled development-only." }, if userinfo { "https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.4" } else { RFC }),
         check("discovery-endpoint-match", document.and_then(|_| queried_endpoint.map(|queried| endpoint == Some(queried))), "Compare the announced URL with the exact URL queried, without normalization. No imported URL is fetched. Missing queried_endpoint means this contextual check is not tested.", RFC),
     ];
+    // A syntax this parser can't interpret leaves the endpoint undecided.
+    if document.is_some() && endpoint.is_some_and(|e| https_endpoint(e).is_none()) && !userinfo {
+        if let Some(finding) = checks
+            .iter_mut()
+            .find(|finding| finding.id == "discovery-endpoint")
+        {
+            finding.undecided = true;
+        }
+    }
     if userinfo {
         if let Some(finding) = checks
             .iter_mut()
@@ -225,22 +234,24 @@ pub fn checks(
         ),
     ] {
         let value = document.and_then(|o| o.get(field));
-        let (outcome, detail, remediation) = match value {
-            None if document.is_none() => (None, "Not tested: no unambiguous discovery object is available to inspect this capability list.", None),
-            None => (None, "Optional capability list not announced. Omission is not a protocol failure and does not establish supported capabilities.", None),
+        let (outcome, detail, remediation, undecided) = match value {
+            None if document.is_none() => (None, "Not tested: no unambiguous discovery object is available to inspect this capability list.", None, false),
+            None => (None, "Optional capability list not announced. Omission is not a protocol failure and does not establish supported capabilities.", None, false),
             Some(Value::Array(values)) if values.iter().all(Value::is_string) => {
                 if values.is_empty() {
-                    (None, "Optional capability list is a correctly typed empty array: no capability is announced or exercised.", None)
+                    (None, "Optional capability list is a correctly typed empty array: no capability is announced or exercised.", None, false)
                 } else if values.iter().all(|v| registered(v.as_str().unwrap_or_default())) {
-                    (Some(true), "All announced names occur in this build's registry snapshot. This verifies names only, not whether these capabilities actually work or are allowed for a particular client.", None)
+                    (Some(true), "All announced names occur in this build's registry snapshot. This verifies names only, not whether these capabilities actually work or are allowed for a particular client.", None, false)
                 } else {
-                    (None, "At least one name is unknown to this build's registry snapshot. Registration is unresolved, not accepted or certified; submitted values are not echoed.", Some("Check the current IANA registry linked in the page references and README before deciding whether the name is registered; update the snapshot or correct the announcement."))
+                    (None, "At least one name is unknown to this build's registry snapshot. Registration is unresolved, not accepted or certified; submitted values are not echoed.", Some("Check the current IANA registry linked in the page references and README before deciding whether the name is registered; update the snapshot or correct the announcement."), true)
                 }
             }
-            Some(_) => (Some(false), "When announced, this capability must be an array containing only JSON strings; null is not omission.", Some("Use an array of registered string names, or omit this optional field.")),
+            Some(_) => (Some(false), "When announced, this capability must be an array containing only JSON strings; null is not omission.", Some("Use an array of registered string names, or omit this optional field."), false),
         };
         let mut finding = check(field, outcome, detail, RFC);
         finding.remediation = remediation;
+        // An unknown name leaves its registration unresolved.
+        finding.undecided = undecided;
         checks.push(finding);
     }
     let rotation = document.and_then(|o| o.get("key_rotation_supported"));

@@ -48,6 +48,7 @@ impl From<Check> for Finding {
             outcome: match check.status {
                 Status::Pass => Outcome::Passed,
                 Status::Fail => Outcome::Failed,
+                Status::NotTested if check.undecided => Outcome::Inconclusive,
                 Status::NotTested => Outcome::Skipped,
             },
             reference: check.reference,
@@ -297,6 +298,54 @@ mod tests {
             1,
         );
         assert_eq!(accepted.exit_code(), 1, "{}", accepted.text());
+    }
+
+    /// An unknown capability name leaves its registration undecided: alone,
+    /// the report is inconclusive; next to a deviation, the deviation wins
+    /// and both findings stay.
+    #[test]
+    fn an_undecided_check_is_inconclusive_not_skipped() {
+        let minimal = discover(
+            &json(
+                200,
+                &serde_json::json!({"grant_request_endpoint": ENDPOINT}),
+            ),
+            ENDPOINT,
+            1,
+        );
+        assert_eq!(minimal.exit_code(), 0, "{}", minimal.text());
+        let unknown = discover(
+            &json(
+                200,
+                &serde_json::json!({"grant_request_endpoint": ENDPOINT,
+                    "key_proofs_supported": ["synthetic-unknown-method"]}),
+            ),
+            ENDPOINT,
+            1,
+        );
+        let proofs = unknown
+            .findings
+            .iter()
+            .find(|f| f.id == "key_proofs_supported")
+            .unwrap();
+        assert_eq!(proofs.outcome, Outcome::Inconclusive);
+        assert_eq!(unknown.exit_code(), 2, "{}", unknown.text());
+        let both = discover(
+            &json(
+                200,
+                &serde_json::json!({"grant_request_endpoint": "https://other.example/gnap",
+                    "key_proofs_supported": ["synthetic-unknown-method"]}),
+            ),
+            ENDPOINT,
+            1,
+        );
+        assert_eq!(both.exit_code(), 1);
+        assert_eq!(
+            (both.summary.failed, both.summary.inconclusive),
+            (1, 1),
+            "{}",
+            both.text()
+        );
     }
 
     #[test]

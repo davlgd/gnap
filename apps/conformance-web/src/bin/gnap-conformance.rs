@@ -55,7 +55,9 @@ fn run(arguments: Vec<String>) -> Result<u8, String> {
             }
             "--json" => json = true,
             "--allow-loopback-http" => local = true,
-            flag if flag.starts_with('-') => return Err(format!("unknown option {flag}")),
+            // Refusals never repeat their input, which may hold a secret or
+            // terminal control characters.
+            flag if flag.starts_with('-') => return Err("unknown option".into()),
             _ => positional.push(argument),
         }
     }
@@ -65,9 +67,10 @@ fn run(arguments: Vec<String>) -> Result<u8, String> {
     let (method, check): (&'static str, Command) = match command.as_str() {
         "discover" => ("OPTIONS", |t, e, s| cli::discover(t, e, s)),
         "probe" => ("POST", |t, e, s| cli::probe(t, e, s)),
-        other => return Err(format!("unknown command {other}")),
+        _ => return Err("unknown command".into()),
     };
-    net::endpoint(endpoint, local).map_err(|reason| format!("{reason}: {endpoint}"))?;
+    net::endpoint(endpoint, local)
+        .map_err(|reason| format!("the endpoint is refused: {reason}"))?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()

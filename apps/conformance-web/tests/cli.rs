@@ -27,6 +27,29 @@ fn usage_errors_exit_with_two_before_any_network() {
             "{arguments:?}: a usage error prints no report"
         );
     }
+    // A refusal repeats none of its input: not a secret in the endpoint, nor
+    // a terminal control character.
+    for arguments in [
+        vec!["discover", "https://user:SYNTHETIC_SECRET@as.example/gnap"],
+        vec!["discover", "https://as.example/gnap?token=SYNTHETIC_SECRET"],
+        vec!["discover", "https://as.example/gnap#SYNTHETIC_SECRET"],
+        vec![
+            "discover",
+            "https://as.example/gnap",
+            "--SYNTHETIC_SECRET\u{1b}[31m",
+        ],
+        vec!["SYNTHETIC_SECRET\u{1b}[31m", "https://as.example/gnap"],
+    ] {
+        let output = cli().args(&arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        for stream in [&output.stdout, &output.stderr] {
+            let text = String::from_utf8_lossy(stream);
+            assert!(
+                !text.contains("SYNTHETIC_SECRET") && !text.contains('\u{1b}'),
+                "{text}"
+            );
+        }
+    }
     let help = cli().arg("--help").output().unwrap();
     assert_eq!(help.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&help.stdout).contains("discover"));
