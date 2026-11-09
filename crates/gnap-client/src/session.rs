@@ -46,7 +46,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 /// Where a grant stands after a round trip with the AS.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     /// The grant is approved; the response may carry tokens and subject
     /// information.

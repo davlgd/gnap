@@ -264,7 +264,7 @@ impl<'de> Deserialize<'de> for TokenValue {
 }
 
 /// An access token issued by the AS (§3.2.1).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccessToken {
     /// The value, opaque to the client.
     pub value: TokenValue,
@@ -551,7 +551,7 @@ fn first_duplicate(flags: &[AccessTokenFlag]) -> Option<String> {
 }
 
 /// One or more issued tokens (§3.2).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessTokenResponse {
     /// The shape used, which must mirror the request's.
     pub cardinality: Cardinality,

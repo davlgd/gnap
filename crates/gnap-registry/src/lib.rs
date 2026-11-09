@@ -34,8 +34,6 @@
 ///
 /// Serialization always emits the on-the-wire value, `Unregistered` included:
 /// a value that is not registered is relayed unaltered.
-#[macro_export]
-#[doc(hidden)]
 macro_rules! impl_registry_traits {
     ($t:ty) => {
         impl From<String> for $t {
@@ -81,13 +79,15 @@ macro_rules! impl_registry_traits {
     };
 }
 
+pub(crate) use impl_registry_traits;
+
 mod generated;
 pub use generated::*;
 
 /// How many GNAP registries each RFC establishes.
 ///
-/// Note: §5 of RFC 9767 announces "created five registries" while it actually
-/// creates seven. See the project's local errata list, entry E6.
+/// RFC 9767 §5 says it "created five registries", but its subsections create
+/// seven; the count here follows the subsections.
 pub const REGISTRY_COUNT_RFC9635: usize = 16;
 /// See [`REGISTRY_COUNT_RFC9635`].
 pub const REGISTRY_COUNT_RFC9767: usize = 7;

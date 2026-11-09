@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// `display` and `class_id` are self-declared: §2.3 reminds the AS to treat
 /// them as hints, never as proof of identity. Only the key authenticates the
 /// instance (§2.3.3).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
 pub struct ClientObject {
     /// The key the client will use to protect this request. Required.
     pub key: Key,

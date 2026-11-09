@@ -12,7 +12,7 @@ use std::fmt;
 ///
 /// Sent as a POST with `application/json` content — unless the proofing method
 /// says otherwise, as attached JWS (§7.3.4) does by wrapping the object.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantRequest {
     /// The requesting client. Required on an initial request, never present
     /// on a continuation (§2.3, §5.3).
@@ -75,7 +75,7 @@ impl fmt::Debug for GrantRequest {
 ///
 /// The AS **must** send it with `Cache-Control: no-store` (§3) — a transport
 /// constraint, so outside this type.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct GrantResponse {
     /// What is needed to continue the request (§3.1).
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -185,7 +185,7 @@ impl std::error::Error for ContinueError {}
 /// not to have changed", and the AS finds it through the continuation token.
 /// The field is therefore absent from this type, and refused on the way in
 /// rather than absorbed as an extension.
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct ContinueRequest {
     /// The interaction reference, after a callback (§5.1). Single use.
     #[serde(skip_serializing_if = "Option::is_none", default)]
