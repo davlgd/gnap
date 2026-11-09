@@ -352,3 +352,28 @@ fn every_key_type_signs_and_verifies_a_gnap_request() {
         }
     }
 }
+
+/// The identity point is a weak Ed25519 key: with it, a signature of zeros
+/// passes the permissive check. Neither import builds a verifier from it, so
+/// no such key reaches the strict verifier.
+#[test]
+fn neither_ed25519_import_accepts_the_identity_key() {
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    // SubjectPublicKeyInfo for Ed25519: the algorithm identifier, then the key.
+    let mut spki = vec![
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ];
+    spki.extend_from_slice(&identity);
+    let pem = format!(
+        "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+        STANDARD.encode(&spki)
+    );
+    let Err(refusal) = Ed25519Verifier::from_public_key_pem(&pem) else {
+        panic!("the identity key must be refused");
+    };
+    assert!(refusal.to_string().contains("weak"), "{refusal}");
+    let mut jwk = ed25519_jwk();
+    jwk.insert("x".into(), json!(URL_SAFE_NO_PAD.encode(identity)));
+    assert!(Ed25519Verifier::from_public_jwk(&jwk).is_err());
+}
