@@ -596,6 +596,7 @@ async fn browser_flow_selects_tokens_by_label_over_http() {
                 decisions,
                 references,
                 lifetime: SESSION_LIFETIME,
+                generated: None,
             },
             receiver,
         )

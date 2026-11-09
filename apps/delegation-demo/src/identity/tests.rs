@@ -273,6 +273,7 @@ fn local_http_worker_refuses_identity_before_creating_client_or_grant() {
                 decisions: app.decisions,
                 references,
                 lifetime: SESSION_LIFETIME,
+                generated: None,
             },
             receiver,
         )

@@ -65,6 +65,19 @@ pub(super) fn routes(view: &Value) -> Vec<String> {
 /// A lab served on a loopback port, with its worker, whose sessions last
 /// `lifetime`.
 pub(super) async fn lab(lifetime: Duration) -> (App, Router, String) {
+    let (app, router, origin, _) = observed_lab(lifetime, None).await;
+    (app, router, origin)
+}
+
+/// The keys a lab's worker generated, each with its session.
+pub(super) type GeneratedKeys = mpsc::Receiver<(String, Arc<gnap_crypto::Ed25519Signer>)>;
+
+/// A lab whose worker reports the keys it generates, and whose client reaches
+/// `reach` in place of the lab's own origin when one is given.
+pub(super) async fn observed_lab(
+    lifetime: Duration,
+    reach: Option<String>,
+) -> (App, Router, String, GeneratedKeys) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let mut app = tests::test_app_at(&origin);
@@ -79,8 +92,9 @@ pub(super) async fn lab(lifetime: Duration) -> (App, Router, String) {
     });
     let (sender, receiver) = mpsc::sync_channel(8);
     app.commands = sender;
+    let (generated, keys) = mpsc::channel();
     let (worker_origin, signer, server, storage, decisions) = (
-        origin.clone(),
+        reach.unwrap_or_else(|| origin.clone()),
         app.signer.clone(),
         app.server.clone(),
         app.storage.clone(),
@@ -97,6 +111,7 @@ pub(super) async fn lab(lifetime: Duration) -> (App, Router, String) {
                 decisions,
                 references,
                 lifetime,
+                generated: Some(generated),
             },
             receiver,
         )
@@ -104,7 +119,7 @@ pub(super) async fn lab(lifetime: Duration) -> (App, Router, String) {
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());
     let served = router.clone();
     tokio::spawn(async move { axum::serve(listener, served).await.unwrap() });
-    (app, router, origin)
+    (app, router, origin, keys)
 }
 
 /// The status a browser reads, with the cookie it holds, if any.

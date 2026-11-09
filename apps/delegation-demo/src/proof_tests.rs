@@ -1,6 +1,6 @@
 //! The proof method a session chooses at its start: its key, its requests,
 //! and the lab's refusal of anything that doesn't match it.
-use super::trace_session_tests::{lab, start_proving, status};
+use super::trace_session_tests::{lab, observed_lab, start_proving, status};
 use super::*;
 use tower::ServiceExt;
 
@@ -332,19 +332,50 @@ async fn approved(app: &App, router: &Router, origin: &str, proof: &str) -> Stri
         &format!(r#"{{"proof":"{proof}"}}"#),
     )
     .await;
-    let finish = act(app, &id, "approve").await;
+    consent(app, router, origin, &id).await;
+    act(app, &id, "continue").await;
+    id
+}
+
+/// Opens the session's interaction page as its browser would, with its
+/// cookie, then approves and follows the callback, and waits for the
+/// continuation to answer again.
+async fn consent(app: &App, router: &Router, origin: &str, id: &str) {
+    let uri = act(app, id, "status").await["interaction_uri"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let page = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri.strip_prefix(origin).unwrap())
+                .header("host", origin.strip_prefix("http://").unwrap())
+                .header("cookie", format!("gnap_demo={id}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK, "the lab's own page, {uri}");
+    let body = axum::body::to_bytes(page.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&body).contains("Proof for the next start"),
+        "the lab's page, not the external client's"
+    );
+    let finish = act(app, id, "approve").await;
     act(
         app,
-        &id,
+        id,
         &format!("callback:{}", finish["redirect"].as_str().unwrap()),
     )
     .await;
-    let wait = act(app, &id, "status").await["continuation_wait_seconds"]
+    let wait = act(app, id, "status").await["continuation_wait_seconds"]
         .as_u64()
         .unwrap();
     tokio::time::sleep(Duration::from_secs(wait)).await;
-    act(app, &id, "continue").await;
-    id
 }
 
 /// A JOSE session changes its grant as the others do: a reduction directly,
@@ -368,58 +399,211 @@ async fn a_jose_session_reduces_then_expands_its_grant() {
     tokio::time::sleep(Duration::from_secs(wait)).await;
     let pending = act(&app, &id, "expand").await;
     assert_eq!(pending["state"], "pending", "{pending}");
-    let finish = act(&app, &id, "approve").await;
-    act(
-        &app,
-        &id,
-        &format!("callback:{}", finish["redirect"].as_str().unwrap()),
-    )
-    .await;
-    let wait = act(&app, &id, "status").await["continuation_wait_seconds"]
-        .as_u64()
-        .unwrap();
-    tokio::time::sleep(Duration::from_secs(wait)).await;
+    consent(&app, &router, &origin, &id).await;
     let expanded = act(&app, &id, "continue").await;
     assert_eq!(expanded["token_present"], true);
     let view = act(&app, &id, "read-archive").await;
     assert!(view.get("error").is_none(), "{view}");
 }
 
-/// Two JOSE sessions of the same method keep apart: one's callback is no
-/// other's, and each grant names its own key.
+/// Two JOSE sessions of the same method keep apart: each callback finishes
+/// only its own session, and each grant names its own key.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_jose_sessions_of_one_method_keep_apart() {
     let (app, router, origin) = lab(SESSION_LIFETIME).await;
     let a = start_proving(&router, &origin, "start", r#"{"proof":"jwsd"}"#).await;
     let b = start_proving(&router, &origin, "start", r#"{"proof":"jwsd"}"#).await;
-    let finish_a = act(&app, &a, "approve").await;
-    let crossed = dispatch(
-        &app,
-        b.clone(),
-        format!("callback:{}", finish_a["redirect"].as_str().unwrap()),
-    )
-    .await;
-    assert!(crossed.is_err(), "A's callback is not B's");
-    let keys: Vec<_> = {
-        let ids: Vec<_> = app
-            .storage
-            .lock()
-            .unwrap()
-            .continuation_deadlines
-            .keys()
-            .copied()
-            .collect();
-        ids.into_iter()
-            .map(|grant| {
-                let snapshot = app
-                    .storage
-                    .lookup(GrantSelector::Id(grant))
-                    .unwrap()
-                    .unwrap();
-                lab::presented_thumbprint(&snapshot.aggregate.record.request.client).unwrap()
-            })
-            .collect()
-    };
+    // Both await their callback, so a refusal can only come from the binding.
+    let redirect = |finish: Value| finish["redirect"].as_str().unwrap().to_owned();
+    let finish_a = redirect(act(&app, &a, "approve").await);
+    let finish_b = redirect(act(&app, &b, "approve").await);
+    for (session, other) in [(&b, &finish_a), (&a, &finish_b)] {
+        let crossed = dispatch(&app, session.clone(), format!("callback:{other}")).await;
+        assert!(crossed.is_err(), "another session's callback");
+    }
+    for (session, own) in [(&a, &finish_a), (&b, &finish_b)] {
+        act(&app, session, &format!("callback:{own}")).await;
+        let wait = act(&app, session, "status").await["continuation_wait_seconds"]
+            .as_u64()
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(wait)).await;
+        let view = act(&app, session, "continue").await;
+        assert_eq!(view["token_present"], true, "{view}");
+    }
+    let keys: Vec<_> = grants(&app)
+        .iter()
+        .map(|snapshot| {
+            lab::presented_thumbprint(&snapshot.aggregate.record.request.client).unwrap()
+        })
+        .collect();
     assert_eq!(keys.len(), 2);
     assert_ne!(keys[0], keys[1], "each session presents its own key");
+}
+
+/// Every grant the lab's authorization server holds.
+fn grants(app: &App) -> Vec<gnap_as::storage::GrantSnapshot> {
+    let ids: Vec<_> = app
+        .storage
+        .lock()
+        .unwrap()
+        .continuation_deadlines
+        .keys()
+        .copied()
+        .collect();
+    ids.into_iter()
+        .filter_map(|grant| app.storage.lookup(GrantSelector::Id(grant)).unwrap())
+        .collect()
+}
+
+/// The access token of the grant whose client presents `key`.
+fn token_of(app: &App, key: &gnap_crypto::Ed25519Signer) -> gnap_types::token::TokenValue {
+    let jwk = key.public_jwk().unwrap();
+    grants(app)
+        .into_iter()
+        .find(|snapshot| {
+            snapshot
+                .aggregate
+                .record
+                .request
+                .client
+                .as_value()
+                .and_then(|value| value.key.as_value())
+                .and_then(|key| key.jwk.as_ref())
+                == Some(&jwk)
+        })
+        .and_then(|snapshot| {
+            snapshot
+                .aggregate
+                .tokens
+                .values()
+                .next()
+                .map(|token| token.token.value.clone())
+        })
+        .unwrap()
+}
+
+/// Sends a signed request over the network, as a client would.
+async fn send(request: &HttpRequest) -> u16 {
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let mut outgoing = client.request(request.method.parse().unwrap(), &request.url);
+    for (name, value) in &request.headers {
+        outgoing = outgoing.header(name, value);
+    }
+    if let Some(body) = &request.body {
+        outgoing = outgoing.body(body.clone());
+    }
+    outgoing.send().await.unwrap().status().as_u16()
+}
+
+/// Two live JOSE sessions: neither key proves the other's token, and a JOSE
+/// proof is accepted once, by the resource server as by the authorization
+/// server, and refused when it comes again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jose_proof_proves_its_own_token_once() {
+    let (app, router, origin, generated) = observed_lab(SESSION_LIFETIME, None).await;
+    let a = approved(&app, &router, &origin, "jwsd").await;
+    let b = approved(&app, &router, &origin, "jwsd").await;
+    let keys: std::collections::HashMap<_, _> = generated.try_iter().collect();
+    let (key_a, key_b) = (keys[&a].clone(), keys[&b].clone());
+    let (token_a, token_b) = (token_of(&app, &key_a), token_of(&app, &key_b));
+    assert_ne!(token_a, token_b);
+
+    let read = |key: &gnap_crypto::Ed25519Signer, token: &gnap_types::token::TokenValue| {
+        gnap_client::sign_jose_request(
+            HttpRequest::new("GET", format!("{origin}/resource/folder")),
+            gnap_crypto::jws::JwsMethod::Jwsd,
+            key,
+            Some(token),
+            now(),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        send(&read(&key_b, &token_a)).await,
+        401,
+        "B's key, A's token"
+    );
+    assert_eq!(
+        send(&read(&key_a, &token_b)).await,
+        401,
+        "A's key, B's token"
+    );
+    let own = read(&key_a, &token_a);
+    assert_eq!(send(&own).await, 200, "A's key, A's token");
+    assert_eq!(send(&own).await, 401, "the same proof again");
+
+    // A grant request signed by A's key, sent twice.
+    let references = app.bootstrap.get().unwrap().as_ref().unwrap().clone();
+    let body = json!({
+        "client": {"key": {"proof": "jwsd", "jwk": key_a.public_jwk().unwrap()}},
+        "access_token": {"access": [&references.both]},
+        "interact": {"start": ["redirect"], "finish": {"method": "redirect", "uri": format!("{origin}/callback"), "nonce": "replay-test-nonce"}}
+    });
+    let mut request = HttpRequest::new("POST", format!("{origin}/gnap"));
+    request
+        .headers
+        .push(("content-type".into(), "application/json".into()));
+    request.body = Some(serde_json::to_vec(&body).unwrap());
+    let signed = gnap_client::sign_jose_request(
+        request,
+        gnap_crypto::jws::JwsMethod::Jwsd,
+        key_a.as_ref(),
+        None,
+        now(),
+    )
+    .unwrap();
+    assert_eq!(send(&signed).await, 200, "A's grant request");
+    assert_ne!(send(&signed).await, 200, "the same grant request again");
+}
+
+/// A start that fails once its client is registered gives its place in the
+/// registry back, whichever its proof method.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_start_gives_its_registration_back() {
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    let (app, router, origin, generated) = observed_lab(SESSION_LIFETIME, Some(closed)).await;
+    let before = app.storage.lab.lock().unwrap().count();
+    for body in [r#"{"proof":"jwsd"}"#, r#"{"proof":"httpsig"}"#] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/start")
+                    .header("host", origin.strip_prefix("http://").unwrap())
+                    .header("origin", &origin)
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(response.status(), StatusCode::OK, "{body}");
+        assert_eq!(app.storage.lab.lock().unwrap().count(), before, "{body}");
+    }
+    assert_eq!(
+        generated.try_iter().count(),
+        1,
+        "the JOSE start went as far as its key"
+    );
+}
+
+/// A JOSE read waits for a later second than the last one, on the monotonic
+/// clock and for a bounded time: a wall clock set back can't hold the worker.
+#[test]
+fn a_jose_read_waits_for_a_later_second_but_not_forever() {
+    let budget = Duration::from_millis(300);
+    let started = Instant::now();
+    assert_eq!(fresh_second(100, || 90, budget), None);
+    assert_eq!(fresh_second(100, || 100, budget), None);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(fresh_second(100, || 101, budget), Some(101));
+    let ticks = std::cell::Cell::new(99);
+    let advancing = || {
+        ticks.set(ticks.get() + 1);
+        ticks.get()
+    };
+    assert_eq!(fresh_second(100, advancing, budget), Some(101));
 }

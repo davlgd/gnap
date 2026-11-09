@@ -14,7 +14,7 @@ function element(tag) {
     tag, textContent: '', className: '', hidden: false, dataset: {}, children: [],
     append(...nodes) { this.children.push(...nodes); },
     replaceChildren(...nodes) { this.children = nodes; },
-    addEventListener() {},
+    addEventListener(type, handler) { this[type] = handler; },
   };
 }
 
@@ -318,5 +318,34 @@ test('the proof shown comes from the page tables, never from the answer', async 
   other.answer(0, { state: 'approved', proof: { method: 'jws', alg: CANARY }, trace: { attempts: [], dropped: 0 } });
   await settle();
   assert.equal(other.nodes.get('#proof').textContent, 'JWS in the body, Unknown');
+});
+
+test('an algorithm the page does not know shows as unknown, even a prototype name', async () => {
+  const lab = page();
+  lab.answer(0, { state: 'approved', proof: { method: 'jwsd', alg: 'toString' }, trace: { attempts: [], dropped: 0 } });
+  await settle();
+  assert.equal(lab.nodes.get('#proof').textContent, 'Detached JWS, Unknown');
+});
+
+test('changing the proof while an action runs unlocks nothing, and its end keeps the choice', async () => {
+  for (const ending of ['state', 'error']) {
+    const lab = page();
+    lab.answer(0, { state: 'new', trace: { attempts: [], dropped: 0 } });
+    await settle();
+    const identity = lab.nodes.get('[data-action="start-identity"]');
+    const started = lab.nodes.get('[data-action="start"]').click();
+    assert.equal(identity.disabled, true, 'locked while the start runs');
+    lab.nodes.get('#proof-httpsig').checked = true;
+    lab.nodes.get('#proof-httpsig').change();
+    assert.equal(identity.disabled, true, `${ending}: a change of proof during the action`);
+    lab.nodes.get('#proof-httpsig').checked = false;
+    lab.nodes.get('#proof-jwsd').checked = true;
+    lab.nodes.get('#proof-jwsd').change();
+    assert.equal(identity.disabled, true, `${ending}: still locked`);
+    const index = lab.requests.length - 1;
+    lab.answer(index, ending === 'state' ? { state: 'new', trace: { attempts: [], dropped: 0 } } : { error: 'synthetic failure' });
+    await started;
+    assert.equal(identity.disabled, true, `${ending}: a JOSE choice keeps identity off after the action`);
+  }
 });
 
