@@ -16,6 +16,17 @@ use std::fmt;
 /// Maximum compact assertion size, checked before decoding or verification.
 pub const MAX_ASSERTION_BYTES: usize = 8192;
 
+/// Largest clock difference, in seconds, that a verifier may tolerate.
+pub const MAX_CLOCK_SKEW_SECONDS: u64 = 300;
+
+/// Longest subject identifier, in ASCII characters.
+pub const MAX_SUBJECT_BYTES: usize = 255;
+
+const MAX_ISSUER_BYTES: usize = 2048;
+const MAX_AUDIENCE_BYTES: usize = 1024;
+const MAX_NONCE_BYTES: usize = 512;
+const MAX_KEY_ID_BYTES: usize = 1024;
+
 /// Redacted reasons an assertion cannot be issued or accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssertionError {
@@ -70,7 +81,7 @@ pub struct Trust<'a> {
     pub key: &'a Ps256Verifier,
     /// Maximum assertion lifetime and age, in seconds.
     pub max_age: u64,
-    /// Accepted clock difference, at most 300 seconds.
+    /// Accepted clock difference, at most [`MAX_CLOCK_SKEW_SECONDS`].
     pub clock_skew: u64,
 }
 
@@ -131,7 +142,7 @@ impl Trust<'_> {
 pub struct Issuance<'a> {
     /// Exact HTTPS issuer identifier, without query, fragment or userinfo.
     pub issuer: &'a str,
-    /// Locally unique subject identifier, at most 255 ASCII characters.
+    /// Locally unique subject identifier, at most [`MAX_SUBJECT_BYTES`] ASCII characters.
     pub subject: &'a str,
     /// Client identifier agreed with the intended recipient.
     pub audience: &'a str,
@@ -157,7 +168,7 @@ pub struct Expectations<'a> {
     pub now: u64,
     /// Maximum assertion age and issued lifetime, in seconds; must be nonzero.
     pub max_age: u64,
-    /// Accepted clock skew in seconds, bounded to at most 300.
+    /// Accepted clock skew in seconds, at most [`MAX_CLOCK_SKEW_SECONDS`].
     pub clock_skew: u64,
 }
 
@@ -221,10 +232,9 @@ impl VerifiedIdentity {
 /// Returns a redacted error for invalid claims, excessive size or signing failure.
 pub fn issue(signer: &Ps256Signer, input: &Issuance<'_>) -> Result<Assertion, AssertionError> {
     if !valid_issuer(input.issuer)
-        || !(2048..=4096).contains(&signer.modulus_bits())
-        || !bounded(input.audience, 1024)
-        || !bounded(input.nonce, 512)
-        || !bounded(signer.key_id(), 1024)
+        || !bounded(input.audience, MAX_AUDIENCE_BYTES)
+        || !bounded(input.nonce, MAX_NONCE_BYTES)
+        || !bounded(signer.key_id(), MAX_KEY_ID_BYTES)
     {
         return Err(AssertionError::Configuration);
     }
@@ -271,11 +281,10 @@ pub fn verify(
     expected: &Expectations<'_>,
 ) -> Result<VerifiedIdentity, AssertionError> {
     if !valid_issuer(expected.issuer)
-        || !(2048..=4096).contains(&key.modulus_bits())
-        || !bounded(expected.audience, 1024)
-        || !bounded(expected.nonce, 512)
+        || !bounded(expected.audience, MAX_AUDIENCE_BYTES)
+        || !bounded(expected.nonce, MAX_NONCE_BYTES)
         || expected.max_age == 0
-        || expected.clock_skew > 300
+        || expected.clock_skew > MAX_CLOCK_SKEW_SECONDS
     {
         return Err(AssertionError::Configuration);
     }
@@ -371,10 +380,10 @@ const fn bounded(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max
 }
 const fn valid_subject(value: &str) -> bool {
-    bounded(value, 255) && value.is_ascii()
+    bounded(value, MAX_SUBJECT_BYTES) && value.is_ascii()
 }
 fn valid_issuer(value: &str) -> bool {
-    bounded(value, 2048)
+    bounded(value, MAX_ISSUER_BYTES)
         && gnap_types::uri::is_absolute(value)
         && !value.contains(['?', '#'])
         && value.strip_prefix("https://").is_some_and(|rest| {

@@ -313,3 +313,29 @@ fn metadata_limits_apply_before_cloning_or_unbounded_work() {
     public.insert("key_ops".into(), json!(["verify", "x".repeat(1025)]));
     rejects(&public);
 }
+
+#[test]
+fn every_constructor_enforces_the_modulus_bounds() {
+    use gnap_crypto::{MAX_MODULUS_BITS, MIN_MODULUS_BITS};
+
+    for bits in [MIN_MODULUS_BITS - 8, MAX_MODULUS_BITS + 8] {
+        assert!(Ps256Signer::generate(bits, "out-of-profile").is_err());
+    }
+    let accepted = signer();
+    assert!((MIN_MODULUS_BITS..=MAX_MODULUS_BITS).contains(&accepted.modulus_bits()));
+    assert!(Ps256Verifier::from_public_key_pem(include_str!("rfc9421-b12.spki.pem")).is_ok());
+    let Err(refusal) = Ps256Verifier::from_public_key_pem(WEAK_PUBLIC_KEY) else {
+        panic!("a 1024-bit key must be refused");
+    };
+    assert!(refusal.to_string().contains("modulus"), "{refusal}");
+}
+
+/// A synthetic 1024-bit public key, below the profile's bound; its private half was discarded.
+const WEAK_PUBLIC_KEY: &str = "\
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC7/t626GMSBJH+fd4XF+zdhmvd
+jcxS0iPkUs3I/evoRHSbwvLIt29TErs8EFUrUp23NLIMlObDYbBrV5PPAEAa5VH7
+LNkim6pOxyzSeH/Pn6S6SdBD9PJ42Jnau5rC+kF8Bn9S/cTvxhHr9gP9x1EGqyaO
+MdUt+XWZoYYGO00wfQIDAQAB
+-----END PUBLIC KEY-----
+";

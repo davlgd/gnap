@@ -414,21 +414,13 @@ fn unsafe_configuration_and_weak_keys_are_refused_without_echoing_input() {
         );
     }
     let mut config = expected();
-    config.clock_skew = 301;
+    config.clock_skew = gnap_subject::MAX_CLOCK_SKEW_SECONDS + 1;
     assert!(verify(&assertion, &key, &config).is_err());
     config = expected();
     config.max_age = 0;
     assert!(verify(&assertion, &key, &config).is_err());
-    let weak = Ps256Signer::generate(1024, "assertion-key").unwrap();
-    assert_eq!(weak.modulus_bits(), 1024);
-    assert_eq!(
-        issue(&weak, &input()).unwrap_err(),
-        AssertionError::Configuration
-    );
-    assert_eq!(
-        verify(&assertion, &weak.verifier(), &expected()).unwrap_err(),
-        AssertionError::Configuration
-    );
+    // A key outside the PS256 profile can't even be constructed.
+    assert!(Ps256Signer::generate(1024, "assertion-key").is_err());
     let mut invalid = input();
     invalid.subject = "";
     assert!(issue(&signer, &invalid).is_err());
