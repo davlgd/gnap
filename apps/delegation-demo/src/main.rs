@@ -46,6 +46,7 @@ mod multiple;
 mod push_finish;
 mod resource_registration;
 mod secondary_device;
+mod trace;
 #[derive(Default)]
 struct ConsentRegistry {
     external: external_client::Registry,
@@ -670,7 +671,9 @@ enum WorkerCommand {
 struct BrowserSession<'a> {
     push: Option<push_finish::Registration>,
     identity: Option<Arc<identity::Identity>>,
-    client: Session<&'a Network, &'a Ps256Signer>,
+    client: Session<trace::Recording<&'a Network>, &'a Ps256Signer>,
+    /// What the client attempted, for the exchange inspector.
+    trace: trace::SharedTrace,
     grant_id: GrantId,
     handle: String,
     code: Option<gnap_types::interact::UserCodeUri>,
@@ -829,6 +832,7 @@ fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
         "state": session.state,
         "mode": session.mode.name(),
         "events": session.events,
+        "trace": session.trace.lock().ok().and_then(|trace| serde_json::to_value(&*trace).ok()),
         "rights": rights,
         "tokens": multiple::view(tokens.as_ref()),
         "requested_rights": session.requested_rights,
@@ -847,10 +851,10 @@ fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
 }
 
 fn client_session<'a>(
-    transport: &'a Network,
+    transport: trace::Recording<&'a Network>,
     signer: &'a Ps256Signer,
     origin: &str,
-) -> Session<&'a Network, &'a Ps256Signer> {
+) -> Session<trace::Recording<&'a Network>, &'a Ps256Signer> {
     Session::new(transport, signer, format!("{origin}/gnap"))
         .supporting(&["redirect"])
         .with_finish_timeout(FINISH_TIMEOUT)
@@ -927,11 +931,13 @@ fn client_worker(
                 } else {
                     None
                 };
+                let trace = trace::SharedTrace::default();
+                let recording = trace::Recording::new(&transport, origin.clone(), trace.clone());
                 let mut client = if codes {
-                    Session::new(&transport, signer.as_ref(), format!("{origin}/gnap"))
+                    Session::new(recording, signer.as_ref(), format!("{origin}/gnap"))
                         .supporting(&["user_code_uri"])
                 } else {
-                    client_session(&transport, signer.as_ref(), &origin)
+                    client_session(recording, signer.as_ref(), &origin)
                 };
                 let mode = if command.action == "start-multiple" {
                     multiple::Mode::Multiple
@@ -996,6 +1002,7 @@ fn client_worker(
                         push,
                         identity,
                         client,
+                        trace,
                         grant_id,
                         handle,
                         code,
@@ -1257,7 +1264,10 @@ fn client_worker(
                         now(),
                     )
                     .map_err(|_| "Resource signing failed")?;
-                    let response = transport.send(request)?;
+                    // The resource read goes through the session's own record.
+                    let response =
+                        trace::Recording::new(&transport, origin.clone(), session.trace.clone())
+                            .send(request)?;
                     session.last_resource_status = Some(response.status);
                     if response.status == 503 {
                         return Err("The RS could not complete an AS or downstream exchange (503). Access is refused temporarily; this does not establish token invalidity.".into());
@@ -2914,3 +2924,5 @@ mod multiple_tests;
 mod ongoing_tests;
 #[cfg(test)]
 mod registration_tests;
+#[cfg(test)]
+mod trace_session_tests;
