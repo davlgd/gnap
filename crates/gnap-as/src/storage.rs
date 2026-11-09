@@ -123,8 +123,6 @@ impl TokenRecord {
     /// A record with no derivation metadata or format-native identifier.
     ///
     /// Prefer this constructor to a struct literal when neither is needed.
-    /// Optional metadata can then receive defaults here as the
-    /// record evolves; existing struct literals still need every public field.
     /// It stores what it is given; it does not validate the token, the client
     /// or the credential, which is the issuing server's job.
     #[must_use]

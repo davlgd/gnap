@@ -126,10 +126,9 @@
 //!
 //! [`ResourceServerApi::with_resource_registration`] enables RFC 9767 §3.4 and
 //! adds its endpoint to discovery; registration is otherwise absent and returns
-//! 404. [`ResourceServerResolver`] now returns [`ResolvedResourceServer`], pairing
-//! a canonical [`RsId`] with the trusted public key. Migrate existing resolvers
-//! by assigning that ID from their key registry, never from an unverified input
-//! or JWK `kid`. Aliases of the same RS must retain one owner identity.
+//! 404. [`ResourceServerResolver`] returns a [`ResolvedResourceServer`], pairing
+//! a canonical [`RsId`] with the trusted public key. Assign that ID from your
+//! key registry, never from an unverified input or a JWK `kid`. Aliases of the same RS must retain one owner identity.
 //!
 //! After proof verification, [`ResourceRegistrationPolicy`] checks every right's
 //! meaning and ownership. Approval also attests that this RS can introspect
@@ -223,12 +222,11 @@
 //! rejects duplicate live identifiers and access-token values across grants
 //! before publishing either an issuance or a rotation.
 //!
-//! # Migrating a storage adapter
+//! # Writing a storage adapter
 //!
-//! The former independent grant/token stores are replaced by [`GrantStore`].
-//! A [`GrantAggregate`] owns a [`GrantRecord`] and every [`TokenRecord`] issued
+//! A [`GrantStore`] keeps grants as aggregates. A [`GrantAggregate`] owns a [`GrantRecord`] and every [`TokenRecord`] issued
 //! by that grant, keyed by token-management handle. Its [`GrantId`] stays fixed
-//! when credentials rotate. [`GrantRecord::continuation_token`] is now optional:
+//! when credentials rotate. [`GrantRecord::continuation_token`] is optional:
 //! ending continuation does not itself revoke the issued tokens.
 //!
 //! Implement [`GrantStore::create`], [`GrantStore::lookup`],
