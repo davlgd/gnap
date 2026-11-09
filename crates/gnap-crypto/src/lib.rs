@@ -21,7 +21,7 @@ pub use hash::{
 };
 pub use httpsig::{parse_signature_params, parse_signatures, LabelledSignature, ReceivedParams};
 pub use proof::{ProofError, Signer, Verifier};
-pub use ps256::{Ps256Signer, Ps256Verifier};
+pub use ps256::{Ps256Signer, Ps256Verifier, MAX_MODULUS_BITS, MIN_MODULUS_BITS};
 pub use rotation::{verify_key_rotation, AcceptedRotation, RotationNonceMemory, RotationProof};
 pub use verify::{
     verify_request, verify_request_with_policy, Accepted, Expectations, NonceMemory, SignedRequest,

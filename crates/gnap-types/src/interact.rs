@@ -34,7 +34,9 @@ pub struct InteractRequest {
 }
 
 /// How the AS will call the client back (§2.5.2).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Its `Debug` output hides the nonce.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InteractFinish {
     /// The callback method.
     pub method: InteractionFinishMethod,
@@ -197,7 +199,9 @@ pub struct InteractHints {
 ///
 /// §3.3 sets two prohibitions: the AS never answers with a mode the client did
 /// not offer, nor with a mode it cannot support itself.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+///
+/// Its `Debug` output hides the finish nonce and the user code.
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct InteractResponse {
     /// The URI to send the end user to (§3.3.1).
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -229,7 +233,9 @@ pub struct InteractResponse {
 }
 
 /// A short code and its matching short URI (§3.3.4).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Its `Debug` output hides the code.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserCodeUri {
     /// The code the end user types. Handled case-insensitively (§4.1.3).
     pub code: String,
@@ -371,8 +377,9 @@ impl std::error::Error for CallbackError {}
 /// What the AS conveys to the client when interaction finishes (§4.2).
 ///
 /// Serves both callback methods: as query parameters for `redirect` (§4.2.1),
-/// as a JSON body for `push` (§4.2.2).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// as a JSON body for `push` (§4.2.2). Its `Debug` output hides the
+/// interaction reference.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InteractCallback {
     /// The interaction hash (§4.2.3). The client **must** validate it before
     /// passing `interact_ref` on to the AS.
@@ -380,4 +387,57 @@ pub struct InteractCallback {
 
     /// The interaction reference, single use (§4.2).
     pub interact_ref: String,
+}
+
+/// Shows whether a one-time secret is set, never its value.
+pub(crate) const fn redacted<T>(value: Option<&T>) -> &'static str {
+    if value.is_some() {
+        "Some(<redacted>)"
+    } else {
+        "None"
+    }
+}
+
+impl fmt::Debug for InteractFinish {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InteractFinish")
+            .field("method", &self.method)
+            .field("uri", &self.uri)
+            .field("nonce", &"<redacted>")
+            .field("hash_method", &self.hash_method)
+            .field("extra", &self.extra)
+            .finish()
+    }
+}
+
+impl fmt::Debug for InteractResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InteractResponse")
+            .field("redirect", &self.redirect)
+            .field("app", &self.app)
+            .field("user_code", &redacted(self.user_code.as_ref()))
+            .field("user_code_uri", &self.user_code_uri)
+            .field("finish", &redacted(self.finish.as_ref()))
+            .field("expires_in", &self.expires_in)
+            .field("extra", &self.extra)
+            .finish()
+    }
+}
+
+impl fmt::Debug for UserCodeUri {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UserCodeUri")
+            .field("code", &"<redacted>")
+            .field("uri", &self.uri)
+            .finish()
+    }
+}
+
+impl fmt::Debug for InteractCallback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InteractCallback")
+            .field("hash", &self.hash)
+            .field("interact_ref", &"<redacted>")
+            .finish()
+    }
 }

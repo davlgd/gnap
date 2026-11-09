@@ -14,13 +14,12 @@
 //! Two consequences follow: the client is testable with no network at all, and
 //! no runtime is forced on anyone depending on this crate.
 //!
-//! # Blocking, for now
+//! # Blocking
 //!
-//! [`HttpTransport::send`] is blocking. An async counterpart is a follow-up: at
-//! this crate's MSRV an `async fn` in a trait cannot be made object-safe without
-//! an extra dependency, and everything that consumes the seam today — the tests
-//! and the harness — is synchronous. Driving it from async code goes through
-//! whatever blocking-task facility the runtime offers.
+//! [`HttpTransport::send`] is blocking: an `async fn` in a trait can't be used
+//! as a trait object without an extra dependency, and a blocking call ties the
+//! crate to no runtime. From async code, call it through the runtime's
+//! blocking-task facility, in a bounded worker.
 
 use std::fmt;
 
@@ -42,3 +41,18 @@ pub trait HttpTransport {
     /// read.
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error>;
 }
+
+/// Forwards to the transport behind a reference or a smart pointer, so that a
+/// session can own its transport or share one.
+macro_rules! forward_transport {
+    ($($pointer:ty),*) => {$(
+        impl<T: HttpTransport + ?Sized> HttpTransport for $pointer {
+            type Error = T::Error;
+            fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
+                (**self).send(request)
+            }
+        }
+    )*};
+}
+
+forward_transport!(&T, Box<T>, std::sync::Arc<T>);

@@ -12,7 +12,7 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 /// An RS presenting a key by value or by a prearranged reference (§3.2).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
 pub struct ResourceServerObject {
     /// The RS's key, never the requesting client instance's key.
     pub key: Key,
@@ -29,7 +29,7 @@ crate::object_or_reference!(
 );
 
 /// The context supplied by an RS when introspecting a token (§3.3).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntrospectionRequest {
     /// The token presented by the client, in the body rather than Authorization.
     pub access_token: TokenValue,
@@ -55,7 +55,7 @@ pub struct IntrospectionRequest {
 }
 
 /// A resource set submitted by its RS to the AS (RFC 9767 §3.4).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceRegistrationRequest {
     /// Required rights; their meaning and ownership are deployment decisions.
     pub access: Vec<AccessItem>,
@@ -242,7 +242,7 @@ impl RsDiscovery {
 }
 
 /// Public information about an active token, never the token value (§3.3).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveIntrospection {
     /// Disclosable rights, possibly an empty array.
     pub access: Vec<AccessItem>,
@@ -299,7 +299,7 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
 }
 
 /// A token introspection decision. Inactive responses cannot carry other fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntrospectionResponse {
     /// Not active in the supplied context, including an indeterminate result.
     Inactive,

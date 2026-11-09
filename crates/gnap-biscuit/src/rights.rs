@@ -2,6 +2,9 @@ use gnap_types::access::{AccessItem, AccessObject};
 
 use crate::{Error, PROFILE};
 
+/// Longest resource, issuer, or audience URI, in bytes.
+pub(crate) const MAX_URI_BYTES: usize = 2048;
+
 /// The two operations in this file profile. Methods are case-sensitive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileAction {
@@ -102,7 +105,7 @@ pub(crate) fn validate_uri(value: &str) -> Result<(), Error> {
         .or_else(|| value.strip_prefix("http://"))
         .and_then(|rest| rest.split(['/', '?']).next())
         .ok_or(Error::Profile)?;
-    if value.len() > 2048
+    if value.len() > MAX_URI_BYTES
         || authority.is_empty()
         || authority.contains('@')
         || !gnap_types::uri::is_absolute(value)

@@ -52,7 +52,7 @@ impl Ps256Signer {
     /// includes a key carrying the RSASSA-PSS OID.
     pub fn from_pkcs8_pem(pem: &str, key_id: impl Into<String>) -> Result<Self, ProofError> {
         let sk = PrivateKey::from_pkcs8_pem(pem).map_err(|e| ProofError::Key(e.to_string()))?;
-        Ok(Self::from_key(sk, key_id))
+        Self::from_key(sk, key_id)
     }
 
     /// Loads a PKCS#1 private key, `BEGIN RSA PRIVATE KEY` format.
@@ -61,7 +61,7 @@ impl Ps256Signer {
     /// Fails when the PEM cannot be read as a PKCS#1 RSA private key.
     pub fn from_pkcs1_pem(pem: &str, key_id: impl Into<String>) -> Result<Self, ProofError> {
         let sk = PrivateKey::from_pkcs1_pem(pem).map_err(|e| ProofError::Key(e.to_string()))?;
-        Ok(Self::from_key(sk, key_id))
+        Self::from_key(sk, key_id)
     }
 
     /// Generates a fresh RSA key.
@@ -70,22 +70,24 @@ impl Ps256Signer {
     /// §11.5 is a reminder that protecting it is a deployment concern.
     /// # Errors
     ///
-    /// Fails when key generation does, which in practice means the random
-    /// source is unavailable or `bits` is too small.
+    /// Fails when `bits` is outside [`MIN_MODULUS_BITS`]..=[`MAX_MODULUS_BITS`],
+    /// or when the random source is unavailable.
     pub fn generate(bits: usize, key_id: impl Into<String>) -> Result<Self, ProofError> {
+        check_modulus_bits(bits)?;
         let mut rng = getrandom::SysRng;
         let sk = PrivateKey::new(&mut rng, bits)
             .map_err(|e| ProofError::Key(format!("generation: {e}")))?;
-        Ok(Self::from_key(sk, key_id))
+        Self::from_key(sk, key_id)
     }
 
-    fn from_key(sk: PrivateKey, key_id: impl Into<String>) -> Self {
+    fn from_key(sk: PrivateKey, key_id: impl Into<String>) -> Result<Self, ProofError> {
         let public = sk.to_public_key();
-        Self {
+        check_modulus_bits(public.n().bit_width() as usize)?;
+        Ok(Self {
             inner: SigningKey::<Sha256>::new(sk),
             public,
             key_id: key_id.into(),
-        }
+        })
     }
 
     /// The verifier matching this key, named the same way.
@@ -105,12 +107,10 @@ impl Ps256Signer {
     ///
     /// # Errors
     ///
-    /// Fails if the key falls outside [`Ps256Verifier::from_public_jwk`]'s
-    /// supported size or identifier limits. Existing PEM constructors do not
-    /// enforce those JWK import/export limits.
+    /// Fails if the key identifier is outside the limits that
+    /// [`Ps256Verifier::from_public_jwk`] accepts.
     pub fn public_jwk(&self) -> Result<Map<String, Value>, ProofError> {
         validate_key_id(&self.key_id)?;
-        validate_public_size(&self.public)?;
         Ok(Map::from_iter([
             ("kty".into(), Value::String("RSA".into())),
             (
@@ -225,10 +225,10 @@ impl Ps256Verifier {
         }
         validate_jwk_usage(jwk)?;
         let n = jwk_uint(jwk, "n", MAX_MODULUS_BITS / 8)?;
-        let e = jwk_uint(jwk, "e", 5)?;
+        let e = jwk_uint(jwk, "e", MAX_EXPONENT_BYTES)?;
         let public =
             PublicKey::new(n, e).map_err(|error| ProofError::Key(format!("JWK: {error}")))?;
-        validate_public_size(&public)?;
+        check_modulus_bits(public.n().bit_width() as usize)?;
         Ok(Self {
             inner: VerifyingKey::<Sha256>::from(public),
             key_id: Some(key_id.into()),
@@ -245,6 +245,7 @@ impl Ps256Verifier {
     /// Fails when the PEM cannot be read as an RSA public key.
     pub fn from_public_key_pem(pem: &str) -> Result<Self, ProofError> {
         let pk = PublicKey::from_public_key_pem(pem).map_err(|e| ProofError::Key(e.to_string()))?;
+        check_modulus_bits(pk.n().bit_width() as usize)?;
         Ok(Self {
             inner: VerifyingKey::<Sha256>::from(pk),
             key_id: None,
@@ -291,24 +292,44 @@ fn jwk_string<'a>(jwk: &'a Map<String, Value>, field: &str) -> Result<&'a str, P
 }
 
 fn validate_key_id(key_id: &str) -> Result<(), ProofError> {
-    if key_id.is_empty() || key_id.len() > 1024 {
-        return Err(jwk_error("kid must contain 1–1024 bytes"));
+    if key_id.is_empty() || key_id.len() > MAX_KEY_ID_BYTES {
+        return Err(jwk_error(&format!(
+            "kid must contain 1–{MAX_KEY_ID_BYTES} bytes"
+        )));
     }
     Ok(())
 }
 
-/// Upper bound on the modulus this profile accepts.
+/// Smallest RSA modulus, in bits, that this profile accepts for any key.
+pub const MIN_MODULUS_BITS: usize = 2048;
+
+/// Largest RSA modulus, in bits, that this profile accepts for any key.
 ///
 /// This is the project's own bound, not the `rsa` crate's `MAX_SIZE`: that
 /// constant moved from 4096 to 8192 in rsa 0.10, so borrowing it would have
-/// silently widened what this verifier accepts.
-const MAX_MODULUS_BITS: usize = 4096;
+/// silently widened what this profile accepts.
+pub const MAX_MODULUS_BITS: usize = 4096;
 
-fn validate_public_size(public: &PublicKey) -> Result<(), ProofError> {
-    if !(2048..=MAX_MODULUS_BITS).contains(&(public.n().bit_width() as usize)) {
-        return Err(jwk_error("RSA modulus must contain 2048–4096 bits"));
+/// Longest `kid`, in bytes.
+const MAX_KEY_ID_BYTES: usize = 1024;
+
+/// Longest `key_ops` entry, in bytes.
+const MAX_KEY_OPERATION_BYTES: usize = 1024;
+
+/// Most `key_ops` entries in an imported JWK.
+const MAX_KEY_OPERATIONS: usize = 32;
+
+/// Longest public exponent, in bytes: the `rsa` backend accepts at most 2³³−1.
+const MAX_EXPONENT_BYTES: usize = 5;
+
+fn check_modulus_bits(bits: usize) -> Result<(), ProofError> {
+    if (MIN_MODULUS_BITS..=MAX_MODULUS_BITS).contains(&bits) {
+        Ok(())
+    } else {
+        Err(ProofError::Key(format!(
+            "RSA modulus must contain {MIN_MODULUS_BITS}–{MAX_MODULUS_BITS} bits"
+        )))
     }
-    Ok(())
 }
 
 fn jwk_uint(
@@ -343,15 +364,17 @@ fn validate_jwk_usage(jwk: &Map<String, Value>) -> Result<(), ProofError> {
     let operations = operations
         .as_array()
         .ok_or_else(|| jwk_error("key_ops must be an array"))?;
-    if operations.len() > 32 {
-        return Err(jwk_error("key_ops exceeds the 32-operation limit"));
+    if operations.len() > MAX_KEY_OPERATIONS {
+        return Err(jwk_error(&format!(
+            "key_ops exceeds the {MAX_KEY_OPERATIONS}-operation limit"
+        )));
     }
     let mut seen = std::collections::HashSet::new();
     for operation in operations {
         let operation = operation
             .as_str()
             .ok_or_else(|| jwk_error("key_ops entries must be strings"))?;
-        if operation.len() > 1024 || !seen.insert(operation) {
+        if operation.len() > MAX_KEY_OPERATION_BYTES || !seen.insert(operation) {
             return Err(jwk_error(
                 "key_ops contains a duplicate or oversized operation",
             ));

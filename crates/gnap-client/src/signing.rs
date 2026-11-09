@@ -93,7 +93,7 @@ pub(crate) fn sign_request_labelled(
         nonce: Some(fresh_nonce()?),
         tag: Tag::Gnap,
     };
-    let (signature_input, signature) = sign(&message, &input, &Borrowed(signer), label)?;
+    let (signature_input, signature) = sign(&message, &input, &signer, label)?;
     if let Some(value) = authorization {
         request = request.header("Authorization", value);
     }
@@ -103,20 +103,4 @@ pub(crate) fn sign_request_labelled(
     Ok(request
         .header("Signature-Input", signature_input)
         .header("Signature", signature))
-}
-
-/// A borrowed signer, sized so that it can be handed to the signing helpers
-/// whether the caller holds a concrete key or a `dyn Signer`.
-pub(crate) struct Borrowed<'a, S: ?Sized>(pub &'a S);
-
-impl<S: Signer + ?Sized> Signer for Borrowed<'_, S> {
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, gnap_crypto::ProofError> {
-        self.0.sign(data)
-    }
-    fn key_id(&self) -> &str {
-        self.0.key_id()
-    }
-    fn algorithm(&self) -> &'static str {
-        self.0.algorithm()
-    }
 }

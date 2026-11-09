@@ -18,7 +18,7 @@ fn an_owned_key_outlives_its_local_handle_and_follows_value_rotation() {
             vec![],
             &rebound(REBOUND, Some(serde_json::to_value(&key).unwrap()), "owned"),
         );
-        s.rotate_key_owned(None, new.clone(), &key, 1_010).unwrap();
+        s.rotate_key(None, new.clone(), &key, 1_010).unwrap();
         (Arc::downgrade(&new), key, verifier)
     };
     assert_eq!(weak.strong_count(), 1);
@@ -65,7 +65,7 @@ fn replacing_a_key_or_lot_closing_a_grant_and_dropping_a_session_release_owned_h
             vec![],
             &rebound(REBOUND, Some(serde_json::to_value(&key).unwrap()), "owned"),
         );
-        s.rotate_key_owned(None, new, &key, 1_010).unwrap();
+        s.rotate_key(None, new, &key, 1_010).unwrap();
         assert_eq!(weak.strong_count(), 1);
         match action {
             "key" => {
@@ -80,7 +80,7 @@ fn replacing_a_key_or_lot_closing_a_grant_and_dropping_a_session_release_owned_h
                         "next",
                     ),
                 );
-                s.rotate_key_owned(None, next, &key, 1_020).unwrap();
+                s.rotate_key(None, next, &key, 1_020).unwrap();
             }
             "borrowed" => {
                 let key = presented(&sk);
@@ -93,7 +93,7 @@ fn replacing_a_key_or_lot_closing_a_grant_and_dropping_a_session_release_owned_h
                         "borrowed",
                     ),
                 );
-                s.rotate_key(None, &sk, &key, 1_020).unwrap();
+                s.rotate_key(None, Arc::new(signer()), &key, 1_020).unwrap();
                 assert_eq!(s.signer_for(None).unwrap().key_id(), sk.key_id());
             }
             "lot" => {
@@ -134,7 +134,7 @@ fn a_refused_or_inconclusive_rotation_does_not_retain_the_proposed_owner() {
         let weak = Arc::downgrade(&new);
         let key = presented(&new);
         // The caller keeps its own handle in case the remote outcome is unknown.
-        assert!(s.rotate_key_owned(None, new.clone(), &key, 1_010).is_err());
+        assert!(s.rotate_key(None, new.clone(), &key, 1_010).is_err());
         assert_eq!(Arc::strong_count(&new), 1);
         assert_eq!(s.signer_for(None).unwrap().key_id(), sk.key_id());
         assert_eq!(s.usable_tokens(1_010).unwrap()[0].value.as_str(), ISSUED);
@@ -159,7 +159,7 @@ fn a_failed_second_rotation_preserves_the_current_owned_signer() {
             vec![],
             &rebound(REBOUND, Some(serde_json::to_value(&key).unwrap()), "first"),
         );
-        s.rotate_key_owned(None, current, &key, 1_010).unwrap();
+        s.rotate_key(None, current, &key, 1_010).unwrap();
         let before = serde_json::to_value(s.usable_tokens(1_010).unwrap()).unwrap();
         let continuation = s.continuation().cloned();
         match failure {
@@ -172,9 +172,7 @@ fn a_failed_second_rotation_preserves_the_current_owned_signer() {
         let next = Arc::new(replacement());
         let next_weak = Arc::downgrade(&next);
         let next_key = presented(&next);
-        let error = s
-            .rotate_key_owned(None, next, &next_key, 1_020)
-            .unwrap_err();
+        let error = s.rotate_key(None, next, &next_key, 1_020).unwrap_err();
         assert!(
             match failure {
                 "server" => matches!(error, ClientError::Server(_)),

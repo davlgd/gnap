@@ -51,12 +51,13 @@ struct Counter {
     script: RefCell<VecDeque<String>>,
 }
 impl Nonces for Counter {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         self.count.set(self.count.get() + 1);
-        self.script
+        Ok(self
+            .script
             .borrow_mut()
             .pop_front()
-            .unwrap_or_else(|| format!("nonce{}", self.count.get()))
+            .unwrap_or_else(|| format!("nonce{}", self.count.get())))
     }
 }
 enum Outcome {

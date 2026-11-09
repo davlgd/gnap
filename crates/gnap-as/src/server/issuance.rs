@@ -31,7 +31,12 @@ fn selected(
     approvals: Vec<TokenApproval>,
 ) -> Result<Vec<TokenApproval>, HttpResponse> {
     let Some(wanted) = &request.access_token else {
-        return Err(misconfigured("token selection requires a token request"));
+        // A request for no token is approved with none.
+        return if approvals.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err(misconfigured("token selection requires a token request"))
+        };
     };
     if approvals.is_empty() || approvals.len() > MAX_APPROVALS {
         return Err(misconfigured(
@@ -78,11 +83,17 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             Ok(approvals) => approvals,
             Err(response) => return response,
         };
+        // An approval that releases nothing would read as a pending grant.
+        if approvals.is_empty() && subject.is_none() {
+            return misconfigured("an approval must issue a token or release subject information");
+        }
         if let Some(released) = &subject {
             if released.ground == SubjectGround::RoInteractedHere
                 && !aggregate.record.interaction_completed
             {
-                return misconfigured("subject release claims an interaction that did not occur");
+                return misconfigured(
+                    "subject release claims that the RO interacted, on a grant that has been through no interaction",
+                );
             }
             if let Err(error) = released.subject.validate() {
                 return misconfigured(&error.to_string());
@@ -131,25 +142,24 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             }
             tokens.push(token);
         }
-        let Some(cardinality) = request
-            .access_token
-            .as_ref()
-            .map(|tokens| tokens.cardinality)
-        else {
-            return misconfigured("token selection requires a token request");
+        let response_tokens = match request.access_token.as_ref() {
+            Some(requested) => {
+                let response_tokens = AccessTokenResponse {
+                    cardinality: requested.cardinality,
+                    tokens,
+                };
+                if response_tokens.validate().is_err() {
+                    return misconfigured("invalid prepared token response");
+                }
+                Some(response_tokens)
+            }
+            None => None,
         };
-        let response_tokens = AccessTokenResponse {
-            cardinality,
-            tokens,
-        };
-        if response_tokens.validate().is_err() {
-            return misconfigured("invalid prepared token response");
-        }
         // Only this final assignment replaces old authority in the candidate.
         // Its caller still has to commit the whole aggregate by create/CAS.
         aggregate.tokens = records;
         let mut response = GrantResponse {
-            access_token: Some(response_tokens),
+            access_token: response_tokens,
             ..GrantResponse::default()
         };
         complete_approval(
@@ -184,16 +194,21 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             let continuation = token.continuation.take();
             return Ok((vec![token], continuation));
         }
-        let expires_in = self.access_token_lifetime(request, now)?;
+        // A selection of no token issues no expiry to compute.
+        let expires_in = if approvals.is_empty() {
+            None
+        } else {
+            self.access_token_lifetime(request, now)?
+        };
         let mut roles = HashMap::new();
         let mut handles = HashSet::new();
         let mut reserved = Vec::with_capacity(approvals.len());
         let repeated =
             |value: &str| authenticated.is_some_and(|old| credential_used(&old.aggregate, value));
         for index in 0..approvals.len() {
-            let candidate = generated(self.nonces.next())?;
-            let handle = self.nonces.next();
-            let management = generated(self.nonces.next())?;
+            let candidate = generated(self.nonce()?)?;
+            let handle = self.nonce()?;
+            let management = generated(self.nonce()?)?;
             if handle.is_empty()
                 || !handles.insert(handle.clone())
                 || authenticated.is_some_and(|old| old.aggregate.tokens.contains_key(&handle))
@@ -219,7 +234,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             });
         }
         let continuation = if keep_open {
-            let value = generated(self.nonces.next())?;
+            let value = generated(self.nonce()?)?;
             if repeated(value.as_str())
                 || roles
                     .insert(value.as_str().into(), Role::Continuation)

@@ -125,7 +125,7 @@ pub(super) fn view(session: &BrowserSession<'_>, at: u64) -> Value {
 }
 
 fn verified_view<T: HttpTransport>(
-    client: &Session<'_, T, Ps256Signer>,
+    client: &Session<&T, &Ps256Signer>,
     identity: &Identity,
     at: u64,
 ) -> Value {

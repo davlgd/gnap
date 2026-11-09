@@ -65,6 +65,26 @@ pub trait Signer {
     fn algorithm(&self) -> &'static str;
 }
 
+/// Forwards to the signer behind a reference or a smart pointer, so that a
+/// holder can own its signer or share one.
+macro_rules! forward_signer {
+    ($($pointer:ty),*) => {$(
+        impl<S: Signer + ?Sized> Signer for $pointer {
+            fn sign(&self, data: &[u8]) -> Result<Vec<u8>, ProofError> {
+                (**self).sign(data)
+            }
+            fn key_id(&self) -> &str {
+                (**self).key_id()
+            }
+            fn algorithm(&self) -> &'static str {
+                (**self).algorithm()
+            }
+        }
+    )*};
+}
+
+forward_signer!(&S, Box<S>, std::sync::Arc<S>);
+
 /// Validates a signature over a byte string.
 pub trait Verifier {
     /// Returns `Ok(())` when the signature matches, an error otherwise.

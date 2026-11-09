@@ -56,7 +56,7 @@ struct Draws {
 #[derive(Clone, Default)]
 struct Source(Arc<Mutex<Draws>>);
 impl Nonces for Source {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         let mut draws = self.0.lock().unwrap();
         draws.next += 1;
         let value = draws
@@ -64,7 +64,8 @@ impl Nonces for Source {
             .pop_front()
             .unwrap_or_else(|| format!("test-nonce-{}", draws.next));
         draws.seen.push(value.clone());
-        value
+        drop(draws);
+        Ok(value)
     }
 }
 type Server<S = Arc<MemoryStorage>> = AuthorizationServer<Consent, Keys, S, Source>;

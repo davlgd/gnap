@@ -131,8 +131,7 @@ fn requested_key(request: &HttpRequest) -> Result<Key, HttpResponse> {
             "key rotation requires a JSON body containing key",
         ));
     };
-    // An implementation bound, before JSON parsing; not a GNAP message limit.
-    if body.len() > 64 * 1024 {
+    if body.len() > super::MAX_GRANT_BODY_BYTES {
         return Err(error(
             ErrorCode::InvalidRequest,
             "key-rotation content exceeds the size limit",

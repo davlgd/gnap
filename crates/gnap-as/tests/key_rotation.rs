@@ -90,10 +90,10 @@ impl Policy for Approve {
 
 struct Counted(Cell<u64>);
 impl Nonces for Counted {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         let next = self.0.get() + 1;
         self.0.set(next);
-        format!("credential-{next}")
+        Ok(format!("credential-{next}"))
     }
 }
 

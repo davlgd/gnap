@@ -36,9 +36,14 @@ impl HttpRequest {
         self
     }
 
-    /// Sets a JSON body and its `Content-Type`.
+    /// Sets a JSON body, and makes `application/json` its only `Content-Type`.
+    ///
+    /// Any `Content-Type` field set before is replaced. To build a message whose
+    /// media type disagrees with its body, set [`Self::body`] directly.
     #[must_use]
     pub fn json_body(mut self, body: Vec<u8>) -> Self {
+        self.headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
         self.headers
             .push(("Content-Type".into(), "application/json".into()));
         self.body = Some(body);
@@ -72,6 +77,16 @@ impl HttpRequest {
     pub fn combined_header_value(&self, name: &str) -> Option<String> {
         combined_header_value(&self.headers, name)
     }
+
+    /// Whether the message carries exactly one `Content-Type` field, naming
+    /// `application/json`, which GNAP requires of every JSON message (§2, §3).
+    ///
+    /// Parameters such as `charset` are allowed. A missing or repeated field is
+    /// refused, since a recipient couldn't tell which media type applies.
+    #[must_use]
+    pub fn has_json_content_type(&self) -> bool {
+        has_json_content_type(&self.headers)
+    }
 }
 
 /// Every instance of `name` in `headers`, matched case-insensitively.
@@ -84,6 +99,18 @@ fn header_values<'a>(
         .iter()
         .filter(move |(n, _)| n.eq_ignore_ascii_case(&name))
         .map(|(_, v)| v.as_str())
+}
+
+/// Exactly one `Content-Type` field, whose media type is `application/json`.
+fn has_json_content_type(headers: &[(String, String)]) -> bool {
+    let mut values = header_values(headers, "content-type");
+    match (values.next(), values.next()) {
+        (Some(value), None) => value
+            .split(';')
+            .next()
+            .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json")),
+        _ => false,
+    }
 }
 
 /// RFC 9421 §2.1: instances trimmed of SP and HTAB, joined by `, `.
@@ -123,6 +150,16 @@ impl HttpResponse {
     #[must_use]
     pub fn combined_header_value(&self, name: &str) -> Option<String> {
         combined_header_value(&self.headers, name)
+    }
+
+    /// Whether the message carries exactly one `Content-Type` field, naming
+    /// `application/json`, which GNAP requires of every JSON message (§2, §3).
+    ///
+    /// Parameters such as `charset` are allowed. A missing or repeated field is
+    /// refused, since a recipient couldn't tell which media type applies.
+    #[must_use]
+    pub fn has_json_content_type(&self) -> bool {
+        has_json_content_type(&self.headers)
     }
 
     /// Whether the AS sent `Cache-Control: no-store`, which §3 requires of it.

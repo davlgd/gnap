@@ -42,10 +42,10 @@ impl KeyResolver for Keys {
 }
 struct Counter(Cell<u64>);
 impl Nonces for Counter {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         let next = self.0.get() + 1;
         self.0.set(next);
-        format!("value{next}")
+        Ok(format!("value{next}"))
     }
 }
 
@@ -200,7 +200,7 @@ fn rs_accepts(server: &Server, token: &TokenValue, right: &str, now: u64) -> boo
         )
         .is_ok()
 }
-fn held(session: &Session<'_, Direct<'_>, Ps256Signer>, now: u64) -> AccessToken {
+fn held(session: &Session<&Direct<'_>, &Ps256Signer>, now: u64) -> AccessToken {
     session.usable_tokens(now).unwrap()[0].clone()
 }
 fn management_refused(server: &Server, token: &AccessToken, now: u64) {

@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
-    "check_readme", Path(__file__).resolve().parents[1] / "check_readme.py")
+    "check_getting_started", Path(__file__).resolve().parents[1] / "check_getting_started.py")
 checker = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(checker)
 

@@ -59,10 +59,18 @@ struct AlwaysInteract {
 }
 
 impl Policy for AlwaysInteract {
-    fn evaluate(&self, _request: &GrantRequest) -> Decision {
+    /// Approves the first requested token, whatever the request holds.
+    fn evaluate(&self, request: &GrantRequest) -> Decision {
         if self.interacted.get() {
-            Decision::Approve {
-                access: vec![AccessItem::Reference("dolphin-metadata".into())],
+            let first = request
+                .access_token
+                .as_ref()
+                .and_then(|requested| requested.tokens.first());
+            Decision::ApproveTokens {
+                tokens: vec![gnap_as::TokenApproval {
+                    requested_label: first.and_then(|token| token.label.clone()),
+                    access: vec![AccessItem::Reference("dolphin-metadata".into())],
+                }],
                 subject: None,
             }
         } else {
@@ -91,10 +99,10 @@ impl KeyResolver for OneKey {
 struct Counted(Cell<u32>);
 
 impl Nonces for Counted {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         let n = self.0.get() + 1;
         self.0.set(n);
-        format!("nonce{n:04}")
+        Ok(format!("nonce{n:04}"))
     }
 }
 
@@ -645,8 +653,8 @@ fn a_broken_nonce_source_is_reported_not_fatal() {
     /// Returns a value with a space in it, which `token68` forbids.
     struct BadNonces;
     impl Nonces for BadNonces {
-        fn next(&self) -> String {
-            "not a token68 value".into()
+        fn next(&self) -> Result<String, gnap_as::NonceError> {
+            Ok("not a token68 value".into())
         }
     }
 
@@ -681,6 +689,152 @@ fn a_broken_nonce_source_is_reported_not_fatal() {
         text.contains("Nonces"),
         "the message should point at the cause: {text}"
     );
+}
+
+/// Counts draws, and fails the draw that the shared countdown names.
+struct Failing {
+    draws: Cell<u32>,
+    fail_at: Rc<Cell<Option<u32>>>,
+}
+
+impl Nonces for Failing {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
+        self.draws.set(self.draws.get() + 1);
+        if let Some(remaining) = self.fail_at.get() {
+            if remaining == 1 {
+                self.fail_at.set(None);
+                return Err(gnap_as::NonceError);
+            }
+            self.fail_at.set(Some(remaining - 1));
+        }
+        Ok(format!("nonce{:04}", self.draws.get()))
+    }
+}
+
+/// A server whose random source fails on the draw `fail_at` counts down to.
+fn failing_server(
+    interacted: bool,
+    fail_at: &Rc<Cell<Option<u32>>>,
+) -> AuthorizationServer<AlwaysInteract, OneKey, MemoryStorage, Failing> {
+    AuthorizationServer::new(
+        AlwaysInteract {
+            interacted: Cell::new(interacted),
+        },
+        OneKey(RSA_SPKI),
+        MemoryStorage::new(),
+        Failing {
+            draws: Cell::new(0),
+            fail_at: Rc::clone(fail_at),
+        },
+        Endpoints {
+            grant: GRANT.into(),
+            continuation: CONTINUE.into(),
+            interaction: "https://as.example/i".into(),
+            token_management: "https://as.example/token".into(),
+        },
+    )
+}
+
+/// A random source that stops working fails the request with a 500 and
+/// publishes nothing, whichever draw fails: the grant isn't created, and a
+/// refused rotation leaves the token and its credential in place.
+#[test]
+fn an_unavailable_nonce_source_fails_without_publishing() {
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    for position in 1..=3 {
+        let fail_at = Rc::new(Cell::new(None));
+        let as_ = failing_server(true, &fail_at);
+        let transport = Direct::wrapping(&as_);
+
+        fail_at.set(Some(position));
+        let mut refused = Session::new(&transport, &signer, GRANT);
+        assert!(refused.start(&request(), 1_000).is_err(), "draw {position}");
+        let (_, response) = transport.exchanges.borrow().last().unwrap().clone();
+        assert_eq!(response.status, 500, "draw {position}");
+        assert!(String::from_utf8_lossy(&response.body).contains("nonce source"));
+        // `len` counts continuable grants only; the Debug count covers every grant.
+        assert!(
+            format!("{:?}", as_.storage()).contains("grants: 0"),
+            "draw {position}"
+        );
+
+        let mut client = Session::new(&transport, &signer, GRANT);
+        client.start(&request(), 1_000).unwrap();
+        assert!(format!("{:?}", as_.storage()).contains("grants: 1"));
+        fail_at.set(Some(position));
+        assert!(client.rotate_token(None, 1_001).is_err(), "draw {position}");
+        let (_, response) = transport.exchanges.borrow().last().unwrap().clone();
+        assert_eq!(response.status, 500, "draw {position}");
+
+        // Nothing was published: the same credential rotates once the source works.
+        client.rotate_token(None, 1_002).unwrap();
+    }
+}
+
+/// A random source that fails while an interaction completes leaves the
+/// pending grant as it was, and so does one that fails while the grant is
+/// then issued: both can be retried.
+#[test]
+fn an_unavailable_nonce_source_during_interaction_leaves_the_grant_pending() {
+    use gnap_as::{GrantSelector, GrantStore, InteractionError};
+
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    for position in 1..=3 {
+        let fail_at = Rc::new(Cell::new(None));
+        let as_ = failing_server(false, &fail_at);
+        let transport = Direct::wrapping(&as_);
+        let mut client = Session::new(&transport, &signer, GRANT);
+        let step = client.start(&request(), 1_000).unwrap();
+        let redirect = step.response().interact.clone().unwrap().redirect.unwrap();
+        let handle = redirect.rsplit('/').next().unwrap();
+        let pending = |as_: &AuthorizationServer<_, _, MemoryStorage, _>| {
+            as_.storage()
+                .lookup(GrantSelector::Interaction(handle))
+                .unwrap()
+                .unwrap()
+        };
+        let before = pending(&as_);
+
+        // The completion draws the interaction reference first.
+        fail_at.set(Some(1));
+        assert!(matches!(
+            as_.complete_interaction(handle, 1_005),
+            Err(InteractionError::Misconfigured(_))
+        ));
+        let after = pending(&as_);
+        assert_eq!(after.revision, before.revision);
+        assert!(after.aggregate.record.interact_ref.is_none());
+
+        let Finish::Redirect { uri } = as_.complete_interaction(handle, 1_005).unwrap() else {
+            panic!("the client asked for the redirect finish method");
+        };
+        client
+            .accept_callback(&InteractCallback::from_redirect(&uri).unwrap(), 1_005)
+            .unwrap();
+        let completed = as_
+            .storage()
+            .lookup(GrantSelector::Id(before.id))
+            .unwrap()
+            .unwrap();
+
+        // Issuing the token then fails at one of its draws, and changes nothing.
+        transport.now.set(1_010);
+        fail_at.set(Some(position));
+        assert!(client.continue_grant(1_010).is_err(), "draw {position}");
+        let refused = as_
+            .storage()
+            .lookup(GrantSelector::Id(before.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(refused.revision, completed.revision, "draw {position}");
+        assert!(refused.aggregate.tokens.is_empty(), "draw {position}");
+
+        let step = client.continue_grant(1_010).unwrap();
+        assert!(
+            matches!(step, Step::Approved(_)),
+            "draw {position}: {step:?}"
+        );
+    }
 }
 
 /// GNAP-9635-§2.5-M07 — when interaction is required and the client offers no
@@ -1493,24 +1647,32 @@ fn the_grant_endpoint_accepts_json_post_and_advertises_options() {
     assert_eq!(response.status, 405);
     assert_eq!(response.header_value("allow"), Some("POST, OPTIONS"));
 
-    let response = as_.handle(
-        &HttpRequest::new("POST", GRANT)
-            .header("Content-Type", "text/plain")
-            .json_body(br#"{"client":"client-541-ab"}"#.to_vec()),
-        1_000,
-    );
+    let mut text = HttpRequest::new("POST", GRANT).header("Content-Type", "text/plain");
+    text.body = Some(br#"{"client":"client-541-ab"}"#.to_vec());
+    let response = as_.handle(&text, 1_000);
     assert_eq!(response.status, 415);
     assert_eq!(response.header_value("accept"), Some("application/json"));
 
     // The media type may carry parameters; only the type itself is compared.
-    let response = as_.handle(
-        &HttpRequest::new("POST", GRANT)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .json_body(br#"{"client":"stranger"}"#.to_vec()),
-        1_000,
-    );
+    let mut charset =
+        HttpRequest::new("POST", GRANT).header("Content-Type", "application/json; charset=utf-8");
+    charset.body = Some(br#"{"client":"stranger"}"#.to_vec());
+    let response = as_.handle(&charset, 1_000);
     assert_eq!(response.status, 400, "{}", body_of(&response));
     assert!(body_of(&response).contains("invalid_client"));
+
+    // Two Content-Type fields leave the media type ambiguous, whatever their order.
+    for types in [
+        ["application/json", "text/html"],
+        ["text/html", "application/json"],
+    ] {
+        let mut ambiguous = HttpRequest::new("POST", GRANT)
+            .header("Content-Type", types[0])
+            .header("Content-Type", types[1]);
+        ambiguous.body = Some(br#"{"client":"stranger"}"#.to_vec());
+        let response = as_.handle(&ambiguous, 1_000);
+        assert_eq!(response.status, 415, "{types:?}");
+    }
 }
 
 /// GNAP-9635-§4.2-M05 — a refused continuation must not spend the reference.
@@ -2915,7 +3077,7 @@ fn the_management_api_answers_only_to_its_own_token_and_key() {
 fn approved_token(
     as_: &Server,
     transport: &Direct<'_, OneKey, Counted>,
-    client: &mut Session<'_, Direct<'_, OneKey, Counted>, Ps256Signer>,
+    client: &mut Session<&Direct<'_, OneKey, Counted>, &Ps256Signer>,
 ) -> gnap_types::token::AccessToken {
     let step = client.start(&request(), 1_000).unwrap();
     approved_token_from(as_, transport, client, &step)
@@ -2925,7 +3087,7 @@ fn approved_token(
 fn approved_token_from(
     as_: &Server,
     transport: &Direct<'_, OneKey, Counted>,
-    client: &mut Session<'_, Direct<'_, OneKey, Counted>, Ps256Signer>,
+    client: &mut Session<&Direct<'_, OneKey, Counted>, &Ps256Signer>,
     step: &Step,
 ) -> gnap_types::token::AccessToken {
     let redirect = step.response().interact.clone().unwrap().redirect.unwrap();
@@ -3178,8 +3340,8 @@ fn stripping_signed_rotation_content_cannot_rotate_a_token_value() {
 fn an_unusable_rotation_preserves_the_original_token() {
     struct Scripted(RefCell<std::collections::VecDeque<String>>);
     impl Nonces for Scripted {
-        fn next(&self) -> String {
-            self.0.borrow_mut().pop_front().expect("script exhausted")
+        fn next(&self) -> Result<String, gnap_as::NonceError> {
+            Ok(self.0.borrow_mut().pop_front().expect("script exhausted"))
         }
     }
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
@@ -3510,6 +3672,116 @@ fn an_unknown_user_reference_in_a_modification_is_refused() {
     );
 }
 
+/// §2: a client that only wants subject information omits `access_token`.
+/// An approval then releases the subject and issues no token, and a policy
+/// that grants rights to such a request is a configuration fault.
+#[test]
+fn a_request_for_no_token_is_approved_without_one() {
+    /// Approves with the given rights, releasing a subject when asked to, and
+    /// the longest token lifetime there is: no token, no expiry to compute.
+    struct ReleaseSubject(Vec<AccessItem>, bool, bool);
+    impl Policy for ReleaseSubject {
+        fn evaluate(&self, _request: &GrantRequest) -> Decision {
+            Decision::Approve {
+                access: self.0.clone(),
+                subject: self.1.then(|| ReleasedSubject {
+                    ground: SubjectGround::EstablishedOtherwise("synthetic test owner"),
+                    subject: Box::new(
+                        serde_json::from_str(
+                            r#"{"sub_ids":[{"format":"opaque","id":"XUT2MFM1XBIKJKSDU8QM"}]}"#,
+                        )
+                        .unwrap(),
+                    ),
+                }),
+            }
+        }
+        fn token_lifetime(&self, _request: &GrantRequest) -> Option<std::num::NonZeroU64> {
+            std::num::NonZeroU64::new(u64::MAX)
+        }
+        fn keep_grant_open(&self, _request: &GrantRequest) -> bool {
+            self.2
+        }
+    }
+    let served = |access: Vec<AccessItem>, subject: bool, keep_open: bool| {
+        let as_ = AuthorizationServer::new(
+            ReleaseSubject(access, subject, keep_open),
+            OneKey(RSA_SPKI),
+            MemoryStorage::new(),
+            Counted(Cell::new(0)),
+            Endpoints {
+                grant: GRANT.into(),
+                continuation: CONTINUE.into(),
+                interaction: "https://as.example/i".into(),
+                token_management: "https://as.example/token".into(),
+            },
+        );
+        let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+        let body = br#"{"client":"client-541-ab","subject":{"sub_id_formats":["opaque"]}}"#;
+        as_.handle(&signed_grant(&signer, body, 1_000), 1_000)
+    };
+
+    for keep_open in [false, true] {
+        let response = served(Vec::new(), true, keep_open);
+        assert_eq!(response.status, 200, "{}", body_of(&response));
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body.get("access_token").is_none(), "{body}");
+        assert_eq!(body["subject"]["sub_ids"][0]["format"], "opaque");
+        assert_eq!(body.get("continue").is_some(), keep_open, "{body}");
+    }
+
+    let response = served(
+        vec![AccessItem::Reference("dolphin-metadata".into())],
+        true,
+        false,
+    );
+    assert_eq!(response.status, 500, "{}", body_of(&response));
+    assert!(body_of(&response).contains("asks for no token"));
+
+    // An approval that releases neither a token nor a subject would read as a
+    // pending grant, so it's refused as a policy fault.
+    let response = served(Vec::new(), false, true);
+    assert_eq!(response.status, 500, "{}", body_of(&response));
+    assert!(body_of(&response).contains("issue a token or release subject"));
+}
+
+/// `Decision::Approve` names no token, so a request for several is a policy
+/// fault: the server refuses it instead of picking one.
+#[test]
+fn a_shorthand_approval_of_several_requested_tokens_is_refused() {
+    struct ApproveAll;
+    impl Policy for ApproveAll {
+        fn evaluate(&self, _request: &GrantRequest) -> Decision {
+            Decision::Approve {
+                access: vec![AccessItem::Reference("read".into())],
+                subject: None,
+            }
+        }
+    }
+    let as_ = AuthorizationServer::new(
+        ApproveAll,
+        OneKey(RSA_SPKI),
+        MemoryStorage::new(),
+        Counted(Cell::new(0)),
+        Endpoints {
+            grant: GRANT.into(),
+            continuation: CONTINUE.into(),
+            interaction: "https://as.example/i".into(),
+            token_management: "https://as.example/token".into(),
+        },
+    );
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    let body = serde_json::json!({"client": "client-541-ab", "access_token": [
+        {"label": "first", "access": ["read"]},
+        {"label": "second", "access": ["write"]},
+    ]});
+    let response = as_.handle(
+        &signed_grant(&signer, &serde_json::to_vec(&body).unwrap(), 1_000),
+        1_000,
+    );
+    assert_eq!(response.status, 500, "{}", body_of(&response));
+    assert!(body_of(&response).contains("ApproveTokens"));
+}
+
 /// GNAP-9635-§3.2.1-MN31 and GNAP-9635-§3.2.2-M04 — an AS that grants
 /// only one token still preserves the requested object or array structure.
 #[test]
@@ -3711,8 +3983,8 @@ fn lifetime_omission_is_preserved_and_overflowing_issuance_fails() {
 fn invalid_generated_values_preserve_the_existing_deadline() {
     struct InvalidNonces;
     impl Nonces for InvalidNonces {
-        fn next(&self) -> String {
-            "invalid token value".into()
+        fn next(&self) -> Result<String, gnap_as::NonceError> {
+            Ok("invalid token value".into())
         }
     }
     let as_ = management_server(InvalidNonces);

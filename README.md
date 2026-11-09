@@ -62,7 +62,7 @@ cargo doc --workspace --no-deps --open --locked
 
 ## Documentation
 
-The [documentation index](docs/README.md) groups the guides by task: interaction, multiple tokens, resource authorization, downstream delegation, identity assertions, and diagnostics. The [evidence ledger](conformance/README.md) maps RFC requirements to reproducible tests, without claiming overall conformance.
+The [documentation index](docs/README.md) groups the guides by task: interaction, multiple tokens, resource authorization, downstream delegation, identity assertions, and diagnostics. The [evidence ledger](conformance/README.md) maps RFC requirements to reproducible tests, without claiming overall conformance. The [changelog](CHANGELOG.md) lists the API changes that affect you, with what to change.
 
 ## Contribute
 

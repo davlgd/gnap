@@ -10,6 +10,9 @@ use sha2::{Digest, Sha256};
 /// Canonical Crockford base32 symbols, excluding ambiguous letters.
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
+/// Longest nonce draw accepted as the seed of a code.
+const MAX_SEED_BYTES: usize = 512;
+
 pub(crate) struct Configuration<S> {
     pub uri: String,
     pub lookup: fn(&S, &str) -> Result<Option<GrantSnapshot>, StoreError>,
@@ -47,8 +50,8 @@ pub(crate) fn is_canonical(code: &str) -> bool {
 /// Each five-bit group selects one symbol without modulo bias. The nonce source
 /// must be unpredictable; hashing a test counter does not make it secure.
 pub(crate) fn generate(source: &impl Nonces) -> Option<String> {
-    let seed = source.next();
-    if seed.is_empty() || seed.len() > 512 {
+    let seed = source.next().ok()?;
+    if seed.is_empty() || seed.len() > MAX_SEED_BYTES {
         return None;
     }
     let digest = Sha256::new()

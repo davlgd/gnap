@@ -294,7 +294,10 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
         if !registration.policy.authorize(&resolved, &body.access) {
             return rs_error(RsErrorCode::InvalidAccess);
         }
-        let candidate = format!("rsr_{}", registration.references.next());
+        let Ok(reference) = registration.references.next() else {
+            return registration_unavailable();
+        };
+        let candidate = format!("rsr_{reference}");
         let record =
             match registration
                 .store
@@ -308,14 +311,7 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
                     // A failed local allocation/commit is not a malformed RS request.
                     // This infrastructure response stays outside the GNAP envelope,
                     // without owner IDs, references, rights or adapter diagnostics.
-                    return HttpResponse {
-                        status: 503,
-                        headers: vec![
-                            ("Content-Type".into(), "text/plain; charset=utf-8".into()),
-                            ("Cache-Control".into(), "no-store".into()),
-                        ],
-                        body: b"resource registration unavailable".to_vec(),
-                    };
+                    return registration_unavailable();
                 }
             };
         json_response(
@@ -338,20 +334,7 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
         {
             return rs_error(RsErrorCode::InvalidRequest);
         }
-        let content_types: Vec<_> = request
-            .headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-            .collect();
-        if content_types.len() != 1
-            || !content_types[0]
-                .1
-                .split(';')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .eq_ignore_ascii_case("application/json")
-        {
+        if !request.has_json_content_type() {
             return rs_error(RsErrorCode::InvalidRequest);
         }
         let Some(bytes) = request
@@ -513,18 +496,7 @@ fn json_request(request: &HttpRequest, max_bytes: usize) -> Option<&[u8]> {
     {
         return None;
     }
-    let mut types = request
-        .headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"));
-    let (_, value) = types.next()?;
-    if types.next().is_some()
-        || !value
-            .split(';')
-            .next()?
-            .trim()
-            .eq_ignore_ascii_case("application/json")
-    {
+    if !request.has_json_content_type() {
         return None;
     }
     request
@@ -600,5 +572,17 @@ fn json_response(status: u16, value: &impl serde::Serialize) -> HttpResponse {
             ("Cache-Control".into(), "no-store".into()),
         ],
         body,
+    }
+}
+
+/// A local failure to allocate or commit a registration, outside the GNAP envelope.
+fn registration_unavailable() -> HttpResponse {
+    HttpResponse {
+        status: 503,
+        headers: vec![
+            ("Content-Type".into(), "text/plain; charset=utf-8".into()),
+            ("Cache-Control".into(), "no-store".into()),
+        ],
+        body: b"resource registration unavailable".to_vec(),
     }
 }

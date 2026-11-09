@@ -27,7 +27,10 @@ impl FakeAs {
                     .into_iter()
                     .map(|b| HttpResponse {
                         status: if b.is_empty() { 204 } else { 200 },
-                        headers: vec![("Cache-Control".into(), "no-store".into())],
+                        headers: vec![
+                            ("Content-Type".into(), "application/json".into()),
+                            ("Cache-Control".into(), "no-store".into()),
+                        ],
                         body: b.as_bytes().to_vec(),
                     })
                     .rev()
@@ -103,7 +106,7 @@ fn two_of_three() -> String {
     )
 }
 
-fn labels(session: &Session<'_, FakeAs, Ps256Signer>, now: u64) -> Vec<Option<String>> {
+fn labels(session: &Session<&FakeAs, &Ps256Signer>, now: u64) -> Vec<Option<String>> {
     session
         .usable_tokens(now)
         .unwrap_or_default()

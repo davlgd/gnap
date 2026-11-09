@@ -48,9 +48,9 @@ impl KeyResolver for Key {
 }
 struct Counter(Rc<Cell<u64>>);
 impl Nonces for Counter {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         self.0.set(self.0.get() + 1);
-        format!("nonce{:04}", self.0.get())
+        Ok(format!("nonce{:04}", self.0.get()))
     }
 }
 
@@ -319,12 +319,13 @@ fn initial_encoder_refusal_and_invalid_output_store_no_access_token() {
 fn issuance_rejects_a_candidate_repeating_the_management_credential_before_encoding() {
     struct Repeating(RefCell<VecDeque<&'static str>>);
     impl Nonces for Repeating {
-        fn next(&self) -> String {
-            self.0
+        fn next(&self) -> Result<String, gnap_as::NonceError> {
+            Ok(self
+                .0
                 .borrow_mut()
                 .pop_front()
                 .expect("nonce script exhausted")
-                .into()
+                .into())
         }
     }
     let seen = Rc::new(RefCell::new(Vec::new()));
@@ -483,11 +484,12 @@ impl Policy for OpenReadOnly {
 }
 struct ScriptedNonces(RefCell<VecDeque<String>>);
 impl Nonces for ScriptedNonces {
-    fn next(&self) -> String {
-        self.0
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
+        Ok(self
+            .0
             .borrow_mut()
             .pop_front()
-            .expect("nonce script exhausted")
+            .expect("nonce script exhausted"))
     }
 }
 

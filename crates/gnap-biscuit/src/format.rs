@@ -17,6 +17,13 @@ use crate::{rights::validate_uri, Error, FileAction, FileRight, PROFILE};
 
 const MAX_BYTES: usize = 16 * 1024;
 const MAX_BLOCKS: usize = 16;
+const BLOCK_VERSION: u32 = 3;
+const MAX_SYMBOLS: usize = 128;
+const MAX_SYMBOL_BYTES: usize = 4096;
+const MAX_CHECKS_PER_BLOCK: usize = 2;
+/// The singleton facts of an authority block: profile, issuer, audience, key, proof, and two dates.
+const AUTHORITY_SINGLETONS: usize = 7;
+const MAX_RIGHTS: usize = 32;
 
 /// Unauthenticated structural information. Never use it as an access decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,13 +98,13 @@ pub(crate) fn parse(value: &TokenValue) -> Result<Parsed, Error> {
         }
         let block = schema::Block::decode(signed.block.as_slice()).map_err(|_| Error::Profile)?;
         total_symbols += block.symbols.len();
-        if block.version != Some(3)
+        if block.version != Some(BLOCK_VERSION)
             || block.context.is_some()
             || !block.rules.is_empty()
             || !block.scope.is_empty()
             || !block.public_keys.is_empty()
-            || total_symbols > 128
-            || block.symbols.iter().any(|s| s.len() > 4096)
+            || total_symbols > MAX_SYMBOLS
+            || block.symbols.iter().any(|s| s.len() > MAX_SYMBOL_BYTES)
             || block.symbols.iter().collect::<HashSet<_>>().len() != block.symbols.len()
         {
             return Err(Error::Profile);
@@ -108,7 +115,10 @@ pub(crate) fn parse(value: &TokenValue) -> Result<Parsed, Error> {
         if index == 0 {
             claims = Some(authority(&block, &symbols)?);
         } else {
-            if !block.facts.is_empty() || block.checks.is_empty() || block.checks.len() > 2 {
+            if !block.facts.is_empty()
+                || block.checks.is_empty()
+                || block.checks.len() > MAX_CHECKS_PER_BLOCK
+            {
                 return Err(Error::Profile);
             }
             for check in &block.checks {
@@ -127,7 +137,8 @@ pub(crate) fn parse(value: &TokenValue) -> Result<Parsed, Error> {
 }
 
 fn authority(block: &schema::Block, symbols: &SymbolTable) -> Result<Claims, Error> {
-    if !block.checks.is_empty() || !(8..=39).contains(&block.facts.len()) {
+    let facts = AUTHORITY_SINGLETONS + 1..=AUTHORITY_SINGLETONS + MAX_RIGHTS;
+    if !block.checks.is_empty() || !facts.contains(&block.facts.len()) {
         return Err(Error::Profile);
     }
     let mut fields = BTreeMap::new();
@@ -156,7 +167,7 @@ fn authority(block: &schema::Block, symbols: &SymbolTable) -> Result<Claims, Err
             }
         }
     }
-    if fields.len() != 7 || rights.is_empty() || rights.len() > 32 {
+    if fields.len() != AUTHORITY_SINGLETONS || rights.is_empty() || rights.len() > MAX_RIGHTS {
         return Err(Error::Profile);
     }
     let get = |name| fields.get(name).copied().ok_or(Error::Profile);

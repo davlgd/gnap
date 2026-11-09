@@ -188,8 +188,17 @@ impl<'de> Deserialize<'de> for AccessTokenRequest {
 ///
 /// Restricted to the `token68` character set of RFC 9110 §11.2, so it travels
 /// in an HTTP header with no extra encoding.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+///
+/// Its `Debug` output never shows the value, so that logging a message or a
+/// stored record doesn't disclose a credential.
+#[derive(Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct TokenValue(String);
+
+impl fmt::Debug for TokenValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TokenValue(<redacted>)")
+    }
+}
 
 impl TokenValue {
     /// Builds the value after checking the character set.
@@ -255,7 +264,7 @@ impl<'de> Deserialize<'de> for TokenValue {
 }
 
 /// An access token issued by the AS (§3.2.1).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccessToken {
     /// The value, opaque to the client.
     pub value: TokenValue,
@@ -542,7 +551,7 @@ fn first_duplicate(flags: &[AccessTokenFlag]) -> Option<String> {
 }
 
 /// One or more issued tokens (§3.2).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessTokenResponse {
     /// The shape used, which must mirror the request's.
     pub cardinality: Cardinality,

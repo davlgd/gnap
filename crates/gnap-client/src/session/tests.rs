@@ -1,9 +1,10 @@
 //! Atomic local state and deliberately non-atomic remote outcomes.
 
 use super::*;
-use gnap_crypto::hash::interaction_hash;
+use gnap_crypto::hash::{interaction_hash, InteractionHashInput};
 use gnap_crypto::ps256::Ps256Signer;
 use gnap_crypto::verify::{verify_request, Expectations, SignedRequest};
+use gnap_types::interact::InteractCallback;
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 
@@ -76,6 +77,8 @@ fn unusable_responses() -> Vec<Result<HttpResponse, String>> {
     duplicate_type
         .headers
         .push(("content-type".into(), "application/json".into()));
+    let mut missing_type = response(200, APPROVED);
+    missing_type.headers.clear();
     vec![
         Err("connection lost".into()),
         Ok(response(503, "")),
@@ -84,6 +87,7 @@ fn unusable_responses() -> Vec<Result<HttpResponse, String>> {
         Ok(response(502, "<html>upstream unavailable</html>")),
         Ok(wrong_type),
         Ok(duplicate_type),
+        Ok(missing_type),
         Ok(response(200, "{invalid")),
         Ok(response(200, "[]")),
         Ok(response(503, APPROVED)),

@@ -83,9 +83,9 @@ impl ResourceServerResolver for RsKeys {
 #[derive(Default)]
 struct Counter(Cell<u64>);
 impl Nonces for Counter {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         self.0.set(self.0.get() + 1);
-        format!("nonce{}", self.0.get())
+        Ok(format!("nonce{}", self.0.get()))
     }
 }
 struct RsPolicy {

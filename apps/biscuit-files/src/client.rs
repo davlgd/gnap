@@ -39,7 +39,7 @@ struct Command {
     reply: tokio::sync::oneshot::Sender<Result<Value, String>>,
 }
 struct Browser<'a> {
-    session: Session<'a, Network, Ps256Signer>,
+    session: Session<&'a Network, &'a Ps256Signer>,
     selected: Option<TokenValue>,
     retired: Option<TokenValue>,
     current_key: Option<Arc<Ps256Signer>>,
@@ -203,7 +203,7 @@ fn worker(
                         }))
                         .map_err(|_| "public key encoding failed")?;
                         s.session
-                            .rotate_key_owned(None, replacement.clone(), &key, now)
+                            .rotate_key(None, replacement.clone(), &key, now)
                             .map_err(|_| "key rotation refused or AS unavailable")?;
                         s.previous_key = retiring_key.clone();
                         s.current_key = Some(replacement);

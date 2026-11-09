@@ -33,15 +33,10 @@ use std::fmt;
 ///
 /// This is the shape of `client` (§2.3), `user` (§2.4) and `key` (§7.1): the
 /// full value, or an opaque reference the recipient knows how to resolve.
-#[macro_export]
 macro_rules! object_or_reference {
     ($(#[$meta:meta])* $name:ident, $object:ty, $field:literal) => {
         $(#[$meta])*
-        // Eq is not derivable: every object this macro wraps carries a
-        // serde_json::Map for its extension fields, and Value is not Eq
-        // because of floats. Clippy sees the macro, not its expansions.
-        #[allow(clippy::derive_partial_eq_without_eq)]
-        #[derive(Debug, Clone, PartialEq)]
+        #[derive(Debug, Clone, PartialEq, Eq)]
         pub enum $name {
             /// The value, sent in full.
             ByValue(Box<$object>),
@@ -111,6 +106,8 @@ macro_rules! object_or_reference {
         }
     };
 }
+
+pub(crate) use object_or_reference;
 
 /// A named method, optionally carrying parameters.
 ///

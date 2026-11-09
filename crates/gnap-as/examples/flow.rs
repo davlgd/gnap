@@ -75,10 +75,10 @@ impl KeyResolver for KnownKey {
 struct Counter(Cell<u32>);
 
 impl Nonces for Counter {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         let n = self.0.get() + 1;
         self.0.set(n);
-        format!("value{n:04}")
+        Ok(format!("value{n:04}"))
     }
 }
 
@@ -229,7 +229,7 @@ fn main() {
 /// Step 4: what §6 lets the client do with the token it now holds.
 fn manage_the_token(
     wire: &Wire<'_>,
-    client: &mut Session<'_, Wire<'_>, Ps256Signer>,
+    client: &mut Session<&Wire<'_>, &Ps256Signer>,
     issued: &gnap_types::token::AccessToken,
 ) {
     println!("\n4. The client manages the token it was issued (§6)");
