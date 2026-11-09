@@ -58,6 +58,33 @@ impl Limits {
         addresses: 16,
     };
 
+    /// Cleanup after a command-line scenario: a reserved budget that the
+    /// scenario's own calls never spend.
+    pub const CLEANUP: Self = Self {
+        calls: 2,
+        budget: Duration::from_secs(10),
+        exchange: Duration::from_secs(4),
+        connect: Duration::from_secs(2),
+        request: Duration::from_secs(3),
+        request_body: 8192,
+        response_body: 8192,
+        headers: 64,
+        header_name: 128,
+        header_value: 4096,
+        addresses: 16,
+    };
+
+    /// A command-line scenario that waits up to `wait` for an operator:
+    /// `wait` plus two minutes of exchanges, within at most 32 calls.
+    #[must_use]
+    pub const fn scenario(wait: Duration) -> Self {
+        Self {
+            calls: 32,
+            budget: Duration::from_secs(wait.as_secs() + 120),
+            ..Self::LIFECYCLE
+        }
+    }
+
     /// The command line's discovery and probe checks: one or two requests,
     /// and a discovery document of up to 32 KiB.
     pub const DIAGNOSTIC: Self = Self {
@@ -91,6 +118,105 @@ pub struct Exact {
 impl Destinations for Exact {
     fn permits(&self, method: &str, url: &str) -> bool {
         method == self.method && url == self.url
+    }
+}
+
+impl<D: Destinations + ?Sized> Destinations for std::sync::Arc<D> {
+    fn permits(&self, method: &str, url: &str) -> bool {
+        (**self).permits(method, url)
+    }
+}
+
+/// Requests admitted one by one: the command's own, then the exact URIs a
+/// scenario reads from responses it accepted, when they share the grant
+/// endpoint's origin. An origin is never admitted as a whole.
+#[derive(Debug)]
+pub struct Admitted {
+    origin: String,
+    local: bool,
+    exact: Mutex<Vec<(&'static str, String)>>,
+}
+
+impl Admitted {
+    /// The admissions of a scenario against `grant`, which must be a
+    /// canonical [`endpoint`].
+    ///
+    /// # Errors
+    ///
+    /// Fails for an endpoint [`endpoint`] refuses.
+    pub fn new(grant: &str, local: bool) -> Result<Self, &'static str> {
+        let origin = endpoint(grant, local)?.origin().ascii_serialization();
+        Ok(Self {
+            origin,
+            local,
+            exact: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Admits `method` to `url`, which the caller supplied itself.
+    pub fn allow(&self, method: &'static str, url: &str) {
+        if let Ok(mut exact) = self.exact.lock() {
+            exact.push((method, url.to_owned()));
+        }
+    }
+
+    /// Admits `method` to a URI a response supplied, if it is a canonical
+    /// endpoint of the grant endpoint's origin; returns whether it did.
+    pub fn admit_same_origin(&self, method: &'static str, url: &str) -> bool {
+        let same = endpoint(url, self.local)
+            .is_ok_and(|parsed| parsed.origin().ascii_serialization() == self.origin);
+        if same {
+            self.allow(method, url);
+        }
+        same
+    }
+}
+
+impl Destinations for Admitted {
+    fn permits(&self, method: &str, url: &str) -> bool {
+        self.exact
+            .lock()
+            .is_ok_and(|exact| exact.iter().any(|(m, u)| *m == method && u == url))
+    }
+}
+
+/// Two transports in sequence: the scenario's, then, once
+/// [`Phased::clean_up`] is called, a separate one with its own reserved
+/// budget, so that cleanup never depends on what the scenario spent.
+pub struct Phased<A, B> {
+    scenario: A,
+    cleanup: B,
+    cleaning: std::sync::atomic::AtomicBool,
+}
+
+impl<A, B> Phased<A, B> {
+    pub const fn new(scenario: A, cleanup: B) -> Self {
+        Self {
+            scenario,
+            cleanup,
+            cleaning: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Sends every later request through the cleanup transport.
+    pub fn clean_up(&self) {
+        self.cleaning
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl<A, B> HttpTransport for Phased<A, B>
+where
+    A: HttpTransport<Error = &'static str>,
+    B: HttpTransport<Error = &'static str>,
+{
+    type Error = &'static str;
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
+        if self.cleaning.load(std::sync::atomic::Ordering::SeqCst) {
+            self.cleanup.send(request)
+        } else {
+            self.scenario.send(request)
+        }
     }
 }
 
