@@ -12,13 +12,13 @@ Run from the repository root. Rust 1.98 is the tested toolchain for this app; th
 
 ```bash
 cargo test --manifest-path apps/conformance-web/Cargo.toml --locked
-node --test apps/conformance-web/tests/ui/*.test.mjs
+node --test apps/ui/tests/*.test.mjs apps/conformance-web/tests/ui/*.test.mjs
 cargo run --manifest-path apps/conformance-web/Cargo.toml --locked
 ```
 
-The UI regression test uses Node.js (22 in CI), with no npm dependencies. It exercises the real script with a small DOM test double, not a browser rendering test. Clearing the report or changing message type prevents a late response or error from restoring an obsolete result; it doesn't cancel a request already sent to the server.
+The UI regression tests use Node.js (22 in CI), with no npm dependencies. They exercise the real scripts, and the suite's shared helpers in `apps/ui`, with small DOM test doubles: they aren't browser rendering tests. Clearing the report or changing message type prevents a late response or error from restoring an obsolete result; it doesn't cancel a request already sent to the server.
 
-Open `http://localhost:8080`. The process listens on `0.0.0.0:$PORT` (default 8080); `/health` returns `ok`. Don't expose a development instance without a TLS terminating reverse proxy. Static assets are embedded in the executable.
+Open `http://localhost:8080`: one page holds the message inspector, the endpoint probe, and their shared report, and `/inspect` and `/probe` lead to their sections. The signed lifecycle has its own page, `/lifecycle`. The process listens on `0.0.0.0:$PORT` (default 8080); `/health` returns `ok`. Don't expose a development instance without a TLS terminating reverse proxy. Static assets, including the suite's shared design from `apps/ui`, are embedded in the executable.
 
 ```bash
 curl --fail-with-body http://localhost:8080/api/analyze \
