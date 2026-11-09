@@ -34,9 +34,9 @@ pub use hash::{
 pub use httpsig::{parse_signature_params, parse_signatures, LabelledSignature, ReceivedParams};
 pub use jwk::{PublicKey, HTTPSIG_ALGORITHMS, JWS_ALGORITHMS};
 pub use jws::{
-    sign_jws, sign_jws_rotation, unverified_attached_payload, verify_jws_request,
-    verify_jws_rotation, AcceptedJws, JwsKey, JwsMethod, JwsParams, JwsProof, JwsReplayMemory,
-    ReplayCache, ReplayId,
+    sign_jws, sign_jws_rotation, unverified_attached_payload, unverified_rotation_content,
+    verify_jws_request, verify_jws_rotation, AcceptedJws, JwsKey, JwsMethod, JwsParams, JwsProof,
+    JwsReplayMemory, ReplayCache, ReplayId,
 };
 pub use proof::{JwkSigner, ProofError, Signer, Verifier};
 pub use ps256::{Ps256Signer, Ps256Verifier};

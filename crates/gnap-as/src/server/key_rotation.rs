@@ -6,14 +6,15 @@
 //! without assigning precedence when several conditions apply to one request.
 
 use super::{
-    check_presented_key, error, misconfigured, require_json_content, AuthorizationServer,
-    GrantSnapshot, HttpRequest, HttpResponse, KeyResolver, Nonces, Policy, Storage, TokenEncoder,
-    MAX_CLOCK_SKEW,
+    check_presented_key, error, misconfigured, require_json_content, signed_request,
+    AuthorizationServer, BothKeys, GrantSnapshot, HttpRequest, HttpResponse, KeyResolver, Nonces,
+    Policy, Storage, TokenEncoder, MAX_CLOCK_SKEW,
 };
 use crate::policy::parameterless_proof;
 use crate::ResolvedTokenKey;
-use gnap_crypto::{verify_key_rotation, Expectations, RotationProof, SignedRequest};
-use gnap_registry::ErrorCode;
+use gnap_crypto::jws::{unverified_rotation_content, verify_jws_rotation, JwsMethod, ReplayId};
+use gnap_crypto::{verify_key_rotation, Expectations, PublicKey, RotationProof, Verifier as _};
+use gnap_registry::{ErrorCode, KeyProofingMethod};
 use gnap_types::key::{Key, KeyObject, Proof};
 
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
@@ -26,12 +27,20 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         request: &HttpRequest,
         now: u64,
     ) -> HttpResponse {
-        let presented = match requested_key(request) {
-            Ok(key) => key,
-            Err(response) => return response,
-        };
         let Some(record) = snapshot.aggregate.tokens.get(handle) else {
             return invalid_rotation("the managed token is no longer available");
+        };
+        let stored = record
+            .token
+            .key
+            .as_ref()
+            .or_else(|| record.client.as_value().map(|client| &client.key));
+        // The current binding's proof method decides how the request carries
+        // the new key and both proofs (§6.1.1, §7.3.3.1, §7.3.4.1).
+        let jose = jose_method(stored.and_then(Key::as_value));
+        let presented = match requested_key(request, jose) {
+            Ok(key) => key,
+            Err(response) => return response,
         };
         // A bearer token has no presentation key to replace (§6.1.1).
         if record.token.is_bearer() {
@@ -42,6 +51,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         let Some(reserve) = self.key_rotation else {
             return unsupported();
         };
+        if jose.is_some() && self.jose.is_none() {
+            return unsupported();
+        }
         if record.derivation.is_some() {
             // This SDK's one-hop profile binds a child to the downstream RS
             // and an exact parent; rebinding that child is outside the profile.
@@ -53,13 +65,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         else {
             return unsupported();
         };
-        let stored = record
-            .token
-            .key
-            .as_ref()
-            .or_else(|| record.client.as_value().map(|client| &client.key));
-        if !valid_resolved_key(&previous)
-            || stored.is_some_and(|key| !resolved_binding_matches(key, &previous))
+        let enabled = self.jose.is_some();
+        if !valid_resolved_key(&previous, enabled)
+            || stored.is_some_and(|key| !resolved_binding_matches(key, &previous, enabled))
         {
             return misconfigured(
                 "the token key resolver returned an inconsistent current binding",
@@ -80,33 +88,35 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         else {
             return unsupported();
         };
-        if !resolved_binding_matches(&presented, &replacement) {
+        if !resolved_binding_matches(&presented, &replacement, enabled) {
             return misconfigured("the token key resolver changed the requested public binding");
         }
         if !same_proof(&previous.key.proof, &replacement.key.proof) {
             return invalid_rotation("key rotation cannot change the proof method or parameters");
         }
-        if !valid_resolved_key(&replacement) {
+        if !valid_resolved_key(&replacement, enabled) {
             return misconfigured(
                 "the token key resolver returned an unusable replacement binding",
             );
         }
-        let old_proof = required_proof(&previous, now);
-        let new_proof = required_proof(&replacement, now);
-        let remember =
-            |old: Option<&str>, new: Option<&str>, at: u64| reserve(&self.storage, old, new, at);
-        let proof = verify_key_rotation(
-            &SignedRequest {
-                method: &request.method,
-                target_uri: &request.url,
-                headers: &request.headers,
-                body: request.body.as_deref(),
+        let proven = jose.map_or_else(
+            || {
+                let remember = |old: Option<&str>, new: Option<&str>, at: u64| {
+                    reserve(&self.storage, old, new, at)
+                };
+                verify_key_rotation(
+                    &signed_request(request),
+                    &required_proof(&previous, now),
+                    &required_proof(&replacement, now),
+                    &remember,
+                )
+                .is_ok()
             },
-            &old_proof,
-            &new_proof,
-            &remember,
+            |method| {
+                self.verify_jose_rotation(method, request, &presented, &previous, &replacement, now)
+            },
         );
-        if proof.is_err() {
+        if !proven {
             // §6.1.1 requires this code when either key's proof is missing or
             // invalid. Do not disclose signature parameters or key material.
             return invalid_rotation("both linked key proofs must be valid and fresh");
@@ -123,9 +133,65 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             Some(Key::ByValue(Box::new(replacement.key))),
         )
     }
+
+    /// Verifies the nested JOSE proofs of a key rotation: the previous key
+    /// signs the request with the rotation `typ`, and the replacement signs
+    /// that proof. Both verify under the JWK and the resolver's key, and are
+    /// reserved together. The key the authenticated content asks for has to
+    /// be the one the unverified content claimed.
+    fn verify_jose_rotation(
+        &self,
+        method: JwsMethod,
+        request: &HttpRequest,
+        presented: &Key,
+        previous: &ResolvedTokenKey,
+        replacement: &ResolvedTokenKey,
+        now: u64,
+    ) -> bool {
+        let (Some(reserve), Some(old), Some(new)) = (
+            self.jose,
+            jose_public(&previous.key),
+            jose_public(&replacement.key),
+        ) else {
+            return false;
+        };
+        let old = BothKeys {
+            presented: &old,
+            resolved: previous.verifier.as_ref(),
+        };
+        let new = BothKeys {
+            presented: &new,
+            resolved: replacement.verifier.as_ref(),
+        };
+        let reserve = |ids: &[ReplayId], at: u64| reserve(&self.storage, ids, at);
+        verify_jws_rotation(
+            method,
+            &signed_request(request),
+            &old.jws_key(now),
+            &new.jws_key(now),
+            &reserve,
+        )
+        .is_ok_and(|accepted| key_in(&accepted.content, request).is_ok_and(|key| &key == presented))
+    }
 }
 
-fn requested_key(request: &HttpRequest) -> Result<Key, HttpResponse> {
+/// The JOSE method of a key, if it proves with one.
+fn jose_method(key: Option<&KeyObject>) -> Option<JwsMethod> {
+    match key?.proof.method() {
+        KeyProofingMethod::Jws => Some(JwsMethod::Jws),
+        KeyProofingMethod::Jwsd => Some(JwsMethod::Jwsd),
+        _ => None,
+    }
+}
+
+/// The public JWK of a JOSE key.
+fn jose_public(key: &KeyObject) -> Option<PublicKey> {
+    PublicKey::for_jws(key.jwk.as_ref()?).ok()
+}
+
+/// The key a rotation asks for, read before any proof is verified: from the
+/// JSON content, or for `jws` from the inner JWS that the attached one carries.
+fn requested_key(request: &HttpRequest, jose: Option<JwsMethod>) -> Result<Key, HttpResponse> {
     let Some(body) = request.body.as_deref().filter(|body| !body.is_empty()) else {
         return Err(invalid_rotation(
             "key rotation requires a JSON body containing key",
@@ -137,9 +203,19 @@ fn requested_key(request: &HttpRequest) -> Result<Key, HttpResponse> {
             "key-rotation content exceeds the size limit",
         ));
     }
+    if jose == Some(JwsMethod::Jws) {
+        let content = unverified_rotation_content(&signed_request(request))
+            .map_err(|_| invalid_rotation("the key rotation's attached JWS cannot be read"))?;
+        return key_in(&content, request);
+    }
     require_json_content(request)?;
+    key_in(body, request)
+}
+
+/// The `key` member of a rotation's JSON content, with its public checks.
+fn key_in(content: &[u8], request: &HttpRequest) -> Result<Key, HttpResponse> {
     let raw: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_slice(body).map_err(|_| {
+        serde_json::from_slice(content).map_err(|_| {
             error(
                 ErrorCode::InvalidRequest,
                 "key rotation requires a JSON object",
@@ -168,6 +244,7 @@ fn requested_key(request: &HttpRequest) -> Result<Key, HttpResponse> {
         if let Some(jwk) = object
             .jwk
             .as_ref()
+            .filter(|_| object.proof.method() == &KeyProofingMethod::Httpsig)
             .filter(|jwk| gnap_crypto::PublicKey::is_builtin_for_httpsig(jwk))
         {
             if gnap_crypto::PublicKey::for_httpsig(jwk).is_err() {
@@ -183,14 +260,27 @@ fn requested_key(request: &HttpRequest) -> Result<Key, HttpResponse> {
 }
 
 /// A resolver may expand a reference, but may not substitute a by-value key.
-pub(super) fn resolved_binding_matches(binding: &Key, resolved: &ResolvedTokenKey) -> bool {
-    binding.as_value().is_none_or(|key| key == &resolved.key) && valid_resolved_key(resolved)
+///
+/// `jose` says whether the server accepts the JOSE proofs, without which a
+/// `jws` or `jwsd` binding isn't one it can use.
+pub(super) fn resolved_binding_matches(
+    binding: &Key,
+    resolved: &ResolvedTokenKey,
+    jose: bool,
+) -> bool {
+    binding.as_value().is_none_or(|key| key == &resolved.key) && valid_resolved_key(resolved, jose)
 }
 
-fn valid_resolved_key(resolved: &ResolvedTokenKey) -> bool {
-    public_key(&resolved.key)
-        && resolved.key.proof.method().as_str() == "httpsig"
-        && parameterless_proof(&resolved.key.proof)
+fn valid_resolved_key(resolved: &ResolvedTokenKey, jose: bool) -> bool {
+    if !public_key(&resolved.key) || !parameterless_proof(&resolved.key.proof) {
+        return false;
+    }
+    if jose_method(Some(&resolved.key)).is_some() {
+        return jose
+            && jose_public(&resolved.key)
+                .is_some_and(|public| public.algorithm() == resolved.verifier.algorithm());
+    }
+    resolved.key.proof.method() == &KeyProofingMethod::Httpsig
         && check_presented_key(&resolved.key, resolved.verifier.as_ref()).is_ok()
 }
 

@@ -37,6 +37,7 @@ use gnap_core::{Event, Grant, State};
 use gnap_crypto::hash::HashMethod;
 use gnap_crypto::jws::JwsMethod;
 use gnap_crypto::proof::Signer;
+use gnap_types::key::KeyObject;
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{AccessToken, Cardinality, TokenValue};
 use gnap_types::user::SubjectResponse;
@@ -181,6 +182,9 @@ struct SessionState {
     interaction_window: Option<InteractionWindow>,
     /// How the session proves its key, settled by the first request (§7.3).
     proof: Option<SessionProof>,
+    /// The key the first request presented by value, whose public JWK checks
+    /// the session's own JOSE proofs before they leave.
+    key: Option<KeyObject>,
 }
 
 /// The proof method of the session's key (§7.3): the one its `client.key`
@@ -232,6 +236,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
                 interaction_finished: false,
                 interaction_window: None,
                 proof: None,
+                key: None,
             },
             supported_modes: None,
             finish_timeout: None,
@@ -388,6 +393,11 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         // bound to the key the first request proved.
         let (proof, presented) = crate::signing::session_proof(request, &self.signer)?;
         self.protocol.proof = Some(proof);
+        self.protocol.key = request
+            .client
+            .as_value()
+            .and_then(|client| client.key.as_value())
+            .cloned();
         self.protocol.requested = request.access_token.as_ref().map(|a| a.cardinality);
         self.protocol.requested_labels = requested_labels(request.access_token.as_ref());
         self.prepare_interaction(request.interact.as_ref())?;

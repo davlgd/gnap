@@ -8,9 +8,8 @@ use crate::encoding::TokenEncoder;
 use crate::nonce::Nonces;
 use crate::policy::{KeyResolver, Policy};
 use crate::storage::{GrantSelector, GrantSnapshot, Storage, StoreError, TokenRecord};
-use gnap_registry::{ErrorCode, KeyProofingMethod};
+use gnap_registry::ErrorCode;
 use gnap_types::http::{HttpRequest, HttpResponse};
-use gnap_types::key::Key;
 use gnap_types::message::GrantResponse;
 use gnap_types::token::{AccessTokenResponse, BoundToken, TokenManage, TokenValue};
 
@@ -68,31 +67,13 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
 
         // Decide on the request shape before ordinary verification consumes a
         // nonce. A key-rotation body must never fall through to value rotation,
-        // including when one of its two signatures is absent or invalid.
+        // including when one of its two proofs is absent or invalid. A JOSE
+        // key change nests its proofs with its content (§7.3.3.1, §7.3.4.1):
+        // without content, its ordinary proof can't pass a value rotation.
         if rotating
             && (request.body.as_ref().is_some_and(|body| !body.is_empty())
                 || key_rotation::has_rotation_proof(request))
         {
-            // The linked proofs of a key change are `httpsig` ones (§7.3.1.1).
-            // A token bound to a JOSE key gets a refusal, never a value
-            // rotation: its nested proof (§7.3.3.1, §7.3.4.1) isn't supported.
-            let bound = record
-                .token
-                .key
-                .as_ref()
-                .and_then(Key::as_value)
-                .or_else(|| presented_key(&record.client));
-            if bound.is_some_and(|key| {
-                matches!(
-                    key.proof.method(),
-                    KeyProofingMethod::Jws | KeyProofingMethod::Jwsd
-                )
-            }) {
-                return error(
-                    ErrorCode::KeyRotationNotSupported,
-                    "this server doesn't change the key of a token bound with jws or jwsd",
-                );
-            }
             return self.rotate_bound_key(snapshot, handle, request, now);
         }
 
@@ -103,7 +84,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             let Some(resolved) = self.keys.resolve_token_key(&record.client, Some(binding)) else {
                 return invalid_management_credentials();
             };
-            if !key_rotation::resolved_binding_matches(binding, &resolved) {
+            if !key_rotation::resolved_binding_matches(binding, &resolved, self.jose.is_some()) {
                 return misconfigured("the token key resolver changed a stored binding");
             }
             Some(resolved)

@@ -182,16 +182,10 @@ pub(crate) fn check_jose_proof(
     presented: &PublicKey,
     now: u64,
 ) -> Result<(), ClientError> {
-    let signed = SignedRequest {
-        method: &request.method,
-        target_uri: &request.url,
-        headers: &request.headers,
-        body: request.body.as_deref(),
-    };
     let unreserved = |_: &[ReplayId], _: u64| true;
     verify_jws_request(
         method,
-        &signed,
+        &signed_view(request),
         &JwsKey::for_public_key(presented, now, 0),
         &unreserved,
     )
@@ -229,6 +223,18 @@ pub(crate) fn sign_jose(
         &content,
         signer,
     )?;
+    Ok(jose_request(request, proof, content, token))
+}
+
+/// Places a JOSE proof on its request: a detached one in `Detached-JWS`, next
+/// to the JSON content, an attached one as the content, `application/jose`.
+/// The access token, if any, is presented with the GNAP scheme.
+pub(crate) fn jose_request(
+    request: HttpRequest,
+    proof: JwsProof,
+    content: Vec<u8>,
+    token: Option<&TokenValue>,
+) -> HttpRequest {
     let mut request = match proof {
         JwsProof::Detached(value) => {
             let request = if content.is_empty() {
@@ -248,5 +254,15 @@ pub(crate) fn sign_jose(
         // GNAP-9635-§7.2-M03 — present the token using the GNAP scheme.
         request = request.header("Authorization", format!("GNAP {}", value.as_str()));
     }
-    Ok(request)
+    request
+}
+
+/// The request as the JOSE verifiers read it.
+pub(crate) fn signed_view(request: &HttpRequest) -> SignedRequest<'_> {
+    SignedRequest {
+        method: &request.method,
+        target_uri: &request.url,
+        headers: &request.headers,
+        body: request.body.as_deref(),
+    }
 }

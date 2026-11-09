@@ -1,13 +1,19 @@
-//! Presenting a new key for an access token (RFC 9635 §6.1.1, §7.3.1.1).
+//! Presenting a new key for an access token (RFC 9635 §6.1.1, §7.3.1.1,
+//! §7.3.3.1, §7.3.4.1).
 //!
-//! The request carries the new public key in its body and two signatures:
-//! the current key's ordinary GNAP signature, then the new key's signature,
-//! tagged `gnap-rotate`, covering the first one. This module builds that
-//! request; [`crate::Session::rotate_key`] sends it and reads the answer.
+//! The request carries the new public key in its content and two proofs,
+//! the new key's covering the current key's. With `httpsig`, they are two
+//! signatures, the new one tagged `gnap-rotate`; with `jws` and `jwsd`, the
+//! new key signs the current key's JWS. This module builds that request;
+//! [`crate::Session::rotate_key`] sends it and reads the answer.
 
+use crate::session::SessionProof;
 use crate::{ClientError, HttpRequest};
 use gnap_crypto::httpsig::{
     fresh_nonce, parse_signatures, sign, signature_base, Component, Message, SignatureInput, Tag,
+};
+use gnap_crypto::jws::{
+    sign_jws_rotation, verify_jws_rotation, JwsKey, JwsMethod, JwsParams, ReplayId,
 };
 use gnap_crypto::proof::{Signer, Verifier};
 use gnap_crypto::PublicKey;
@@ -26,12 +32,13 @@ pub(crate) const REPLACEMENT_LABEL: &str = "replacement";
 ///
 /// §6.1.1: "keys passed by value are always public keys", and "The proofing
 /// method and parameters for the new key MUST be the same as those
-/// established for the previous key." This session signs with `httpsig`, so it
-/// presents only a public JWK that `httpsig` accepts (`PS256`, `ES256`, or
-/// `EdDSA`), by value, with the `kid` its new signer uses. A reference, another format, another proofing
-/// method, proofing parameters, a private member or a mismatched `kid` are
-/// refused before anything leaves. These are the limits of this session, not
-/// rules GNAP places on every client.
+/// established for the previous key." The session presents, by value, a
+/// public JWK of its own proof method and an algorithm that method takes,
+/// with the `kid` its new signer uses, and for `jws` and `jwsd` its
+/// algorithm too. A reference, another format, another proofing method,
+/// proofing parameters, a private member or a mismatched `kid` are refused
+/// before anything leaves. These are the limits of this session, not rules
+/// GNAP places on every client.
 ///
 /// # Errors
 ///
@@ -39,6 +46,7 @@ pub(crate) const REPLACEMENT_LABEL: &str = "replacement";
 pub(crate) fn presentable<'k>(
     key: &'k Key,
     replacement: &dyn Signer,
+    proof: SessionProof,
 ) -> Result<(&'k KeyObject, PublicKey), ClientError> {
     let usage = |m: &str| ClientError::Usage(format!("rotate_key: {m}"));
     let Some(object) = key.as_value() else {
@@ -55,13 +63,19 @@ pub(crate) fn presentable<'k>(
         &object.proof,
         gnap_types::key::Proof::Detailed { params, .. } if !params.is_empty()
     );
-    if object.proof.method() != &KeyProofingMethod::Httpsig || parameterised {
-        return Err(usage(
-            "the new key must use the httpsig proofing method with the same parameters as \
-             the current key, which has none; \"The proofing method and parameters for the \
-             new key MUST be the same as those established for the previous key\" \
+    let method = match proof {
+        SessionProof::Httpsig => KeyProofingMethod::Httpsig,
+        SessionProof::Jose(JwsMethod::Jws) => KeyProofingMethod::Jws,
+        SessionProof::Jose(JwsMethod::Jwsd) => KeyProofingMethod::Jwsd,
+    };
+    if object.proof.method() != &method || parameterised {
+        return Err(usage(&format!(
+            "the new key must use the {} proofing method with the same parameters as the \
+             current key, which has none; \"The proofing method and parameters for the new \
+             key MUST be the same as those established for the previous key\" \
              (RFC 9635 §6.1.1)",
-        ));
+            method.as_str()
+        )));
     }
     let Some(jwk) = object.jwk.as_ref() else {
         return Err(usage(
@@ -72,7 +86,17 @@ pub(crate) fn presentable<'k>(
     // §6.1.1 — "keys passed by value are always public keys". The JWK import
     // refuses private members, certificate members and unusable keys, and
     // checks that the JWK actually describes a key `httpsig` accepts.
-    let verifier = PublicKey::for_httpsig(jwk).map_err(|e| usage(&e.to_string()))?;
+    let verifier = match proof {
+        SessionProof::Httpsig => PublicKey::for_httpsig(jwk),
+        SessionProof::Jose(_) => PublicKey::for_jws(jwk),
+    }
+    .map_err(|e| usage(&e.to_string()))?;
+    if matches!(proof, SessionProof::Jose(_)) && verifier.algorithm() != replacement.algorithm() {
+        return Err(usage(
+            "the presented JWK `alg` must be the new signer's, which its proof carries \
+             (RFC 9635 §7.3.3, §7.3.4)",
+        ));
+    }
     if object.jwk_key_id() != Some(replacement.key_id()) {
         return Err(usage(
             "the presented JWK `kid` must be the `keyid` the new signer uses; when the key \
@@ -191,4 +215,60 @@ fn previous_nonce(request: &HttpRequest) -> Option<String> {
     let input = request.combined_header_value("signature-input")?;
     let raw = input.strip_prefix(&format!("{PREVIOUS_LABEL}="))?;
     gnap_crypto::parse_signature_params(raw).ok()?.nonce
+}
+
+/// Signs a key rotation with JOSE proofs (§7.3.3.1, §7.3.4.1): the current
+/// key signs the request with the rotation `typ`, and the new key signs that
+/// JWS. Both proofs are checked under their public JWKs before anything leaves.
+///
+/// # Errors
+///
+/// Reports signing failures, and a proof that doesn't verify under the key
+/// it claims, as [`ClientError::Usage`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Each argument is a distinct part of the rotation; grouping them would only hide that"
+)]
+pub(crate) fn sign_jose_rotation(
+    uri: &str,
+    method: JwsMethod,
+    content: Vec<u8>,
+    current: &dyn Signer,
+    replacement: &dyn Signer,
+    keys: (&PublicKey, &PublicKey),
+    management: &TokenValue,
+    now: u64,
+) -> Result<HttpRequest, ClientError> {
+    let proof = sign_jws_rotation(
+        method,
+        &JwsParams {
+            method: "POST",
+            target_uri: uri,
+            created: now,
+            access_token: Some(management.as_str()),
+        },
+        &content,
+        current,
+        replacement,
+    )?;
+    let request = crate::signing::jose_request(
+        HttpRequest::new("POST", uri),
+        proof,
+        content,
+        Some(management),
+    );
+    let unreserved = |_: &[ReplayId], _: u64| true;
+    verify_jws_rotation(
+        method,
+        &crate::signing::signed_view(&request),
+        &JwsKey::for_public_key(keys.0, now, 0),
+        &JwsKey::for_public_key(keys.1, now, 0),
+        &unreserved,
+    )
+    .map_err(|e| {
+        ClientError::Usage(format!(
+            "rotate_key: the rotation proofs don't verify under the current and new JWKs: {e}"
+        ))
+    })?;
+    Ok(request)
 }
