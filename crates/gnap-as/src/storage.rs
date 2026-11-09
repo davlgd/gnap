@@ -13,10 +13,13 @@ use gnap_types::client::Client;
 use gnap_types::message::GrantRequest;
 use gnap_types::token::{AccessToken, TokenValue};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 /// Everything the AS remembers about one grant request.
-#[derive(Debug, Clone)]
+///
+/// `Debug` hides the credentials, nonces, handles, and codes it holds.
+#[derive(Clone)]
 pub struct GrantRecord {
     /// The protocol state (§1.5).
     pub grant: Grant,
@@ -53,7 +56,9 @@ pub struct GrantRecord {
 }
 
 /// An access token the AS issued, and what it needs to manage it (§6).
-#[derive(Debug, Clone)]
+///
+/// `Debug` hides the management credential; the token value hides itself.
+#[derive(Clone)]
 pub struct TokenRecord {
     /// AS-only one-hop provenance and audience; not token response extensions.
     pub derivation: Option<DerivedToken>,
@@ -71,6 +76,50 @@ pub struct TokenRecord {
     pub client: Client,
     /// The token that protects the management API (§3.2.1).
     pub management_token: String,
+}
+
+/// Shows whether a secret field is set, never its value.
+const fn redacted(value: Option<&String>) -> &'static str {
+    if value.is_some() {
+        "Some(<redacted>)"
+    } else {
+        "None"
+    }
+}
+
+impl fmt::Debug for GrantRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GrantRecord")
+            .field("grant", &self.grant)
+            .field("request", &self.request)
+            .field(
+                "continuation_token",
+                &redacted(self.continuation_token.as_ref()),
+            )
+            .field("as_nonce", &redacted(self.as_nonce.as_ref()))
+            .field("interact_handle", &redacted(self.interact_handle.as_ref()))
+            .field("user_code", &redacted(self.user_code.as_ref()))
+            .field("interact_expires_at", &self.interact_expires_at)
+            .field("interact_ref", &redacted(self.interact_ref.as_ref()))
+            .field("interaction_completed", &self.interaction_completed)
+            .finish()
+    }
+}
+
+impl fmt::Debug for TokenRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenRecord")
+            .field("derivation", &self.derivation)
+            .field(
+                "identifier",
+                &self.identifier.as_ref().map(|_| "<redacted>"),
+            )
+            .field("issued_at", &self.issued_at)
+            .field("token", &self.token)
+            .field("client", &self.client)
+            .field("management_token", &"<redacted>")
+            .finish()
+    }
 }
 
 impl TokenRecord {
@@ -980,6 +1029,29 @@ mod tests {
             interact_ref: None,
             interaction_completed: false,
         })
+    }
+
+    #[test]
+    fn debug_output_hides_every_credential() {
+        let mut aggregate = aggregate();
+        aggregate.record.continuation_token = Some("SECRET-CONTINUATION".into());
+        aggregate.record.as_nonce = Some("SECRET-NONCE".into());
+        aggregate.record.interact_handle = Some("SECRET-HANDLE".into());
+        aggregate.record.user_code = Some("SECRET-CODE".into());
+        aggregate.record.interact_ref = Some("SECRET-REF".into());
+        let token: AccessToken = serde_json::from_str(
+            r#"{"value":"SECRET-ACCESS","access":["read"],"manage":{"uri":"https://as.example/token/1","access_token":{"value":"SECRET-MANAGE"}}}"#,
+        )
+        .unwrap();
+        let record = TokenRecord::new(
+            token,
+            Client::ByReference("client".into()),
+            "SECRET-MANAGEMENT",
+            0,
+        );
+        let shown = format!("{:?} {record:?}", aggregate.record);
+        assert!(!shown.contains("SECRET"), "a credential leaked: {shown}");
+        assert!(shown.contains("Some(<redacted>)"));
     }
 
     #[test]
