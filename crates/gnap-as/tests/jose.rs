@@ -588,3 +588,35 @@ fn the_derivation_handler_serves_an_ordinary_attached_jws() {
         server.handle_grant_with_derivation(&request, &NoServers, &NoDerivation, &nonces, &|| NOW);
     assert_eq!(error_code(&response), "invalid_request");
 }
+
+/// A continuation reads the authenticated content: a modification sent as an
+/// attached JWS, or with a detached one, changes the request it signs.
+#[test]
+fn a_modification_carries_its_authenticated_content() {
+    for method in [JwsMethod::Jws, JwsMethod::Jwsd] {
+        let signer = &signers()[1];
+        let server = server(true);
+        let body = grant_body(signer.as_ref(), &method_name(method));
+        let response =
+            granted(&server.handle(&grant_call(&body).signed(method, signer.as_ref()), NOW));
+        let continuation = response.r#continue.unwrap();
+        let modify = Call {
+            method: "PATCH",
+            uri: &continuation.uri,
+            content: br#"{"access_token":{"access":["write"]}}"#,
+            token: Some(continuation.access_token.value.as_str()),
+            created: NOW + 5,
+        };
+        let response = granted(&server.handle(&modify.signed(method, signer.as_ref()), NOW + 5));
+        let token = &response
+            .access_token
+            .expect("the modified request is approved")
+            .tokens[0];
+        assert_eq!(
+            serde_json::to_value(&token.access).unwrap(),
+            json!(["write"]),
+            "{}",
+            method.name()
+        );
+    }
+}
