@@ -5,10 +5,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use gnap_crypto::jws::{DETACHED_JWS_HEADER, JOSE_MEDIA_TYPE, MAX_DETACHED_JWS_BYTES};
 use gnap_crypto::{
-    sign_jws, sign_jws_rotation, unverified_attached_payload, verify_jws_request,
-    verify_jws_rotation, Ed25519Signer, Es256Signer, Expectations, JwkSigner, JwsKey, JwsMethod,
-    JwsParams, JwsProof, JwsReplayMemory, Ps256Signer, PublicKey, ReplayCache, ReplayId,
-    Rs256Signer, Rs256Verifier, SignedRequest, Signer, Verifier, VerifyError,
+    sign_jws, sign_jws_rotation, unverified_attached_payload, unverified_rotation_content,
+    verify_jws_request, verify_jws_rotation, Ed25519Signer, Es256Signer, Expectations, JwkSigner,
+    JwsKey, JwsMethod, JwsParams, JwsProof, JwsReplayMemory, Ps256Signer, PublicKey, ReplayCache,
+    ReplayId, Rs256Signer, Rs256Verifier, SignedRequest, Signer, Verifier, VerifyError,
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest as _, Sha256};
@@ -1422,4 +1422,28 @@ fn the_unverified_payload_reads_one_attached_jws() {
         3,
         "only the outer layer"
     );
+}
+
+/// The unverified content of an attached rotation is the inner payload, two
+/// layers down, and an ordinary attached JWS isn't one.
+#[test]
+fn the_unverified_rotation_content_reads_two_layers() {
+    let rotation = Wire::new(
+        sign_jws_rotation(JwsMethod::Jws, &params(None), CONTENT, &ed25519(), &es256()).unwrap(),
+        CONTENT,
+        None,
+    );
+    assert_eq!(
+        unverified_rotation_content(&rotation.request()).unwrap(),
+        CONTENT
+    );
+    let ordinary = Wire::new(
+        sign_jws(JwsMethod::Jws, &params(None), CONTENT, &ed25519()).unwrap(),
+        CONTENT,
+        None,
+    );
+    assert!(matches!(
+        unverified_rotation_content(&ordinary.request()),
+        Err(VerifyError::Rejected(_))
+    ));
 }

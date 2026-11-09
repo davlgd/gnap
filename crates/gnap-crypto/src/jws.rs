@@ -377,6 +377,28 @@ pub fn unverified_attached_payload(request: &SignedRequest<'_>) -> Result<Vec<u8
         .map_err(VerifyError::Rejected)
 }
 
+/// The content of a key rotation's attached JWS (RFC 9635 §7.3.4.1), decoded
+/// WITHOUT verification: the payload of the inner JWS, which the outer one
+/// carries as its payload.
+///
+/// A server needs it to find the new key the rotation claims, so that it can
+/// resolve that key and verify both proofs with [`verify_jws_rotation`].
+/// Nothing in it is authenticated. It decodes exactly two layers, within the
+/// verifier's bounds, and neither verifies, reserves, nor normalizes.
+///
+/// # Errors
+///
+/// [`VerifyError::Unsigned`] when the request carries no attached JWS, and
+/// [`VerifyError::Rejected`] when either layer is malformed.
+pub fn unverified_rotation_content(request: &SignedRequest<'_>) -> Result<Vec<u8>, VerifyError> {
+    let outer = unverified_attached_payload(request)?;
+    let inner = core::str::from_utf8(&outer)
+        .map_err(|_| rejected("the outer JWS of a key rotation signs the inner JWS"))?;
+    Parsed::new(inner)
+        .map(|proof| proof.payload)
+        .map_err(VerifyError::Rejected)
+}
+
 /// Where the request carries its JWS.
 struct Envelope<'r> {
     compact: &'r str,
