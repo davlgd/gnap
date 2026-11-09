@@ -670,7 +670,7 @@ enum WorkerCommand {
 struct BrowserSession<'a> {
     push: Option<push_finish::Registration>,
     identity: Option<Arc<identity::Identity>>,
-    client: Session<'a, Network, Ps256Signer>,
+    client: Session<&'a Network, &'a Ps256Signer>,
     grant_id: GrantId,
     handle: String,
     code: Option<gnap_types::interact::UserCodeUri>,
@@ -850,7 +850,7 @@ fn client_session<'a>(
     transport: &'a Network,
     signer: &'a Ps256Signer,
     origin: &str,
-) -> Session<'a, Network, Ps256Signer> {
+) -> Session<&'a Network, &'a Ps256Signer> {
     Session::new(transport, signer, format!("{origin}/gnap"))
         .supporting(&["redirect"])
         .with_finish_timeout(FINISH_TIMEOUT)

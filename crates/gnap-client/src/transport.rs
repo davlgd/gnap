@@ -42,3 +42,18 @@ pub trait HttpTransport {
     /// read.
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error>;
 }
+
+/// Forwards to the transport behind a reference or a smart pointer, so that a
+/// session can own its transport or share one.
+macro_rules! forward_transport {
+    ($($pointer:ty),*) => {$(
+        impl<T: HttpTransport + ?Sized> HttpTransport for $pointer {
+            type Error = T::Error;
+            fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
+                (**self).send(request)
+            }
+        }
+    )*};
+}
+
+forward_transport!(&T, Box<T>, std::sync::Arc<T>);

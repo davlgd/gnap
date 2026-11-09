@@ -2991,7 +2991,7 @@ fn the_management_api_answers_only_to_its_own_token_and_key() {
 fn approved_token(
     as_: &Server,
     transport: &Direct<'_, OneKey, Counted>,
-    client: &mut Session<'_, Direct<'_, OneKey, Counted>, Ps256Signer>,
+    client: &mut Session<&Direct<'_, OneKey, Counted>, &Ps256Signer>,
 ) -> gnap_types::token::AccessToken {
     let step = client.start(&request(), 1_000).unwrap();
     approved_token_from(as_, transport, client, &step)
@@ -3001,7 +3001,7 @@ fn approved_token(
 fn approved_token_from(
     as_: &Server,
     transport: &Direct<'_, OneKey, Counted>,
-    client: &mut Session<'_, Direct<'_, OneKey, Counted>, Ps256Signer>,
+    client: &mut Session<&Direct<'_, OneKey, Counted>, &Ps256Signer>,
     step: &Step,
 ) -> gnap_types::token::AccessToken {
     let redirect = step.response().interact.clone().unwrap().redirect.unwrap();

@@ -427,7 +427,7 @@ fn disabled_key_rotation_preserves_the_native_token_and_resource_access() {
     }))
     .unwrap();
     let error = session
-        .rotate_key(None, &replacement, &key, f.now)
+        .rotate_key(None, Arc::new(replacement), &key, f.now)
         .unwrap_err();
     let gnap_client::ClientError::Server(error) = error else {
         panic!("expected AS refusal");

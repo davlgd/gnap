@@ -76,7 +76,7 @@ pub(super) fn run(
 fn exercise(
     inner: &Inner,
     network: &Network,
-    client: &mut Session<'_, Network, Ps256Signer>,
+    client: &mut Session<&Network, &Ps256Signer>,
     callbacks: mpsc::Receiver<Callback>,
     snapshot: &Mutex<Snapshot>,
     checks: &mut Vec<crate::Check>,

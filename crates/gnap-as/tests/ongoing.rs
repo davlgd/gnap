@@ -200,7 +200,7 @@ fn rs_accepts(server: &Server, token: &TokenValue, right: &str, now: u64) -> boo
         )
         .is_ok()
 }
-fn held(session: &Session<'_, Direct<'_>, Ps256Signer>, now: u64) -> AccessToken {
+fn held(session: &Session<&Direct<'_>, &Ps256Signer>, now: u64) -> AccessToken {
     session.usable_tokens(now).unwrap()[0].clone()
 }
 fn management_refused(server: &Server, token: &AccessToken, now: u64) {

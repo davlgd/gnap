@@ -89,7 +89,7 @@ fn request() -> GrantRequest {
     .unwrap()
 }
 
-fn held(client: &Session<'_, Direct<'_>, Ps256Signer>, now: u64) -> Vec<AccessToken> {
+fn held(client: &Session<&Direct<'_>, &Ps256Signer>, now: u64) -> Vec<AccessToken> {
     client
         .usable_tokens(now)
         .unwrap()
@@ -103,7 +103,7 @@ fn client_and_server_keep_token_keys_separate_from_grant_continuation() {
     let allowed = Cell::new(true);
     let server = server(&allowed);
     let wire = Direct::new(&server);
-    let third = Ps256Signer::generate(2048, "third-presentation-key").unwrap();
+    let third = Arc::new(Ps256Signer::generate(2048, "third-presentation-key").unwrap());
     let mut client = Session::new(&wire, old_key(), GRANT);
     assert!(matches!(
         client.start(&request(), NOW).unwrap(),
@@ -114,7 +114,7 @@ fn client_and_server_keep_token_keys_separate_from_grant_continuation() {
     wire.now.set(NOW + 1);
     let key = Key::ByValue(Box::new(presented(new_key())));
     let changed = client
-        .rotate_key(Some("documents"), new_key(), &key, NOW + 1)
+        .rotate_key(Some("documents"), Arc::new(new_key()), &key, NOW + 1)
         .unwrap();
     assert_ne!(changed.value, original[0].value);
     assert_eq!(changed.access, original[0].access);
@@ -152,7 +152,7 @@ fn client_and_server_keep_token_keys_separate_from_grant_continuation() {
     wire.now.set(poll_at + 2);
     let third_key = Key::ByValue(Box::new(presented(&third)));
     let twice = client
-        .rotate_key(Some("documents"), &third, &third_key, poll_at + 2)
+        .rotate_key(Some("documents"), third.clone(), &third_key, poll_at + 2)
         .unwrap();
     assert_eq!(twice.key, Some(third_key.clone()));
     assert_ne!(twice.value, changed.value);
@@ -192,7 +192,7 @@ fn actual_as_refusals_keep_client_tokens_and_signers_unchanged() {
         wire.strip_replacement.set(strip_proof);
         let key = Key::ByValue(Box::new(presented(new_key())));
         let refused = client
-            .rotate_key(Some("documents"), new_key(), &key, NOW + 1)
+            .rotate_key(Some("documents"), Arc::new(new_key()), &key, NOW + 1)
             .unwrap_err();
         let ClientError::Server(error) = refused else {
             panic!("expected a real GNAP error, got {refused:?}");
@@ -220,7 +220,7 @@ fn actual_as_refusals_keep_client_tokens_and_signers_unchanged() {
         wire.strip_replacement.set(false);
         wire.now.set(NOW + 2);
         client
-            .rotate_key(Some("documents"), new_key(), &key, NOW + 2)
+            .rotate_key(Some("documents"), Arc::new(new_key()), &key, NOW + 2)
             .unwrap();
         assert_eq!(
             client.signer_for(Some("documents")).unwrap().key_id(),

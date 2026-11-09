@@ -41,6 +41,7 @@ use gnap_types::key::Key;
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{AccessToken, AccessTokenRequest, Cardinality, TokenManage, TokenValue};
 use gnap_types::user::SubjectResponse;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -110,9 +111,9 @@ impl InteractionWindow {
 }
 
 /// A single grant request, driven from the client side.
-pub struct Session<'a, T, S> {
-    transport: &'a T,
-    signer: &'a S,
+pub struct Session<T, S> {
+    transport: T,
+    signer: S,
     endpoint: String,
     protocol: SessionState,
     /// The interaction start modes this client can actually drive (§2.5).
@@ -126,7 +127,7 @@ pub struct Session<'a, T, S> {
     /// the protocol state back exactly; this map changes only on success. The
     /// session's own signer keeps signing the continuation and every token
     /// not listed here.
-    rotated: HashMap<String, TokenSigner<'a>>,
+    rotated: HashMap<String, SharedSigner>,
 }
 
 /// A cryptographically verified identity attributed to the responding GNAP AS.
@@ -138,7 +139,7 @@ pub struct VerifiedSubject<'a> {
     pub identity: gnap_subject::VerifiedIdentity,
 }
 
-impl<T> Session<'_, T, gnap_crypto::Ps256Signer> {
+impl<T, S: Borrow<gnap_crypto::Ps256Signer>> Session<T, S> {
     /// Verify a PS256 ID Token with this session's retained finish nonce.
     ///
     /// The audience convention here is the RFC 7638 thumbprint of the client's
@@ -168,7 +169,7 @@ impl<T> Session<'_, T, gnap_crypto::Ps256Signer> {
         let identity = trust.verify_subject(
             response,
             &self.endpoint,
-            &self.signer.thumbprint(),
+            &self.signer.borrow().thumbprint(),
             nonce,
             now,
         )?;
@@ -179,20 +180,8 @@ impl<T> Session<'_, T, gnap_crypto::Ps256Signer> {
     }
 }
 
-/// A rotation can borrow an existing key or retain one created at runtime.
-enum TokenSigner<'a> {
-    Borrowed(&'a dyn Signer),
-    Owned(Arc<dyn Signer + 'a>),
-}
-
-impl TokenSigner<'_> {
-    fn as_signer(&self) -> &dyn Signer {
-        match self {
-            Self::Borrowed(signer) => *signer,
-            Self::Owned(signer) => signer.as_ref(),
-        }
-    }
-}
+/// The signer of a token whose key was rotated, shared with the application.
+pub type SharedSigner = Arc<dyn Signer + Send + Sync>;
 
 /// The complete mutable protocol state, independent of transport and signing.
 #[derive(Debug, Clone, PartialEq)]
@@ -248,12 +237,12 @@ pub struct AttributedSubject<'a> {
     pub subject: &'a SubjectResponse,
 }
 
-impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
+impl<T: HttpTransport, S: Signer> Session<T, S> {
     /// Starts a session against a grant endpoint.
     ///
     /// The endpoint URI identifies the AS (§1.2) and feeds the interaction hash
     /// (§4.2.3), so it is kept exactly as given.
-    pub fn new(transport: &'a T, signer: &'a S, endpoint: impl Into<String>) -> Self {
+    pub fn new(transport: T, signer: S, endpoint: impl Into<String>) -> Self {
         Self {
             transport,
             signer,
@@ -437,7 +426,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             &self.endpoint.clone(),
             Some(body),
             None,
-            self.signer,
+            &self.signer,
             now,
         )?;
         let response = self.round_trip(http)?;
@@ -687,7 +676,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             &cont.uri,
             body,
             Some(&cont.access_token.value),
-            self.signer,
+            &self.signer,
             now,
         )?;
         let response = self.round_trip(http)?;
@@ -785,7 +774,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             &cont.uri,
             Some(body),
             Some(&cont.access_token.value),
-            self.signer,
+            &self.signer,
             now,
         )?;
         let response = self.round_trip(http)?;
@@ -849,7 +838,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             &continuation.uri,
             None,
             Some(&continuation.access_token.value),
-            self.signer,
+            &self.signer,
             now,
         )?;
         let response = self.round_trip(request)?;
@@ -977,51 +966,31 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
     /// or no such managed token is held; [`ClientError::Server`] for a GNAP
     /// error such as `invalid_rotation` or `key_rotation_not_supported`;
     /// [`ClientError::Protocol`] when the answer breaks a rule above.
+    ///
+    /// The session keeps its handle on `replacement` only after a successful
+    /// response. A value rotation carries it forward; another key change, a
+    /// confirmed revocation, a newly issued lot or the end of the session
+    /// releases it. Keep a clone if the application needs the key after an
+    /// inconclusive exchange: a failed response doesn't undo a change already
+    /// made at the AS, and the session doesn't adopt the key on failure.
     pub fn rotate_key(
         &mut self,
         label: Option<&str>,
-        replacement: &'a dyn Signer,
+        replacement: SharedSigner,
         presented: &Key,
         now: u64,
     ) -> Result<AccessToken, ClientError> {
-        self.rotate_key_with(label, TokenSigner::Borrowed(replacement), presented, now)
-    }
-
-    /// Rotates a token key while retaining shared ownership of its new signer.
-    ///
-    /// Uses the same proofs and response checks as [`Self::rotate_key`]. This
-    /// form lets an application generate a key on demand without arranging an
-    /// external lifetime for it. The session retains the `Arc` only after a
-    /// successful response. Value rotation carries it forward; another key
-    /// change, confirmed revocation, a newly issued lot or session destruction
-    /// releases the session's old handle. Other `Arc` owners remain unaffected.
-    ///
-    /// Keep a clone if the application needs the key after an inconclusive
-    /// exchange: a failed response does not undo a change already made at the
-    /// AS, and this session does not adopt the proposed key on failure.
-    ///
-    /// # Errors
-    ///
-    /// The same errors as [`Self::rotate_key`]. Refusal leaves the existing
-    /// token and signer unchanged; the supplied handle is not retained.
-    pub fn rotate_key_owned(
-        &mut self,
-        label: Option<&str>,
-        replacement: Arc<dyn Signer + 'a>,
-        presented: &Key,
-        now: u64,
-    ) -> Result<AccessToken, ClientError> {
-        self.rotate_key_with(label, TokenSigner::Owned(replacement), presented, now)
+        self.rotate_key_with(label, replacement, presented, now)
     }
 
     fn rotate_key_with(
         &mut self,
         label: Option<&str>,
-        replacement: TokenSigner<'a>,
+        replacement: SharedSigner,
         presented: &Key,
         now: u64,
     ) -> Result<AccessToken, ClientError> {
-        let (object, verifier) = rotation::presentable(presented, replacement.as_signer())?;
+        let (object, verifier) = rotation::presentable(presented, replacement.as_ref())?;
         let (index, manage) = self.managed(label)?;
         let previous_value = self.held_value(index)?;
         let current = self.presentation_signer(index)?;
@@ -1031,7 +1000,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         let http = rotation::sign_key_rotation(
             http,
             current,
-            replacement.as_signer(),
+            replacement.as_ref(),
             &verifier,
             &manage.access_token.value,
             now,
@@ -1088,7 +1057,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
             ));
         }
         if let Some(signer) = self.rotated.get(token.value.as_str()) {
-            return Ok(signer.as_signer());
+            return Ok(signer.as_ref());
         }
         if token.key.is_some() {
             return Err(ClientError::Usage(
@@ -1097,13 +1066,13 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
                     .into(),
             ));
         }
-        Ok(self.signer)
+        Ok(&self.signer)
     }
 
     fn management_signer(&self, index: usize) -> Result<&dyn Signer, ClientError> {
         // §7.3 binds bearer-token management to the client instance's key.
         if self.held(index)?.1.is_bearer() {
-            Ok(self.signer)
+            Ok(&self.signer)
         } else {
             self.presentation_signer(index)
         }
@@ -1129,7 +1098,7 @@ impl<'a, T: HttpTransport, S: Signer> Session<'a, T, S> {
         index: usize,
         previous_value: &TokenValue,
         rotated: AccessToken,
-        new_signer: Option<TokenSigner<'a>>,
+        new_signer: Option<SharedSigner>,
         now: u64,
     ) -> Result<AccessToken, ClientError> {
         let Some(held) = self.protocol.issued.as_mut() else {

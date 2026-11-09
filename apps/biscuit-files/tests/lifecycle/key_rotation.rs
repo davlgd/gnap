@@ -68,7 +68,7 @@ fn native_key_rotation_retires_old_authorities_and_preserves_approved_rights() {
 
     let binding = key(&replacement);
     let rotated = session
-        .rotate_key_owned(None, replacement.clone(), &binding, f.now)
+        .rotate_key(None, replacement.clone(), &binding, f.now)
         .unwrap();
     assert_ne!(native_id(&f, &original), native_id(&f, &rotated));
     assert_eq!(rotated.key, Some(binding));
@@ -137,12 +137,12 @@ fn cycling_keys_preserves_each_public_keys_authoritative_nonce_history() {
     // nonce filter must not mask an incorrect current-key choice here.
     assert_eq!(reserve(&original), LiveDecision::Allowed);
     let rotated = session
-        .rotate_key_owned(None, replacement.clone(), &key(&replacement), f.now)
+        .rotate_key(None, replacement.clone(), &key(&replacement), f.now)
         .unwrap();
     assert_eq!(reserve(&rotated), LiveDecision::Allowed);
     assert_eq!(reserve(&rotated), LiveDecision::Denied);
     let returned = session
-        .rotate_key(None, client(), &key(client()), f.now)
+        .rotate_key(None, Arc::new(client()), &key(client()), f.now)
         .unwrap();
     assert_eq!(reserve(&returned), LiveDecision::Denied);
     assert_eq!(

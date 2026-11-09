@@ -108,7 +108,7 @@ fn stored(app: &App, value: &TokenValue) -> bool {
 /// Completes consent and continuation for a pending step, honouring the wait.
 fn approve(
     app: &App,
-    session: &mut Session<'_, Network, Ps256Signer>,
+    session: &mut Session<&Network, &Ps256Signer>,
     pending: &Step,
     choice: multiple::Choice,
 ) -> Step {

@@ -160,12 +160,7 @@ pub(crate) fn sign_key_rotation(
         nonce: Some(nonce),
         tag: Tag::GnapRotate,
     };
-    let (signature_input, signature) = sign(
-        &message,
-        &input,
-        &crate::signing::Borrowed(replacement),
-        REPLACEMENT_LABEL,
-    )?;
+    let (signature_input, signature) = sign(&message, &input, &replacement, REPLACEMENT_LABEL)?;
     // A `kid` is a name, not a key: the presented JWK has to be the public
     // half of the key that just signed, or the AS would bind the token to a
     // key this session cannot use. The real signature settles that locally.

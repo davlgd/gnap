@@ -16,7 +16,8 @@ use gnap_types::message::{ContinueRequest, GrantRequest};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 const RSA_PKCS1: &str = include_str!("fixtures/rfc9421-b12.pkcs1.pem");
 const ENDPOINT: &str = "https://server.example.com/gnap";
@@ -223,7 +224,7 @@ fn verify_pair(
 #[test]
 fn a_key_rotation_request_carries_two_linked_proofs_the_verifier_accepts() {
     let sk = signer();
-    let new = replacement();
+    let new = Arc::new(replacement());
     let new_verifier = Ps256Verifier::from_public_jwk(&new.public_jwk().unwrap()).unwrap();
     let key = presented(&new);
     let key_json = serde_json::to_value(&key).unwrap();
@@ -237,7 +238,7 @@ fn a_key_rotation_request_carries_two_linked_proofs_the_verifier_accepts() {
     s.start(&request(), 1_000).unwrap();
     assert_eq!(s.signer_for(None).unwrap().key_id(), "gnap-demo");
 
-    let token = s.rotate_key(None, &new, &key, 1_050).unwrap();
+    let token = s.rotate_key(None, new, &key, 1_050).unwrap();
     assert_eq!(token.value.as_str(), REBOUND);
     assert_eq!(token.key.as_ref(), Some(&key));
     assert_eq!(s.usable_tokens(1_050).unwrap()[0].value.as_str(), REBOUND);
@@ -306,7 +307,7 @@ fn a_key_rotation_request_carries_two_linked_proofs_the_verifier_accepts() {
 #[test]
 fn keys_this_session_cannot_present_are_refused_before_anything_leaves() {
     let sk = signer();
-    let new = replacement();
+    let new = Arc::new(replacement());
     let jwk = new.public_jwk().unwrap();
     let mut private = jwk.clone();
     private.insert("d".into(), json!("AQAB"));
@@ -338,7 +339,7 @@ fn keys_this_session_cannot_present_are_refused_before_anything_leaves() {
         let as_ = FakeAs::with(vec![&managed(false)]);
         let mut s = Session::new(&as_, &sk, ENDPOINT);
         s.start(&request(), 1_000).unwrap();
-        let e = s.rotate_key(None, &new, &key, 1_050).unwrap_err();
+        let e = s.rotate_key(None, new.clone(), &key, 1_050).unwrap_err();
         assert!(matches!(e, ClientError::Usage(_)), "{e}");
         assert!(
             e.to_string().to_lowercase().contains(expected),
@@ -355,7 +356,7 @@ fn keys_this_session_cannot_present_are_refused_before_anything_leaves() {
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request(), 1_000).unwrap();
     let e = s
-        .rotate_key(None, &new, &presented(&impostor), 1_050)
+        .rotate_key(None, new.clone(), &presented(&impostor), 1_050)
         .unwrap_err();
     assert!(matches!(e, ClientError::Usage(_)), "{e}");
     assert!(e.to_string().contains("does not verify"), "{e}");
@@ -369,7 +370,7 @@ fn keys_this_session_cannot_present_are_refused_before_anything_leaves() {
     s.start(&request(), 1_000).unwrap();
     assert_eq!(s.signer_for(None).unwrap().key_id(), sk.key_id());
     let e = s
-        .rotate_key(None, &new, &presented(&new), 1_050)
+        .rotate_key(None, new.clone(), &presented(&new), 1_050)
         .unwrap_err();
     assert!(e.to_string().contains("`manage`"), "{e}");
     assert_eq!(as_.sent(), 1);
@@ -378,7 +379,7 @@ fn keys_this_session_cannot_present_are_refused_before_anything_leaves() {
 #[test]
 fn resource_signer_selection_does_not_require_a_management_api() {
     let sk = signer();
-    let new = replacement();
+    let new = Arc::new(replacement());
     let key = presented(&new);
     let lot = json!({"access_token": [
         {"label": "documents", "value": ISSUED, "access": ["documents:read"],
@@ -403,16 +404,15 @@ fn resource_signer_selection_does_not_require_a_management_api() {
     assert!(s.signer_for(None).is_err());
     assert!(s.signer_for(Some("missing")).is_err());
     assert_eq!(s.signer_for(Some("reports")).unwrap().key_id(), sk.key_id());
-    s.rotate_key(Some("documents"), &new, &key, 1_010).unwrap();
+    s.rotate_key(Some("documents"), new.clone(), &key, 1_010)
+        .unwrap();
     assert_eq!(
         s.signer_for(Some("documents")).unwrap().key_id(),
         new.key_id()
     );
     assert_eq!(s.signer_for(Some("reports")).unwrap().key_id(), sk.key_id());
     let before = as_.sent();
-    let refused = s
-        .rotate_key(Some("reports"), &new, &key, 1_020)
-        .unwrap_err();
+    let refused = s.rotate_key(Some("reports"), new, &key, 1_020).unwrap_err();
     assert!(matches!(refused, ClientError::Usage(_)));
     assert!(refused.to_string().contains("`manage`"));
     assert_eq!(as_.sent(), before);
@@ -426,7 +426,7 @@ fn resource_signer_selection_does_not_require_a_management_api() {
 #[test]
 fn an_answer_that_does_not_name_the_new_key_leaves_everything_unchanged() {
     let sk = signer();
-    let new = replacement();
+    let new = Arc::new(replacement());
     let key = presented(&new);
     let old_key = serde_json::to_value(presented(&sk)).unwrap();
     let cases: Vec<(String, &str)> = vec![
@@ -461,7 +461,7 @@ fn an_answer_that_does_not_name_the_new_key_leaves_everything_unchanged() {
         let mut s = Session::new(&as_, &sk, ENDPOINT);
         s.start(&request(), 1_000).unwrap();
         let before = s.usable_tokens(1_000).unwrap()[0].clone();
-        let e = s.rotate_key(None, &new, &key, 1_050).unwrap_err();
+        let e = s.rotate_key(None, new.clone(), &key, 1_050).unwrap_err();
         assert!(
             matches!(e, ClientError::Protocol(_) | ClientError::Server(_)),
             "{e}"
@@ -486,7 +486,7 @@ fn an_answer_that_does_not_name_the_new_key_leaves_everything_unchanged() {
 #[test]
 fn a_new_lot_resets_rotated_signers_even_when_a_value_repeats() {
     let sk = signer();
-    let new = replacement();
+    let new = Arc::new(replacement());
     let key = presented(&new);
     let key_json = serde_json::to_value(&key).unwrap();
     // A pending answer to the change, then an approved lot reusing the very
@@ -516,7 +516,7 @@ fn a_new_lot_resets_rotated_signers_even_when_a_value_repeats() {
         "method": "redirect", "uri": "https://client.example.net/cb", "nonce": "VJLO6A4CATR0KRO"}}))
     .unwrap();
     s.start(&opening, 1_000).unwrap();
-    s.rotate_key(None, &new, &key, 1_010).unwrap();
+    s.rotate_key(None, new, &key, 1_010).unwrap();
     assert_eq!(s.signer_for(None).unwrap().key_id(), "rotated-1");
 
     let changes = ContinueRequest {
@@ -546,7 +546,7 @@ fn a_new_lot_resets_rotated_signers_even_when_a_value_repeats() {
 #[test]
 fn a_bearer_token_is_refused_before_anything_leaves() {
     let sk = signer();
-    let new = replacement();
+    let new = Arc::new(replacement());
     let bearer = json!({"access_token": {
         "value": ISSUED, "access": ["dolphin-metadata"], "flags": ["bearer"],
         "manage": {"uri": MANAGE_URI, "access_token": {"value": MANAGE_TOKEN}}
@@ -563,7 +563,7 @@ fn a_bearer_token_is_refused_before_anything_leaves() {
     s.start(&request(), 1_000).unwrap();
     assert!(matches!(s.signer_for(None), Err(ClientError::Usage(_))));
     let e = s
-        .rotate_key(None, &new, &presented(&new), 1_050)
+        .rotate_key(None, new.clone(), &presented(&new), 1_050)
         .unwrap_err();
     assert!(matches!(e, ClientError::Usage(_)), "{e}");
     assert!(e.to_string().contains("bearer"), "{e}");
@@ -575,13 +575,24 @@ fn a_bearer_token_is_refused_before_anything_leaves() {
     assert!(signed_by(&as_.last(), &sk.verifier(), "gnap-demo", 1_051));
 }
 
-struct CountSignatures<'a> {
-    signer: &'a Ps256Signer,
-    calls: std::cell::Cell<usize>,
+struct CountSignatures {
+    signer: Arc<Ps256Signer>,
+    calls: AtomicUsize,
 }
-impl Signer for CountSignatures<'_> {
+impl CountSignatures {
+    const fn new(signer: Arc<Ps256Signer>) -> Self {
+        Self {
+            signer,
+            calls: AtomicUsize::new(0),
+        }
+    }
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+impl Signer for CountSignatures {
     fn sign(&self, data: &[u8]) -> Result<Vec<u8>, gnap_crypto::ProofError> {
-        self.calls.set(self.calls.get() + 1);
+        self.calls.fetch_add(1, Ordering::SeqCst);
         self.signer.sign(data)
     }
     fn key_id(&self) -> &str {
@@ -594,17 +605,11 @@ impl Signer for CountSignatures<'_> {
 
 #[test]
 fn unknown_explicit_bindings_are_not_signed_or_sent_by_guessing() {
-    let original = signer();
+    let original = Arc::new(signer());
     let other = Ps256Signer::generate(2048, original.key_id()).unwrap();
-    let new = replacement();
-    let sk = CountSignatures {
-        signer: &original,
-        calls: std::cell::Cell::new(0),
-    };
-    let replacement = CountSignatures {
-        signer: &new,
-        calls: std::cell::Cell::new(0),
-    };
+    let new = Arc::new(replacement());
+    let sk = CountSignatures::new(Arc::clone(&original));
+    let replacement = Arc::new(CountSignatures::new(Arc::clone(&new)));
     for key in [
         presented(&original),
         presented(&other),
@@ -618,11 +623,11 @@ fn unknown_explicit_bindings_are_not_signed_or_sent_by_guessing() {
         let as_ = FakeAs::with(vec![&body]);
         let mut s = Session::new(&as_, &sk, ENDPOINT);
         s.start(&request(), 1_000).unwrap();
-        let signatures = sk.calls.get();
+        let signatures = sk.calls();
         let before = serde_json::to_value(s.usable_tokens(1_000).unwrap()).unwrap();
         assert!(matches!(s.signer_for(None), Err(ClientError::Usage(_))));
         assert!(matches!(
-            s.rotate_key(None, &replacement, &presented(&new), 1_001),
+            s.rotate_key(None, replacement.clone(), &presented(&new), 1_001),
             Err(ClientError::Usage(_))
         ));
         assert!(matches!(
@@ -633,8 +638,8 @@ fn unknown_explicit_bindings_are_not_signed_or_sent_by_guessing() {
             s.revoke_token(None, 1_001),
             Err(ClientError::Usage(_))
         ));
-        assert_eq!(sk.calls.get(), signatures);
-        assert_eq!(replacement.calls.get(), 0);
+        assert_eq!(sk.calls(), signatures);
+        assert_eq!(replacement.calls(), 0);
         assert_eq!(as_.sent(), 1);
         assert_eq!(
             serde_json::to_value(s.usable_tokens(1_001).unwrap()).unwrap(),
@@ -649,7 +654,7 @@ fn unknown_explicit_bindings_are_not_signed_or_sent_by_guessing() {
 #[test]
 fn a_rotated_value_that_repeats_a_sibling_is_refused_and_both_keep_their_signers() {
     let sk = signer();
-    let new = replacement();
+    let new = Arc::new(replacement());
     let key = presented(&new);
     let key_json = serde_json::to_value(&key).unwrap();
     let lot = json!({"access_token": [
@@ -678,7 +683,7 @@ fn a_rotated_value_that_repeats_a_sibling_is_refused_and_both_keep_their_signers
     ]);
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request, 1_000).unwrap();
-    s.rotate_key(Some("documents"), &new, &key, 1_010).unwrap();
+    s.rotate_key(Some("documents"), new, &key, 1_010).unwrap();
     assert_eq!(
         s.signer_for(Some("documents")).unwrap().key_id(),
         "rotated-1"
@@ -709,7 +714,7 @@ fn a_rotated_value_that_repeats_a_sibling_is_refused_and_both_keep_their_signers
 #[test]
 fn unusable_answers_leave_the_token_and_its_key_alone() {
     let sk = signer();
-    let new = replacement();
+    let new = Arc::new(replacement());
     let key = presented(&new);
     let key_json = serde_json::to_value(&key).unwrap();
     let complete = rebound(REBOUND, Some(key_json.clone()), "R2");
@@ -744,7 +749,7 @@ fn unusable_answers_leave_the_token_and_its_key_alone() {
         let mut s = Session::new(&as_, &sk, ENDPOINT);
         s.start(&request(), 1_000).unwrap();
         let before = s.usable_tokens(1_000).unwrap()[0].clone();
-        let e = s.rotate_key(None, &new, &key, 1_050).unwrap_err();
+        let e = s.rotate_key(None, new.clone(), &key, 1_050).unwrap_err();
         assert!(
             matches!(e, ClientError::Protocol(_) | ClientError::Parse(_)),
             "{status}: {e}"
@@ -764,7 +769,7 @@ fn unusable_answers_leave_the_token_and_its_key_alone() {
     );
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request(), 1_000).unwrap();
-    let e = s.rotate_key(None, &new, &key, 1_050).unwrap_err();
+    let e = s.rotate_key(None, new.clone(), &key, 1_050).unwrap_err();
     assert!(matches!(e, ClientError::Server(_)), "{e}");
     assert_eq!(s.signer_for(None).unwrap().key_id(), "gnap-demo");
 
@@ -773,7 +778,7 @@ fn unusable_answers_leave_the_token_and_its_key_alone() {
     let as_ = FakeAs::with(vec![&managed(false), &complete]);
     let mut s = Session::new(&as_, &sk, ENDPOINT);
     s.start(&request(), 1_000).unwrap();
-    s.rotate_key(None, &new, &key, 1_050).unwrap();
+    s.rotate_key(None, new.clone(), &key, 1_050).unwrap();
     let rotated = s.usable_tokens(1_050).unwrap()[0].clone();
     // Out of scripted replies: the transport fails.
     let e = s.rotate_token(None, 1_100).unwrap_err();

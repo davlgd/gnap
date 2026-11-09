@@ -106,7 +106,7 @@ fn two_of_three() -> String {
     )
 }
 
-fn labels(session: &Session<'_, FakeAs, Ps256Signer>, now: u64) -> Vec<Option<String>> {
+fn labels(session: &Session<&FakeAs, &Ps256Signer>, now: u64) -> Vec<Option<String>> {
     session
         .usable_tokens(now)
         .unwrap_or_default()

@@ -77,15 +77,20 @@
 //! resolve. Management also refuses unknown explicit bindings before signing.
 //! These are adapter limits, not GNAP prohibitions on those token forms.
 //! A new session does not recover another session's rotated-key registry.
-//! Use [`Session::rotate_key_owned`] to let a session retain a runtime-generated
-//! signer's `Arc`; [`Session::rotate_key`] still accepts a borrowed signer.
-//! `signer_for` now borrows the session, so its result cannot be held across a
-//! mutation that might release the owned key. This is a lifetime migration for
-//! callers that previously kept the returned reference independently.
+//! The session shares each replacement signer through an `Arc`, and
+//! `signer_for` borrows the session, so its result can't outlive a mutation
+//! that might release that signer.
 //!
-//! # Callback clocks and API migration
+//! # Ownership
 //!
-//! `accept_callback`, `accept_redirect` and `accept_push` now require a `now`
+//! A [`Session`] owns its transport and its signer. Pass references to share
+//! them with other sessions, or an `Arc` to keep a session in long-lived
+//! application state: [`HttpTransport`] and `Signer` forward through `&T`,
+//! `Box<T>`, and `Arc<T>`.
+//!
+//! # Callback clocks
+//!
+//! `accept_callback`, `accept_redirect` and `accept_push` take a `now`
 //! argument, in Unix seconds. Pass the current time when processing the
 //! callback, on the same clock used by `start`, `modify_grant` and
 //! `continue_grant`. The synchronous API does not read a system clock itself.
@@ -127,6 +132,6 @@ pub mod signing;
 pub mod transport;
 
 pub use error::ClientError;
-pub use session::{AttributedSubject, Session, Step, VerifiedSubject};
+pub use session::{AttributedSubject, Session, SharedSigner, Step, VerifiedSubject};
 pub use signing::sign_request;
 pub use transport::{HttpRequest, HttpResponse, HttpTransport};

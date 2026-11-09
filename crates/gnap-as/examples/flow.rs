@@ -229,7 +229,7 @@ fn main() {
 /// Step 4: what §6 lets the client do with the token it now holds.
 fn manage_the_token(
     wire: &Wire<'_>,
-    client: &mut Session<'_, Wire<'_>, Ps256Signer>,
+    client: &mut Session<&Wire<'_>, &Ps256Signer>,
     issued: &gnap_types::token::AccessToken,
 ) {
     println!("\n4. The client manages the token it was issued (§6)");
