@@ -55,7 +55,7 @@ Give each fact one home and link to it from elsewhere:
 - The root README says what the project does and where to start
 - The guides in `docs/` explain one task each
 - The [support matrix](docs/support-matrix.md) is the inventory of capabilities and limits
-- `docs/history/` keeps dated observations, which are never rewritten
+- Dated validation records keep their original content and location
 
 Each crate README is the page readers see on crates.io, so it stays self-contained and can repeat the minimum Rust version.
 
