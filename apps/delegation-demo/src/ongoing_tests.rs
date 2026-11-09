@@ -108,14 +108,16 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
     let references = app.bootstrap.get().unwrap().as_ref().unwrap().clone();
     let worker = std::thread::spawn(move || {
         client_worker(
-            worker_origin,
-            signer,
-            server,
-            storage,
-            decisions,
+            Worker {
+                origin: worker_origin,
+                signer,
+                server,
+                storage,
+                decisions,
+                references,
+                lifetime: SESSION_LIFETIME,
+            },
             receiver,
-            references,
-            SESSION_LIFETIME,
         )
     });
     let starts = Arc::new(AtomicUsize::new(0));

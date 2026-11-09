@@ -81,14 +81,16 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
     drop(unused_sender);
     let worker = std::thread::spawn(move || {
         client_worker(
-            worker_origin,
-            signer,
-            server,
-            storage,
-            decisions,
+            Worker {
+                origin: worker_origin,
+                signer,
+                server,
+                storage,
+                decisions,
+                references,
+                lifetime: SESSION_LIFETIME,
+            },
             receiver,
-            references,
-            SESSION_LIFETIME,
         )
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());

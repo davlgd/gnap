@@ -69,14 +69,16 @@ async fn lab(lifetime: Duration) -> (App, Router, String) {
     let references = app.bootstrap.get().unwrap().as_ref().unwrap().clone();
     std::thread::spawn(move || {
         client_worker(
-            worker_origin,
-            signer,
-            server,
-            storage,
-            decisions,
+            Worker {
+                origin: worker_origin,
+                signer,
+                server,
+                storage,
+                decisions,
+                references,
+                lifetime,
+            },
             receiver,
-            references,
-            lifetime,
         )
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());

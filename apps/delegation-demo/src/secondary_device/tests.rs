@@ -544,14 +544,16 @@ async fn two_independent_http_sessions_decide_then_poll_and_read_the_resource() 
     let references = app.bootstrap.get().unwrap().as_ref().unwrap().clone();
     let worker = std::thread::spawn(move || {
         client_worker(
-            worker_origin,
-            signer,
-            server,
-            storage,
-            decisions,
+            Worker {
+                origin: worker_origin,
+                signer,
+                server,
+                storage,
+                decisions,
+                references,
+                lifetime: SESSION_LIFETIME,
+            },
             receiver,
-            references,
-            SESSION_LIFETIME,
         )
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());

@@ -860,16 +860,28 @@ fn client_session<'a>(
         .with_finish_timeout(FINISH_TIMEOUT)
 }
 
-fn client_worker(
+/// What the client worker runs with.
+struct Worker {
     origin: String,
     signer: Arc<Ps256Signer>,
     server: Arc<As>,
     storage: Arc<IndexedStorage>,
     decisions: Decisions,
-    receiver: mpsc::Receiver<WorkerCommand>,
     references: resource_registration::References,
+    /// How long a browser session lives.
     lifetime: Duration,
-) {
+}
+
+fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
+    let Worker {
+        origin,
+        signer,
+        server,
+        storage,
+        decisions,
+        references,
+        lifetime,
+    } = worker;
     let transport = Network {
         client: reqwest::blocking::Client::builder()
             .no_proxy()
@@ -1882,14 +1894,16 @@ async fn main() {
         let _ = bootstrap_app.bootstrap.set(result.clone());
         match result {
             Ok(references) => client_worker(
-                origin,
-                signer,
-                server,
-                worker_storage,
-                decisions,
+                Worker {
+                    origin,
+                    signer,
+                    server,
+                    storage: worker_storage,
+                    decisions,
+                    references,
+                    lifetime: SESSION_LIFETIME,
+                },
                 receiver,
-                references,
-                SESSION_LIFETIME,
             ),
             Err(_) => {
                 eprintln!("Resource registration bootstrap failed");
