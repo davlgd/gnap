@@ -83,6 +83,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             Ok(approvals) => approvals,
             Err(response) => return response,
         };
+        // An approval that releases nothing would read as a pending grant.
+        if approvals.is_empty() && subject.is_none() {
+            return misconfigured("an approval must issue a token or release subject information");
+        }
         if let Some(released) = &subject {
             if released.ground == SubjectGround::RoInteractedHere
                 && !aggregate.record.interaction_completed
@@ -190,7 +194,12 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             let continuation = token.continuation.take();
             return Ok((vec![token], continuation));
         }
-        let expires_in = self.access_token_lifetime(request, now)?;
+        // A selection of no token issues no expiry to compute.
+        let expires_in = if approvals.is_empty() {
+            None
+        } else {
+            self.access_token_lifetime(request, now)?
+        };
         let mut roles = HashMap::new();
         let mut handles = HashSet::new();
         let mut reserved = Vec::with_capacity(approvals.len());
