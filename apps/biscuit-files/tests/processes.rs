@@ -582,3 +582,204 @@ fn each_role_serves_localhost_and_ipv6_without_binding_other_interfaces() {
         }
     }
 }
+
+/// One action, whatever its status: the client's HTTP status and its body.
+fn call(
+    client: &reqwest::blocking::Client,
+    origin: &str,
+    cookie: &str,
+    name: &str,
+    body: Value,
+) -> (u16, Value) {
+    let response = client
+        .post(format!("{origin}/action/{name}"))
+        .timeout(Duration::from_secs(35))
+        .header("origin", origin)
+        .header("cookie", cookie)
+        .header("content-type", "application/json")
+        .body(serde_json::to_vec(&body).unwrap())
+        .send()
+        .unwrap();
+    let status = response.status().as_u16();
+    (
+        status,
+        serde_json::from_slice(&response.bytes().unwrap()).unwrap(),
+    )
+}
+
+/// The session view of an answer, checked against its closed schema.
+fn view(answer: &Value) -> &Value {
+    let view = &answer["session"];
+    let mut keys: Vec<_> = view.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "key_attempts_left",
+            "key_rotations",
+            "next_request_uses",
+            "previous_key_testable",
+            "restrictions",
+            "retired_token_testable"
+        ]
+    );
+    for block in view["restrictions"].as_array().unwrap() {
+        let mut keys: Vec<_> = block.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["file", "until"]);
+        assert!(matches!(block["file"].as_str(), Some("notes" | "draft")));
+        assert!(block["until"].is_u64());
+    }
+    view
+}
+
+/// Each answer about a held session describes it with closed values: its
+/// restrictive blocks in order, with the instant written in each, what the
+/// client presents next, and what its rotations and probes can still do.
+#[test]
+fn every_answer_describes_the_session_the_client_holds() {
+    let keys = std::env::temp_dir().join(format!(
+        "gnap-biscuit-files-view-{}",
+        gnap_crypto::httpsig::fresh_nonce().unwrap()
+    ));
+    config::initialize(&keys).unwrap();
+    let ports = [port(), port(), port()];
+    let origins = ports.map(|p| format!("http://127.0.0.1:{p}"));
+    let mut processes = Processes {
+        children: vec![],
+        keys,
+    };
+    for (binary, p) in [
+        env!("CARGO_BIN_EXE_as"),
+        env!("CARGO_BIN_EXE_rs"),
+        env!("CARGO_BIN_EXE_client"),
+    ]
+    .into_iter()
+    .zip(ports)
+    {
+        processes
+            .children
+            .push(start(binary, p, &origins, &processes.keys));
+    }
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    for origin in &origins {
+        ready(&client, origin);
+    }
+    let origin = &origins[2];
+    let (a, started) = action(&client, origin, "", "start", json!({}));
+    let (b, _) = action(&client, origin, "", "start", json!({}));
+    assert_eq!(
+        view(&started),
+        &json!({"restrictions": [], "next_request_uses": "issued", "key_rotations": 0,
+            "key_attempts_left": 3, "previous_key_testable": false, "retired_token_testable": false})
+    );
+
+    // Two blocks that intersect: neither file remains readable.
+    let (_, notes) = action(
+        &client,
+        origin,
+        &a,
+        "attenuate",
+        json!({"file": "notes", "seconds": 120}),
+    );
+    let (_, draft) = action(
+        &client,
+        origin,
+        &a,
+        "attenuate",
+        json!({"file": "draft", "seconds": 60}),
+    );
+    let blocks = view(&draft)["restrictions"].clone();
+    assert_eq!(blocks.as_array().unwrap().len(), 2);
+    assert_eq!(blocks[0], view(&notes)["restrictions"][0]);
+    assert_eq!(blocks[1]["file"], "draft");
+    assert_eq!(view(&draft)["next_request_uses"], "restricted");
+    let (_, read) = action(&client, origin, &a, "read", json!({}));
+    assert_eq!(read["status"], 403, "{read}");
+    assert_eq!(
+        view(&read)["restrictions"],
+        blocks,
+        "the instants are the blocks' own"
+    );
+    std::thread::sleep(Duration::from_millis(1100));
+    let (_, status) = action(&client, origin, &a, "status", json!({}));
+    assert_eq!(view(&status)["restrictions"], blocks);
+
+    // An attenuation without its inputs, or past the bound, changes nothing.
+    for body in [
+        json!({"file": "notes"}),
+        json!({"seconds": 30}),
+        json!({"file": "notes", "seconds": 0}),
+    ] {
+        let (code, refused) = call(&client, origin, &a, "attenuate", body.clone());
+        assert_eq!(code, 400, "{body}: {refused}");
+    }
+    for _ in 2..8 {
+        action(
+            &client,
+            origin,
+            &a,
+            "attenuate",
+            json!({"file": "notes", "seconds": 300}),
+        );
+    }
+    let (_, full) = action(&client, origin, &a, "status", json!({}));
+    let eight = view(&full)["restrictions"].clone();
+    assert_eq!(eight.as_array().unwrap().len(), 8);
+    let (code, ninth) = call(
+        &client,
+        origin,
+        &a,
+        "attenuate",
+        json!({"file": "notes", "seconds": 300}),
+    );
+    assert_eq!(code, 400, "{ninth}");
+    assert!(ninth.get("session").is_none(), "an error carries no view");
+    let (_, after) = action(&client, origin, &a, "status", json!({}));
+    assert_eq!(view(&after)["restrictions"], eight);
+
+    // A rotation of the token drops the blocks and keeps the retired token.
+    let (_, rotated) = action(&client, origin, &a, "rotate", json!({}));
+    assert_eq!(
+        view(&rotated),
+        &json!({"restrictions": [], "next_request_uses": "issued", "key_rotations": 0,
+            "key_attempts_left": 3, "previous_key_testable": false, "retired_token_testable": true})
+    );
+    // A rotation of the key: the configured key is now the previous one.
+    action(
+        &client,
+        origin,
+        &a,
+        "attenuate",
+        json!({"file": "notes", "seconds": 120}),
+    );
+    let (_, rekeyed) = action(&client, origin, &a, "rotate-key", json!({}));
+    assert_eq!(view(&rekeyed)["restrictions"], json!([]));
+    assert_eq!(view(&rekeyed)["key_rotations"], 1);
+    assert_eq!(view(&rekeyed)["key_attempts_left"], 2);
+    assert_eq!(view(&rekeyed)["previous_key_testable"], true);
+    let (_, old_key) = action(&client, origin, &a, "check-old-key", json!({}));
+    assert_ne!(old_key["status"], 200, "{old_key}");
+    // Revoked: nothing left to present, so no probe of the previous key.
+    let (_, revoked) = action(&client, origin, &a, "revoke", json!({}));
+    assert_eq!(view(&revoked)["next_request_uses"], "none");
+    assert_eq!(view(&revoked)["previous_key_testable"], false);
+    assert_eq!(view(&revoked)["retired_token_testable"], true);
+
+    // A key-generation attempt that fails still counts, and rotates nothing.
+    let authority = processes.children.remove(0);
+    drop(Processes {
+        children: vec![authority],
+        keys: std::env::temp_dir().join("gnap-biscuit-files-view-none"),
+    });
+    let (code, failed) = call(&client, origin, &b, "rotate-key", json!({}));
+    assert_eq!(code, 400, "{failed}");
+    let (_, status) = action(&client, origin, &b, "status", json!({}));
+    assert_eq!(view(&status)["key_attempts_left"], 2);
+    assert_eq!(view(&status)["key_rotations"], 0);
+}

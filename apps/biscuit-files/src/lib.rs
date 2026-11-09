@@ -11,6 +11,10 @@ pub const TTL: u64 = 1200;
 pub const SKEW: u64 = 30;
 pub const MAX_BODY: usize = 32 * 1024;
 pub const MAX_RECORDS: usize = 64;
+/// Key-generation attempts a session may make, failed ones included.
+pub const MAX_KEY_ATTEMPTS: u32 = 3;
+/// Restrictive blocks a session may add to one token.
+pub const MAX_RESTRICTIONS: usize = 8;
 
 pub fn now() -> Option<u64> {
     std::time::SystemTime::now()
