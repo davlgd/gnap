@@ -12,7 +12,7 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** a response must carry exactly one `Content-Type` field naming `application/json`, as RFC 9635 §3 requires: the session refuses a missing field.
 
-`HttpTransport` is implemented for `&T`, `Box<T>`, and `Arc<T>`.
+`HttpTransport` is implemented for `&T`, `Box<T>`, and `Arc<T>`. `Session::verify_subject` takes a signer of any supported algorithm, requiring `S: JwkSigner` instead of `Borrow<Ps256Signer>`, and a key change accepts a public PS256, ES256, or Ed25519 JWK.
 
 ### gnap-as
 
@@ -22,13 +22,15 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** a grant, continuation, or management request that carries a body and a repeated `Content-Type` field is refused.
 
-`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonces, interaction handle and references, and user code. `MAX_GRANT_BODY_BYTES` names the body bound of the derivation and key-rotation handlers; the HTTP adapter still bounds ordinary grant requests.
+`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonces, interaction handle and references, and user code. `MAX_GRANT_BODY_BYTES` names the body bound of the derivation and key-rotation handlers; the HTTP adapter still bounds ordinary grant requests. The default token-key resolution, the resource-server registry, the derivation handler, and a key change accept public ES256 and Ed25519 JWKs as well as PS256 ones.
 
 ### gnap-crypto
 
 **Breaking:** every `Ps256Signer` and `Ps256Verifier` constructor refuses an RSA modulus outside 2,048 to 4,096 bits, the PEM imports and `Ps256Signer::generate` included.
 
 `MIN_MODULUS_BITS` and `MAX_MODULUS_BITS` are public, and `Signer` is implemented for `&S`, `Box<S>`, and `Arc<S>`.
+
+`Ed25519Signer` and `Ed25519Verifier` sign and verify `EdDSA` with Ed25519, which RFC 9421 calls `ed25519`, and `Es256Signer` and `Es256Verifier` sign and verify `ES256`, its `ecdsa-p256-sha256`. `PublicKey::from_jwk` imports a public JWK and selects its verifier from `kty`, `crv`, and `alg`, and `PublicKey::for_httpsig` accepts the algorithms that `httpsig` allows. The `JwkSigner` trait exports a signer's public JWK and its thumbprint. `Signer::algorithm` and `Verifier::algorithm` return the JWA name of the algorithm, which the server compares with the `alg` of the presented key.
 
 ### gnap-core
 
@@ -47,5 +49,7 @@ The `Debug` output of a `Grant` counts its spent interaction references without 
 **Breaking:** the `impl_registry_traits!` macro is no longer exported, since it only declares this crate's types.
 
 ### gnap-rs, gnap-biscuit, and gnap-subject
+
+`gnap-rs` accepts a token bound to a public ES256 or Ed25519 key as well as a PS256 one. The client key of the Biscuit file profile and the signature of an identity assertion remain PS256.
 
 The three crates name their security bounds as constants, such as `MAX_RESPONSE_BYTES` and `MAX_CLOCK_SKEW` in `gnap-rs`, and `MAX_CLOCK_SKEW_SECONDS` and `MAX_SUBJECT_BYTES` in `gnap-subject`.

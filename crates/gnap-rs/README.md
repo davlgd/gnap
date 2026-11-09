@@ -15,7 +15,7 @@ The resource server's signer authenticates the introspection request, while the 
 
 Your transport authenticates HTTPS, keeps the signed bytes intact, refuses redirects and unapproved destinations, and bounds buffering and time. Your replay memory reserves nonces atomically, and must be shared or durable when you run replicas or need restart recovery.
 
-The profile accepts `httpsig` signatures with public PS256 keys, and introspection responses with integer `iat` and `exp` claims. It doesn't support bearer tokens, Biscuit introspection, registration, or derivation. The [resource-server guide](https://github.com/davlgd/gnap/blob/main/docs/resource-server-sdk.md) explains the access policy, the audience policies, the failure cases, and every limit of the profile.
+The profile accepts `httpsig` signatures with public PS256, ES256, or Ed25519 keys, and introspection responses with integer `iat` and `exp` claims. It doesn't support bearer tokens, Biscuit introspection, registration, or derivation. The [resource-server guide](https://github.com/davlgd/gnap/blob/main/docs/resource-server-sdk.md) explains the access policy, the audience policies, the failure cases, and every limit of the profile.
 
 ## Verification
 
