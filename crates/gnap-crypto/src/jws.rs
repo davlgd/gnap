@@ -383,7 +383,16 @@ impl<'r> Envelope<'r> {
             )),
             (JwsMethod::Jws, None) if !content.is_empty() => {
                 let mut types = request.header_values("content-type");
-                let jose = types.next().is_some_and(|value| {
+                let first = types.next();
+                if types.next().is_some() {
+                    return Err(rejected(
+                        "an attached JWS needs one Content-Type naming application/jose",
+                    ));
+                }
+                // Content of another media type, without Detached-JWS, carries
+                // no JWS at all: the request is unsigned, as one without
+                // Signature is for httpsig.
+                let jose = first.is_some_and(|value| {
                     value
                         .split(';')
                         .next()
@@ -391,10 +400,8 @@ impl<'r> Envelope<'r> {
                         .trim_matches([' ', '\t'])
                         .eq_ignore_ascii_case(JOSE_MEDIA_TYPE)
                 });
-                if !jose || types.next().is_some() {
-                    return Err(rejected(
-                        "an attached JWS needs one Content-Type naming application/jose",
-                    ));
+                if !jose {
+                    return Err(VerifyError::Unsigned);
                 }
                 if content.len() > MAX_ATTACHED_JWS_BYTES {
                     return Err(rejected("the attached JWS is too long"));

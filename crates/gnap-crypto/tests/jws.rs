@@ -757,20 +757,23 @@ fn the_envelope_is_unambiguous() {
     let mut both = attached();
     both.header(DETACHED_JWS_HEADER, &value);
     assert!(rejection(check(JwsMethod::Jws, &both)).contains("Detached-JWS"));
-    for types in [
-        &[][..],
-        &["application/json"][..],
-        &[JOSE_MEDIA_TYPE, JOSE_MEDIA_TYPE][..],
+    for (types, unsigned) in [
+        (&[][..], true),
+        (&["application/json"][..], true),
+        (&[JOSE_MEDIA_TYPE, JOSE_MEDIA_TYPE][..], false),
+        (&["application/json", JOSE_MEDIA_TYPE][..], false),
     ] {
         let mut wire = attached();
         wire.without("Content-Type");
         for value in types {
             wire.header("Content-Type", value);
         }
-        assert!(
-            rejection(check(JwsMethod::Jws, &wire)).contains("Content-Type"),
-            "{types:?}"
-        );
+        let result = check(JwsMethod::Jws, &wire);
+        if unsigned {
+            assert_eq!(result, Err(VerifyError::Unsigned), "{types:?}");
+        } else {
+            assert!(rejection(result).contains("Content-Type"), "{types:?}");
+        }
     }
     let mut parameters = attached();
     parameters
