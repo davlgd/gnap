@@ -205,3 +205,16 @@ fn i05_every_state_is_reachable() {
     }
     println!("  I05: all 4 states reachable, finalized reachable from each");
 }
+
+/// A spent interaction reference stays out of the grant's `Debug` output.
+#[test]
+fn debug_output_counts_spent_references_without_showing_them() {
+    let mut g = Grant::new();
+    g.apply(Event::AsRequiresInteraction, 0).unwrap();
+    g.offer_continuation(0, Some(0));
+    g.apply(Event::ContinueWithInteractRef("SPENT-REFERENCE".into()), 10)
+        .unwrap();
+    let shown = format!("{g:?}");
+    assert!(!shown.contains("SPENT-REFERENCE"), "{shown}");
+    assert!(shown.contains("spent_refs: 1"), "{shown}");
+}

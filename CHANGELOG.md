@@ -30,6 +30,10 @@ This file lists the changes to the published crates that affect their users, cra
 
 `MIN_MODULUS_BITS` and `MAX_MODULUS_BITS` are public, and `Signer` is implemented for `&S`, `Box<S>`, and `Arc<S>`.
 
+### gnap-core
+
+The `Debug` output of a `Grant` counts its spent interaction references without showing them.
+
 ### gnap-types
 
 **Breaking:** the `object_or_reference!` macro is no longer exported, since it only declares this crate's types.

@@ -98,7 +98,10 @@ impl Allowed {
 /// Holds only what the transitions need. Everything else — the requested
 /// access, the client's key, the tokens issued — lives outside: §1.5 leaves the
 /// means of managing state to the implementation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Its `Debug` output counts the spent interaction references without showing
+/// them.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Grant {
     state: State,
     /// Whether the last response offered a continuation (§5).
@@ -114,6 +117,18 @@ pub struct Grant {
     spent_refs: HashSet<String>,
     /// The interaction start mode that completed, if any (§4.1).
     completed_start_mode: Option<String>,
+}
+
+impl fmt::Debug for Grant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Grant")
+            .field("state", &self.state)
+            .field("continuation_offered", &self.continuation_offered)
+            .field("not_before", &self.not_before)
+            .field("spent_refs", &self.spent_refs.len())
+            .field("completed_start_mode", &self.completed_start_mode)
+            .finish()
+    }
 }
 
 impl Default for Grant {
