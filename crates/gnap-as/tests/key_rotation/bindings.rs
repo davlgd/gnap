@@ -2,6 +2,7 @@
 
 use super::*;
 use gnap_as::ResolvedTokenKey;
+use gnap_crypto::{Rs256Signer, Rs256Verifier};
 use std::cell::RefCell;
 
 fn old_proof(token: &AccessToken, key: &Key) -> HttpRequest {
@@ -202,26 +203,30 @@ fn a_resolved_reference_is_pinned_by_value_for_subsequent_management() {
 }
 
 /// A verifier that a deployment supplies for an algorithm this SDK doesn't
-/// implement for `httpsig`, here built on a PS256 key for the test.
-struct CustomAlgorithm(Ps256Verifier, &'static str);
+/// know, here built on a PS256 key for the test.
+struct CustomAlgorithm(Ps256Verifier);
 
 impl Verifier for CustomAlgorithm {
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), gnap_crypto::ProofError> {
         self.0.verify(data, signature)
     }
     fn algorithm(&self) -> &'static str {
-        self.1
+        "X-CUSTOM"
     }
     fn expected_key_id(&self) -> Option<&str> {
         self.0.expected_key_id()
     }
 }
 
-/// The algorithms the custom resolver verifies `httpsig` with: one this SDK
-/// doesn't know, and one it implements only for the JOSE proofs.
-const CUSTOM_ALGORITHMS: [&str; 2] = ["X-CUSTOM", "RS256"];
+/// A replacement key of `RS256`, which this SDK implements only for the JOSE
+/// proofs, and which a deployment may still verify `httpsig` with.
+fn rs256_key() -> &'static Rs256Signer {
+    static KEY: OnceLock<Rs256Signer> = OnceLock::new();
+    KEY.get_or_init(|| Rs256Signer::generate(2048, "replacement").unwrap())
+}
 
-/// Resolves a by-value key of the custom algorithms itself.
+/// Resolves a by-value key of either algorithm itself: the unknown one, and
+/// `RS256` with its own verifier.
 struct CustomKeys;
 
 impl KeyResolver for CustomKeys {
@@ -234,22 +239,22 @@ impl KeyResolver for CustomKeys {
         client: &Client,
         binding: Option<&Key>,
     ) -> Option<ResolvedTokenKey> {
-        let custom = binding.and_then(Key::as_value).and_then(|key| {
-            let alg = key.jwk.as_ref()?.get("alg")?.as_str()?;
-            let alg = CUSTOM_ALGORITHMS
-                .into_iter()
-                .find(|custom| *custom == alg)?;
-            Some((key, alg))
-        });
-        let Some((key, alg)) = custom else {
-            return Keys.resolve_token_key(client, binding);
+        let key = binding.and_then(Key::as_value);
+        let jwk = key.and_then(|key| key.jwk.as_ref());
+        let verifier: Box<dyn Verifier> = match jwk.and_then(|jwk| jwk.get("alg")?.as_str()) {
+            Some("X-CUSTOM") => Box::new(CustomAlgorithm(new_key().verifier())),
+            Some("RS256") => Box::new(Rs256Verifier::from_public_jwk(jwk?).ok()?),
+            _ => return Keys.resolve_token_key(client, binding),
         };
         Some(ResolvedTokenKey {
-            key: key.clone(),
-            verifier: Box::new(CustomAlgorithm(new_key().verifier(), alg)),
+            key: key?.clone(),
+            verifier,
         })
     }
 }
+
+/// Adds the replacement key's proof to a key-change request.
+type Prove = dyn Fn(HttpRequest) -> HttpRequest;
 
 /// A public key of an algorithm this SDK doesn't implement for `httpsig`
 /// reaches the configured resolver when presented by value, as it would by
@@ -257,9 +262,16 @@ impl KeyResolver for CustomKeys {
 /// the JOSE proofs. The default resolver refuses both.
 #[test]
 fn a_custom_algorithm_by_value_is_left_to_the_configured_resolver() {
-    for alg in CUSTOM_ALGORITHMS {
-        let mut jwk = new_key().public_jwk().unwrap();
-        jwk.insert("alg".into(), json!(alg));
+    let mut unknown = new_key().public_jwk().unwrap();
+    unknown.insert("alg".into(), json!("X-CUSTOM"));
+    let cases: [(_, &Prove); 2] = [
+        (unknown, &|request| add_new_proof(request, new_key())),
+        (rs256_key().public_jwk().unwrap(), &|request| {
+            add_new_proof(request, rs256_key())
+        }),
+    ];
+    for (jwk, prove) in cases {
+        let alg = jwk["alg"].clone();
         let custom: Key =
             serde_json::from_value(json!({"proof": "httpsig", "jwk": Value::Object(jwk)})).unwrap();
 
@@ -272,15 +284,13 @@ fn a_custom_algorithm_by_value_is_left_to_the_configured_resolver() {
             CustomKeys,
         );
         let tokens = grant(&configured);
-        let request = add_new_proof(old_proof(&tokens[0], &custom), new_key());
-        let rotated = single(&configured.handle(&request, NOW + 1));
+        let rotated = single(&configured.handle(&prove(old_proof(&tokens[0], &custom)), NOW + 1));
         assert_eq!(rotated.key, Some(custom.clone()), "{alg}");
 
         let default = server(true, true);
         let tokens = grant(&default);
-        let request = add_new_proof(old_proof(&tokens[0], &custom), new_key());
         assert_eq!(
-            error_code(&default.handle(&request, NOW + 1)),
+            error_code(&default.handle(&prove(old_proof(&tokens[0], &custom)), NOW + 1)),
             "key_rotation_not_supported",
             "{alg}"
         );

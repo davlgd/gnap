@@ -197,13 +197,13 @@ fn rotate_request(
     add_new_proof(request, new_key())
 }
 
-fn add_new_proof(request: HttpRequest, signer: &Ps256Signer) -> HttpRequest {
+fn add_new_proof(request: HttpRequest, signer: &impl Signer) -> HttpRequest {
     add_new_proof_with_nonce(request, signer, Some(fresh_nonce().unwrap()))
 }
 
 fn add_new_proof_with_nonce(
     request: HttpRequest,
-    signer: &Ps256Signer,
+    signer: &impl Signer,
     nonce: Option<String>,
 ) -> HttpRequest {
     let digest = request.combined_header_value("content-digest");
