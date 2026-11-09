@@ -4,7 +4,7 @@ This guide compares GNAP with OAuth as it's deployed today, and lists the experi
 
 ## Compare with a modern baseline
 
-Compare with OAuth deployments that follow the [OAuth Security BCP, RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html): authorization code with PKCE where it applies, plus the extensions each scenario needs. The implicit flow, the password grant, and unrestricted bearer tokens don't represent OAuth.
+Compare with OAuth deployments that follow the [OAuth Security BCP, RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html): authorization code with PKCE where it applies, plus the extensions each scenario needs. The implicit flow, the password grant, and unrestricted bearer tokens don't represent modern OAuth.
 
 **OAuth 2.1 isn't a published RFC.** On 2026-11-09, the IETF Datatracker lists [draft-ietf-oauth-v2-1-17](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/17/), published on 2026-10-31, as an active working-group document. It consolidates the framework, not the whole extension ecosystem. Record the draft version you compare with, and don't treat a later revision as the same baseline.
 
