@@ -132,6 +132,7 @@ input[type="checkbox"], input[type="radio"] { width: 1.1rem; height: 1.1rem; mar
 .hint { font-size: var(--step--1); color: var(--muted); margin: 0.35rem 0 0; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.25rem; align-items: center; }
+.actions + h3 { margin-top: 1.75rem; }
 button {
   padding: 0.55rem 1rem; border-radius: var(--radius); border: 1px solid var(--rule);
   background: var(--surface); color: var(--ink); cursor: pointer;
@@ -225,11 +226,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .state[data-state="approved"] { background: var(--pass-soft); color: var(--pass); }
 .state[data-state="pending"], .state[data-state="awaiting_callback"], .state[data-state="awaiting_push"], .state[data-state="ready"], .state[data-state="starting"] { background: var(--unsure-soft); color: var(--unsure); }
 .state[data-state="denied"], .state[data-state="revoked"], .state[data-state="failed"] { background: var(--fail-soft); color: var(--fail); }
+.state[data-state="held"] { background: var(--pass-soft); color: var(--pass); }
+.state[data-state="unknown"] { background: var(--unsure-soft); color: var(--unsure); }
 
 /* What happened, in order. */
 .timeline { margin: 0.5rem 0 1rem; padding-left: 1.4rem; font-size: var(--step--1); }
 .timeline li { padding: 0.35rem 0 0.35rem 0.25rem; border-bottom: 1px solid var(--rule); }
-.timeline:empty::before { content: "Nothing has happened yet: choose a scenario."; color: var(--muted); display: block; margin-left: -1.4rem; }
+/* Each page says what an empty timeline is waiting for. */
+.timeline:empty::before { content: attr(data-empty); color: var(--muted); display: block; margin-left: -1.4rem; }
 
 .error { color: var(--fail); font-weight: 600; margin: 0; }
 .error:empty { display: none; }
@@ -271,3 +275,15 @@ details > summary { cursor: pointer; color: var(--accent); margin-top: 1rem; }
 .proofs { border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.75rem 1rem; margin: 1rem 0 0; }
 .proofs legend { font-weight: 600; padding: 0 0.25rem; }
 .proofs label.inline { margin: 0.4rem 0; }
+
+/* What a server answered: accepted or refused, said in words and in form. */
+.outcome { margin: 0 0 0.5rem; }
+.outcome[data-outcome] { display: inline-block; padding: 0.15rem 0.6rem; border-radius: var(--radius); font-weight: 600; }
+.outcome[data-outcome="accepted"] { background: var(--pass-soft); color: var(--pass); }
+.outcome[data-outcome="refused"] { background: var(--fail-soft); color: var(--fail); }
+.outcome[data-outcome="failed"] { background: var(--unsure-soft); color: var(--unsure); }
+.output:empty { display: none; }
+
+/* Two fields side by side that wrap on a narrow screen. */
+.fields { display: flex; flex-wrap: wrap; gap: 0 1.25rem; }
+.fields label { flex: 1 1 12rem; }
