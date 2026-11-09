@@ -222,3 +222,50 @@ test('a new start clears the record before the new grant answers', async () => {
   await started;
   assert.equal(lab.nodes.get('#trace').children.length, 1, 'the new record is drawn, even when it looks the same');
 });
+
+test('a status read that overlaps an action never renders after it', async () => {
+  const lab = page();
+  lab.answer(0, { state: 'starting', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await settle();
+  const started = lab.nodes.get('[data-action="start-code"]').click();
+  const action = lab.requests.length - 1;
+  lab.timers[0]();
+  const overlapping = lab.requests.length - 1;
+  assert.equal(lab.requests[overlapping].url, '/api/status', 'the timer read leaves while the action is in flight');
+  lab.answer(action, { state: 'pending', trace: { attempts: [attempt('grant')], dropped: 0 } });
+  await started;
+  lab.answer(overlapping, { state: 'approved', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await settle();
+  assert.ok(!lab.routes().includes('/resource/folder'));
+  assert.ok(lab.routes().includes('/gnap'));
+});
+
+test('a failure that predates an action never shows as its error', async () => {
+  const lab = page();
+  const started = lab.nodes.get('[data-action="start"]').click();
+  lab.answer(1, { state: 'pending', trace: { attempts: [attempt('grant')], dropped: 0 } });
+  await started;
+  lab.requests[0].resolve({ json: async () => { throw new Error('obsolete status failure'); } });
+  await settle();
+  assert.equal(lab.nodes.get('#error').textContent, '', 'the first load failed before the start');
+
+  const older = lab.nodes.get('[data-action="read"]').click();
+  const newer = lab.nodes.get('[data-action="rotate"]').click();
+  const [readAt, rotateAt] = [lab.requests.length - 2, lab.requests.length - 1];
+  lab.answer(rotateAt, { state: 'approved', trace: { attempts: [attempt('token_management')], dropped: 0 } });
+  await newer;
+  lab.requests[readAt].resolve({ json: async () => { throw new Error('obsolete action failure'); } });
+  await older;
+  assert.equal(lab.nodes.get('#error').textContent, '', 'the older action failed after the newer one');
+});
+
+test('a status read answered while an action is in flight is dropped too', async () => {
+  const lab = page();
+  const started = lab.nodes.get('[data-action="start"]').click();
+  lab.answer(0, { state: 'approved', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await settle();
+  assert.equal(lab.nodes.get('#trace').children.length, 0, 'the cleared record stays clear');
+  lab.answer(1, { state: 'pending', trace: { attempts: [attempt('grant')], dropped: 0 } });
+  await started;
+  assert.ok(lab.routes().includes('/gnap'));
+});
