@@ -45,6 +45,8 @@ python3 -B tools/check_quotes.py
 python3 -B tools/check_readme.py
 python3 -B tools/check_package_assets.py
 python3 -B tools/conformance_ledger.py check
+python3 -B tools/conformance_ledger.py run-tests
+python3 -B tools/conformance_ledger.py discovery-tests
 ```
 
 These tools need Python 3.11 or newer, and no third-party package.
