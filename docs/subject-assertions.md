@@ -25,7 +25,7 @@ On success, the client returns the checked identity and time claims, with the en
 
 The verifier checks the compact JWS signature before it reads any claim. It accepts only PS256, with a pinned RSA key of 2048 to 4096 bits, and assertions of up to 8,192 bytes. It refuses duplicate top-level JSON members, malformed encodings, critical JOSE extensions, and key material or URLs supplied by the JWT, and fetches no key. A `kid` that's present must match the pinned verifier, so import a PEM key with `with_key_id` when the tokens carry one; without a `kid`, the single configured key applies.
 
-The required claims are `iss`, `sub`, `aud`, `nonce`, `iat`, `exp`, and `auth_time`, as nonnegative integer Unix seconds. `auth_time` can't follow `iat`, and `exp` must follow it. A subject has 1 to 255 ASCII characters, and the audience must contain only the configured client identifier. A supplied `azp` must name that same client, and a supplied `nbf` can't be in the future beyond the clock tolerance, which is capped at 300 seconds.
+The required claims are `iss`, `sub`, `aud`, `nonce`, `iat`, `exp`, and `auth_time`, and the three dates are nonnegative integer Unix seconds. `auth_time` can't follow `iat`, and `exp` must follow it. A subject has 1 to 255 ASCII characters, and the audience must contain only the configured client identifier. A supplied `azp` must name that same client, and a supplied `nbf` can't be in the future beyond the clock tolerance, which is capped at 300 seconds.
 
 `max_age` bounds both the age of an assertion and its issued lifetime. It isn't the OpenID Connect authentication-request parameter of the same name, and doesn't enforce a recent user authentication.
 

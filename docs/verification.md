@@ -35,7 +35,7 @@ The workspace turns on clippy's `pedantic` and `nursery` groups, and CI fails on
 cargo +1.95.0 build --workspace --locked
 ```
 
-This builds the committed dependency graph with the declared minimum version. The packaging checks in the [releasing guide](releasing.md) use a newer Cargo, which is a separate requirement.
+This builds the committed dependency graph with the declared minimum version. The packaging checks of the [releasing guide](releasing.md) also run with this version, and are tested with Cargo 1.98.
 
 ## Claims about the RFCs
 
@@ -53,7 +53,7 @@ These tools need Python 3.11 or newer, and no third-party package.
 
 `check_readme.py` runs the `flow` example and compares its output with the transcript in [Getting started](getting-started.md). `check_package_assets.py` checks that each crate carries its license and README, that every file it includes with `include_str!` or `include_bytes!` sits inside the crate, and that its test fixtures match their canonical copies.
 
-`conformance_ledger.py check` is offline and read-only: it verifies the vendored RFC sources, the evidence receipts, and the generated inventory. Its `run-tests` and `discovery-tests` commands test the ledger tooling itself, and their success isn't proof that GNAP is implemented. The [ledger guide](../conformance/README.md) explains the inventory, the applicability decisions, and the receipts.
+`conformance_ledger.py check` is offline and read-only: it verifies the vendored RFC sources, the evidence receipts, and the generated inventory. Its `run-tests` command tests the ledger tooling itself, not GNAP. Its `discovery-tests` command runs six independent assertions on a discovery response: against the bundled synthetic fixture by default, or against a reviewed capture, which gives a dated observation of one server, not a proof of conformance. The [ledger guide](../conformance/README.md) explains the inventory, the applicability decisions, and the receipts.
 
 ## Applications
 
@@ -92,7 +92,7 @@ for app in delegation-demo conformance-web biscuit-files; do
 done
 ```
 
-The licenses, sources, and bans pass on all four workspaces. The advisories of the SDK and of Biscuit files report one vulnerability, [RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html) on `crypto-bigint` 0.5.5, which `biscuit-auth` 6.0.0 depends on and which has no released fix, and one warning that `proc-macro-error2` is unmaintained, [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173.html). The other two applications report no advisory.
+The licenses, sources, and bans pass on all four workspaces. The advisories of the SDK and of Biscuit files report one vulnerability, [RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html) on `crypto-bigint` 0.5.5, which `biscuit-auth` 6.0.0 pulls in: `crypto-bigint` 0.7.6 fixes it, but on 2026-11-09 no published Biscuit release drops 0.5.5, and one warning that `proc-macro-error2` is unmaintained, [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173.html). The other two applications report no advisory.
 
 ## Hosted acceptance
 

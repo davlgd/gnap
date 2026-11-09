@@ -47,7 +47,7 @@ An inactive result can mean that the authorization server couldn't determine the
 
 ## Profile limits
 
-This profile accepts key-bound requests signed with `httpsig` without parameters, a public PS256 key, and a nonempty signature nonce. The token must carry integer `iat` and `exp` claims, with `exp` after `iat`. Requiring both dates is a choice of this SDK, not of [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.3).
+This profile accepts key-bound requests signed with `httpsig` without parameters, a public PS256 key, and a nonempty signature nonce. The SDK doesn't decode the opaque token: the introspection response must carry integer `iat` and `exp` claims, with `exp` after `iat`. Requiring both dates is a choice of this SDK, not of [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.3).
 
 Token dates get no grace period: `nbf` and `iat` are inclusive, `exp` is exclusive, and a clock that goes backwards refuses access. Three non-decreasing clock readings frame the network work and the proof verification, and the last one must still precede expiry. The signature verifier's 300-second clock-skew allowance doesn't extend a token's validity, and a failed final check can consume a valid proof's nonce.
 

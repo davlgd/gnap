@@ -4,12 +4,12 @@ Rust libraries, example applications, and diagnostic tools for the [Grant Negoti
 
 GNAP is its own delegated-authorization protocol, not an OAuth-compatible API. To see how its design compares with modern OAuth extensions, read [GNAP and modern OAuth](docs/gnap-and-modern-oauth.md).
 
-> [!WARNING] Experimental, unaudited libraries
-> The crates are pre-1.0 and haven't had an independent security review. A minor version can change the public API and raise the minimum supported Rust version.
+> [!WARNING]
+> **Experimental, unaudited libraries.** The crates are pre-1.0 and haven't had an independent security review. A minor version can change the public API and raise the minimum supported Rust version.
 
 ## What the libraries support
 
-The libraries sign and verify requests with HTTP Message Signatures and RSA-PSS keys, the proof method that both GNAP conformance profiles require. They issue opaque reference tokens, which a resource server checks through authenticated introspection, and an attenuable Biscuit token profile for file access.
+The libraries sign and verify requests with HTTP Message Signatures (`httpsig`) and PS256 keys, the proof method and the signature algorithm that both GNAP conformance profiles require. They issue opaque reference tokens, which a resource server checks through authenticated introspection, and an attenuable Biscuit token profile for file access.
 
 The [support matrix](docs/support-matrix.md) lists each capability with its state, its limits, and the tests that show it, including the proof methods and algorithms the libraries don't implement.
 
