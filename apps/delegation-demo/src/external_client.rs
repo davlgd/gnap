@@ -379,7 +379,7 @@ pub(super) fn entry(app: &App, handle: &str, headers: &HeaderMap) -> Response {
             },
         },
     );
-    let page=format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>External GNAP client consent</title><h1>Authorize a synthetic test client?</h1><p>This external workbench client requests <code>synthetic-folder:read</code>. No real owner account or private document is involved.</p><p>Consent must be completed within five minutes of the initial grant. Reloading does not extend this limit.</p><form method=\"post\"><input type=\"hidden\" name=\"ticket\" value=\"{ticket}\"><button name=\"choice\" value=\"allow\">Allow synthetic folder read</button><button name=\"choice\" value=\"deny\">Deny</button></form></html>");
+    let page=format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/assets/gnap.css\"><title>External GNAP client consent</title><main><h1>Authorize a synthetic test client?</h1><p>This external workbench client requests <code>synthetic-folder:read</code>. No real owner account or private document is involved.</p><p>Consent must be completed within five minutes of the initial grant. Reloading does not extend this limit.</p><form method=\"post\" class=\"actions\"><input type=\"hidden\" name=\"ticket\" value=\"{ticket}\"><button name=\"choice\" value=\"allow\" class=\"primary\">Allow synthetic folder read</button><button name=\"choice\" value=\"deny\">Deny</button></form></main></html>");
     let mut response = Html(page).into_response();
     let secure = if app.origin.starts_with("https:") {
         "; Secure"

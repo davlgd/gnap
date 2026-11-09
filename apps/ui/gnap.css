@@ -87,7 +87,7 @@ main.wide { max-width: 82rem; }
 /* One track that shrinks below its content's width: a long option or
    command must not widen the page. */
 .bench { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; align-items: start; }
-.bench-tools { display: grid; gap: 1.5rem; min-width: 0; }
+.bench-tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; min-width: 0; }
 /* Below the two columns, the report sits after the tools: a link leads to it. */
 .to-report { font-size: var(--step--1); }
 @media (min-width: 64rem) {
@@ -196,5 +196,42 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .empty { color: var(--muted); padding: 1.5rem 0; border-top: 1px solid var(--rule); }
 
+/* Output a request returned, wrapped to the panel. */
+.output { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.75rem 1rem; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--step--1); }
+
 /* Commands to copy */
 .command { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.75rem 1rem; overflow-x: auto; white-space: pre; }
+
+/* Steps of a guided flow: the number is the order you take them in. */
+.step h2 { display: flex; align-items: baseline; gap: 0.75rem; }
+.step-number {
+  flex: none; display: inline-grid; place-items: center; width: 1.9rem; height: 1.9rem; border-radius: 50%;
+  border: 2px solid var(--accent); color: var(--accent); font-size: var(--step-0); font-weight: 700;
+}
+
+/* A list of choices, each with what it does and its action. */
+.scenarios { list-style: none; margin: 1rem 0 0; padding: 0; }
+.scenarios li { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: 0.9rem 0; border-top: 1px solid var(--rule); max-width: none; }
+.scenarios h3 { font-size: var(--step-0); margin: 0; }
+.scenarios p { margin: 0.2rem 0 0; color: var(--muted); font-size: var(--step--1); }
+.scenarios button { flex: none; }
+@media (max-width: 30rem) { .scenarios li { flex-direction: column; align-items: stretch; } }
+
+/* Facts about the current state, as term and value. */
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.5rem 1rem; margin: 0 0 1rem; }
+.facts dt { color: var(--muted); font-size: var(--step--1); padding-top: 0.15rem; }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.state { display: inline-block; padding: 0.1rem 0.6rem; border-radius: 999px; background: var(--skip-soft); color: var(--ink); font-weight: 600; }
+.state[data-state="approved"] { background: var(--pass-soft); color: var(--pass); }
+.state[data-state="pending"], .state[data-state="awaiting_callback"], .state[data-state="awaiting_push"], .state[data-state="ready"], .state[data-state="starting"] { background: var(--unsure-soft); color: var(--unsure); }
+.state[data-state="denied"], .state[data-state="revoked"], .state[data-state="failed"] { background: var(--fail-soft); color: var(--fail); }
+
+/* What happened, in order. */
+.timeline { margin: 0.5rem 0 1rem; padding-left: 1.4rem; font-size: var(--step--1); }
+.timeline li { padding: 0.35rem 0 0.35rem 0.25rem; border-bottom: 1px solid var(--rule); }
+.timeline:empty::before { content: "Nothing has happened yet: choose a scenario."; color: var(--muted); display: block; margin-left: -1.4rem; }
+
+.error { color: var(--fail); font-weight: 600; margin: 0; }
+.error:empty { display: none; }
+
+details > summary { cursor: pointer; color: var(--accent); margin-top: 1rem; }

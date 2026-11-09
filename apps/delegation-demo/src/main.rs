@@ -1897,6 +1897,8 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/code/lookup", post(secondary_device::submit).layer(DefaultBodyLimit::max(1024)))
         .route("/code/consent", post(secondary_device::submit).layer(DefaultBodyLimit::max(1024)))
         .route("/code.js", get(|| async { ([("content-type", "text/javascript")], include_str!("../static/code.js")) }))
+        // The suite's shared design, from `apps/ui`.
+        .route("/assets/gnap.css", get(|| async { ([("content-type", "text/css; charset=utf-8")], include_str!("../../ui/gnap.css")) }))
         .route("/api/{action}", post(action))
         .route("/callback", get(callback))
         .route("/push-callback/{id}", post(push_finish::receive).layer(DefaultBodyLimit::max(1024)))
@@ -1921,7 +1923,7 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
             h.insert("cache-control", "no-store".parse().unwrap());
             h.insert("referrer-policy", "no-referrer".parse().unwrap());
             h.insert("x-content-type-options", "nosniff".parse().unwrap());
-            h.insert("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'".parse().unwrap());
+            h.insert("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'".parse().unwrap());
             response
         }))
         .with_state(app)
@@ -2261,6 +2263,66 @@ mod tests {
             assert_eq!(response.headers()["cache-control"], "no-store");
             assert_eq!(response.headers()["referrer-policy"], "no-referrer");
             assert!(response.headers().contains_key("content-security-policy"));
+        }
+    }
+
+    /// Every page loads only the stylesheet and scripts this server serves
+    /// with their exact type, and carries no inline style, script or handler,
+    /// so the CSP needs no 'unsafe-inline'.
+    #[tokio::test]
+    async fn pages_load_only_served_assets_without_inline_code() {
+        let router = application_router(
+            test_app(),
+            CanonicalOrigin::parse("https://demo.example").unwrap(),
+        );
+        let get = |uri: &'static str| {
+            let router = router.clone();
+            async move {
+                router
+                    .oneshot(
+                        Request::builder()
+                            .uri(uri)
+                            .header("host", "demo.example")
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+        let csp = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'";
+        for (asset, kind) in [
+            ("/assets/gnap.css", "text/css"),
+            ("/app.js", "text/javascript"),
+            ("/code.js", "text/javascript"),
+        ] {
+            let response = get(asset).await;
+            assert_eq!(response.status(), StatusCode::OK, "{asset}");
+            let served = response.headers()["content-type"].to_str().unwrap();
+            assert!(served.starts_with(kind), "{asset}: {served}");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        }
+        let response = get("/").await;
+        assert_eq!(response.headers()["content-security-policy"], csp);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pages = [
+            String::from_utf8(body.to_vec()).unwrap(),
+            include_str!("../static/code.html").to_owned(),
+        ];
+        for page in &pages {
+            assert!(page.contains("href=\"/assets/gnap.css\""));
+            for forbidden in [
+                "<style",
+                " style=",
+                "<script>",
+                " onclick=",
+                " onload=",
+                "javascript:",
+            ] {
+                assert!(!page.contains(forbidden), "a page carries {forbidden}");
+            }
         }
     }
 
