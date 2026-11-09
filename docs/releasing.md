@@ -24,17 +24,15 @@ Review the actual file list, tests and examples included, rather than assuming t
 
 Cargo writes the archives under `target/package`. In a workspace, it verifies the unpublished crates together through a temporary local registry, without uploading anything; see [`cargo package`](https://doc.rust-lang.org/cargo/commands/cargo-package.html). This verification compiles the libraries, but doesn't run their tests and examples: run those from the unpacked archives, without the sibling source directories, so that a stray reference to another crate's files can't succeed.
 
-### Clear a stale verification registry
+### Rerun after a change of code
 
-The temporary registry keeps its extracted sources under `~/.cargo/registry/src/`, in a directory that holds only `gnap-*` entries. Since the crates keep the same name and version from one run to the next, a later run can reuse those extractions and verify a crate against an outdated sibling. After you change the code without changing the version, delete them before you rerun:
+The temporary registry keeps its extracted sources in your Cargo home. Since the crates keep the same name and version from one run to the next, a later run can reuse those extractions, and verify a crate against an outdated sibling. When you rerun after changing the code without changing the version, give Cargo a fresh home rather than deleting cache directories:
 
 ```bash
-for registry in ~/.cargo/registry/src/*/; do
-  ls "$registry" | grep -qv '^gnap-' || rm -rf "$registry"gnap-*
-done
+CARGO_HOME="$(mktemp -d)" cargo package --workspace --locked
 ```
 
-The loop only empties a directory that holds nothing but `gnap-*` entries, so the crates.io cache stays untouched.
+Cargo then downloads the dependencies again, and leaves your usual cache untouched. The same prefix works for `mise run publish:dry-run`.
 
 ## Review before the first upload
 
