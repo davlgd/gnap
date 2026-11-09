@@ -41,7 +41,7 @@ pub struct SignedRequest<'a> {
 
 impl SignedRequest<'_> {
     /// Every instance of a field, in message order (RFC 9421 §2.1).
-    fn header_values(&self, name: &str) -> impl Iterator<Item = &str> {
+    pub(crate) fn header_values(&self, name: &str) -> impl Iterator<Item = &str> {
         let name = name.to_ascii_lowercase();
         self.headers
             .iter()
@@ -127,10 +127,12 @@ pub struct Accepted {
     pub components: Vec<Component>,
 }
 
-/// Why no signature on the request was acceptable.
+/// Why no proof on the request was acceptable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyError {
-    /// The request carries no `Signature-Input` and `Signature` pair at all.
+    /// The request carries no proof of the method it was verified for: no
+    /// `Signature-Input` and `Signature` pair for `httpsig`, and neither a
+    /// `Detached-JWS` field nor `application/jose` content for `jws` and `jwsd`.
     Unsigned,
     /// Every candidate was refused; this is the reason the last one was.
     Rejected(String),
@@ -140,7 +142,7 @@ impl fmt::Display for VerifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unsigned => {
-                f.write_str("the request carries no Signature-Input and Signature pair")
+                f.write_str("the request carries no proof of possession for the key's proof method")
             }
             Self::Rejected(reason) => f.write_str(reason),
         }

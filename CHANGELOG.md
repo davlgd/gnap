@@ -28,7 +28,11 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** every `Ps256Signer` and `Ps256Verifier` constructor refuses an RSA modulus outside 2,048 to 4,096 bits, the PEM imports and `Ps256Signer::generate` included.
 
+**Breaking:** `PublicKey` has an `Rs256` variant and is `#[non_exhaustive]`: a `match` on it needs a wildcard arm. `PublicKey::for_httpsig` refuses an algorithm outside `HTTPSIG_ALGORITHMS` before decoding the key, so its error names the algorithm. `MIN_MODULUS_BITS` and `MAX_MODULUS_BITS` are no longer in the `ps256` module: use them from the crate root.
+
 `MIN_MODULUS_BITS` and `MAX_MODULUS_BITS` are public, and `Signer` is implemented for `&S`, `Box<S>`, and `Arc<S>`.
+
+`Rs256Signer` and `Rs256Verifier` sign and verify `RS256`, with the RSA bounds of `PS256`. `HTTPSIG_ALGORITHMS` and `JWS_ALGORITHMS` say which algorithms each proof method takes, `PublicKey::for_jws` imports a key for the JOSE proofs, and `PublicKey::is_builtin_for_httpsig` tells a built-in `httpsig` key from one to leave to a resolver. The `jws` module signs and verifies the `jws` and `jwsd` proofs of RFC 9635 §§7.3.3–7.3.4 and their key rotations, with `sign_jws`, `sign_jws_rotation`, `verify_jws_request`, and `verify_jws_rotation`, and reserves each accepted proof in a `JwsReplayMemory`, such as the bounded `ReplayCache`.
 
 `Ed25519Signer` and `Ed25519Verifier` sign and verify `EdDSA` with Ed25519, which RFC 9421 calls `ed25519`, and `Es256Signer` and `Es256Verifier` sign and verify `ES256`, its `ecdsa-p256-sha256`. `PublicKey::from_jwk` imports a public JWK and selects its verifier from `kty`, `crv`, and `alg`, and `PublicKey::for_httpsig` accepts the algorithms that `httpsig` allows. The `JwkSigner` trait exports a signer's public JWK and its thumbprint. `Signer::algorithm` and `Verifier::algorithm` return the JWA name of the algorithm, which the server compares with the `alg` of the presented key.
 

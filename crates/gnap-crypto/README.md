@@ -1,8 +1,10 @@
 # gnap-crypto
 
-HTTP Message Signature proofs, content digests and interaction hashes for GNAP. Use this crate to sign requests and verify the cryptographic binding between a request, its key, its content and any presented token.
+HTTP Message Signature proofs, JOSE proofs, content digests and interaction hashes for GNAP. Use this crate to sign requests and verify the cryptographic binding between a request, its key, its content and any presented token.
 
-The key adapters cover RSA-PSS with SHA-256 (PS256), ECDSA on P-256 (ES256), and Ed25519 (EdDSA). Each can generate a key, import PEM material, and export a public JWK, and `PublicKey::from_jwk` builds the verifier that a public JWK's `kty`, `crv`, and `alg` call for. Key possession doesn't establish identity or authorization.
+The key adapters cover RSA-PSS with SHA-256 (PS256), RSASSA-PKCS1-v1_5 with SHA-256 (RS256), ECDSA on P-256 (ES256), and Ed25519 (EdDSA). Each can generate a key, import PEM material, and export a public JWK, and `PublicKey::from_jwk` builds the verifier that a public JWK's `kty`, `crv`, and `alg` call for. Key possession doesn't establish identity or authorization.
+
+Each proof method takes its own algorithms: `httpsig` takes PS256, ES256, and EdDSA, and the JOSE proofs, `jws` and `jwsd`, take RS256, ES256, and EdDSA. `PublicKey::for_httpsig` and `PublicKey::for_jws` import a key for one of them, and the `jws` module signs and verifies the JOSE proofs and their key rotations, with a replay memory of their own.
 
 ## Explore request signing
 
@@ -17,7 +19,7 @@ The example constructs and verifies a signed grant request. For a complete clien
 
 ## Verification boundary
 
-The caller must preserve the signed method, exact URI, headers and content. Network security, trusted key selection, nonce storage and resource policy are separate responsibilities. A valid signature doesn't grant access.
+The caller must preserve the signed method, exact URI, headers and content, and process the content that a `jws` verification returns, not the request body. Network security, trusted key selection, nonce storage and resource policy are separate responsibilities. A valid signature doesn't grant access.
 
 Tests include deliberately public RFC keys, with provenance and notices in [the fixture guide](https://github.com/davlgd/gnap/blob/main/crates/gnap-crypto/tests/README.md). Never use those keys for deployment.
 

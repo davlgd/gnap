@@ -2,6 +2,7 @@
 
 use super::*;
 use gnap_as::ResolvedTokenKey;
+use gnap_crypto::{Rs256Signer, Rs256Verifier};
 use std::cell::RefCell;
 
 fn old_proof(token: &AccessToken, key: &Key) -> HttpRequest {
@@ -202,7 +203,7 @@ fn a_resolved_reference_is_pinned_by_value_for_subsequent_management() {
 }
 
 /// A verifier that a deployment supplies for an algorithm this SDK doesn't
-/// implement, here built on a PS256 key for the test.
+/// know, here built on a PS256 key for the test.
 struct CustomAlgorithm(Ps256Verifier);
 
 impl Verifier for CustomAlgorithm {
@@ -217,7 +218,15 @@ impl Verifier for CustomAlgorithm {
     }
 }
 
-/// Resolves a by-value key of the custom algorithm itself.
+/// A replacement key of `RS256`, which this SDK implements only for the JOSE
+/// proofs, and which a deployment may still verify `httpsig` with.
+fn rs256_key() -> &'static Rs256Signer {
+    static KEY: OnceLock<Rs256Signer> = OnceLock::new();
+    KEY.get_or_init(|| Rs256Signer::generate(2048, "replacement").unwrap())
+}
+
+/// Resolves a by-value key of either algorithm itself: the unknown one, and
+/// `RS256` with its own verifier.
 struct CustomKeys;
 
 impl KeyResolver for CustomKeys {
@@ -230,41 +239,62 @@ impl KeyResolver for CustomKeys {
         client: &Client,
         binding: Option<&Key>,
     ) -> Option<ResolvedTokenKey> {
-        let custom = binding.and_then(Key::as_value).filter(|key| {
-            key.jwk
-                .as_ref()
-                .is_some_and(|jwk| jwk.get("alg") == Some(&json!("X-CUSTOM")))
-        });
-        let Some(key) = custom else {
-            return Keys.resolve_token_key(client, binding);
+        let key = binding.and_then(Key::as_value);
+        let jwk = key.and_then(|key| key.jwk.as_ref());
+        let verifier: Box<dyn Verifier> = match jwk.and_then(|jwk| jwk.get("alg")?.as_str()) {
+            Some("X-CUSTOM") => Box::new(CustomAlgorithm(new_key().verifier())),
+            Some("RS256") => Box::new(Rs256Verifier::from_public_jwk(jwk?).ok()?),
+            _ => return Keys.resolve_token_key(client, binding),
         };
         Some(ResolvedTokenKey {
-            key: key.clone(),
-            verifier: Box::new(CustomAlgorithm(new_key().verifier())),
+            key: key?.clone(),
+            verifier,
         })
     }
 }
 
-/// A public key of an algorithm outside this SDK reaches the configured
-/// resolver when presented by value, as it would by reference.
+/// Adds the replacement key's proof to a key-change request.
+type Prove = dyn Fn(HttpRequest) -> HttpRequest;
+
+/// A public key of an algorithm this SDK doesn't implement for `httpsig`
+/// reaches the configured resolver when presented by value, as it would by
+/// reference: an unknown one, and `RS256`, which this SDK verifies only for
+/// the JOSE proofs. The default resolver refuses both.
 #[test]
 fn a_custom_algorithm_by_value_is_left_to_the_configured_resolver() {
-    let server = configured_server(
-        true,
-        Approve {
-            key_rotation: true,
-            value_rotation: true,
-        },
-        CustomKeys,
-    );
-    let tokens = grant(&server);
-    let mut jwk = new_key().public_jwk().unwrap();
-    jwk.insert("alg".into(), json!("X-CUSTOM"));
-    let custom: Key =
-        serde_json::from_value(json!({"proof": "httpsig", "jwk": Value::Object(jwk)})).unwrap();
-    let request = add_new_proof(old_proof(&tokens[0], &custom), new_key());
-    let rotated = single(&server.handle(&request, NOW + 1));
-    assert_eq!(rotated.key, Some(custom));
+    let mut unknown = new_key().public_jwk().unwrap();
+    unknown.insert("alg".into(), json!("X-CUSTOM"));
+    let cases: [(_, &Prove); 2] = [
+        (unknown, &|request| add_new_proof(request, new_key())),
+        (rs256_key().public_jwk().unwrap(), &|request| {
+            add_new_proof(request, rs256_key())
+        }),
+    ];
+    for (jwk, prove) in cases {
+        let alg = jwk["alg"].clone();
+        let custom: Key =
+            serde_json::from_value(json!({"proof": "httpsig", "jwk": Value::Object(jwk)})).unwrap();
+
+        let configured = configured_server(
+            true,
+            Approve {
+                key_rotation: true,
+                value_rotation: true,
+            },
+            CustomKeys,
+        );
+        let tokens = grant(&configured);
+        let rotated = single(&configured.handle(&prove(old_proof(&tokens[0], &custom)), NOW + 1));
+        assert_eq!(rotated.key, Some(custom.clone()), "{alg}");
+
+        let default = server(true, true);
+        let tokens = grant(&default);
+        assert_eq!(
+            error_code(&default.handle(&prove(old_proof(&tokens[0], &custom)), NOW + 1)),
+            "key_rotation_not_supported",
+            "{alg}"
+        );
+    }
 }
 
 /// `EdDSA` with a curve other than Ed25519 reaches the resolver, while an
