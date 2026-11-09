@@ -162,3 +162,29 @@ fn exchanging_two_sessions_subject_responses_does_not_exchange_identities() {
         );
     }
 }
+
+/// The audience is the thumbprint of the client's own key, whatever its
+/// algorithm, while the assertion stays PS256-signed by the issuer.
+#[test]
+fn identity_audience_follows_an_es256_or_ed25519_client_key() {
+    use gnap_crypto::{Ed25519Signer, Es256Signer, JwkSigner};
+
+    let es256 = Es256Signer::generate("es256-client").unwrap();
+    let ed25519 = Ed25519Signer::generate("ed25519-client").unwrap();
+    let key = assertion_key().verifier();
+    for signer in [&es256 as &dyn JwkSigner, &ed25519] {
+        for (audience, expected) in [
+            (signer.thumbprint(), None),
+            ("another-key".to_owned(), Some(AssertionError::Recipient)),
+        ] {
+            let body = response(CLIENT_NONCE, &audience);
+            let transport = FakeAs::with(vec![PENDING, &body]);
+            let mut session = Session::new(&transport, signer, ENDPOINT);
+            session.start(&subject_request(), 1000).unwrap();
+            session.accept_callback(&valid_callback(), 1005).unwrap();
+            session.continue_grant(1100).unwrap();
+            let outcome = session.verify_subject(&trust(&key), 1100);
+            assert_eq!(outcome.err(), expected, "{}", signer.algorithm());
+        }
+    }
+}
