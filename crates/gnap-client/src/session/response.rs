@@ -223,8 +223,8 @@ pub(super) fn grant_response(http: &HttpResponse) -> Result<GrantResponse, Clien
 }
 
 /// A token management answer (§6): a grant response, and, when it carries a
-/// GNAP error, nothing else. §3.6 says "other fields MUST NOT be included",
-/// and a management error has no continuation to offer. The raw object is
+/// GNAP error, nothing else: §3.6 says "Other fields MUST NOT be included in
+/// the response", and a management error has no continuation to offer. The raw object is
 /// checked, since parsing drops a known field whose value is null.
 pub(super) fn management_response(http: &HttpResponse) -> Result<GrantResponse, ClientError> {
     let response = grant_response(http)?;

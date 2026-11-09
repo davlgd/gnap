@@ -112,7 +112,8 @@ impl Plan {
                     .trim_start_matches([' ', '\t', '\n', '\r'])
                     .starts_with('{')
                 {
-                    // Read whole, so that serde refuses a member given twice.
+                    // Read whole, so that serde refuses a known member given
+                    // twice, such as `type`.
                     serde_json::from_str(entry)
                         .map_err(|_| "an access object isn't a GNAP access entry")
                 } else {
