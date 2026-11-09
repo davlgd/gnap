@@ -1,13 +1,21 @@
 # gnap-subject
 
-This crate issues and verifies PS256-signed `id_token` assertions carried in GNAP subject responses. It reuses the workspace's RSA-PSS implementation; it doesn't implement a second cryptographic primitive or an OpenID Provider.
+Issue and verify the PS256-signed `id_token` assertions that a GNAP subject response carries ([RFC 9635 §3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.4)). The crate reuses the RSA-PSS implementation of `gnap-crypto`, and isn't an OpenID Provider.
 
-The issuer key is supplied by trusted configuration, never by the JWT. The verifier checks the issuer, audience, expected session nonce and time bounds before returning an identity. Errors don't contain claims or token values. Parsing an assertion with `gnap-types` alone doesn't perform these checks. When an assertion carries `kid`, it must match the pinned verifier's identifier. Import that identifier with its public JWK, or configure it with `with_key_id` when importing a PEM public key. An unidentified PEM key doesn't accept a received key identifier merely because its signature happens to verify.
+## Verify a subject response
 
-The selected profile requires integral-second `iat`, `exp` and `auth_time`, an explicit session nonce and one trusted audience. RSA keys must contain 2048–4096 bits. Extra audiences aren't trusted implicitly. It doesn't accept encrypted assertions, other signing algorithms or self-supplied keys. Unknown non-critical claims are ignored rather than exposed as verified data.
+Configure a `Trust` that pairs the authorization server's grant endpoint, the issuer, and the issuer's public key, then call `Trust::verify_subject` on the response. The key comes from your configuration, never from the JWT. The verifier checks the signature, issuer, audience, session nonce, and time bounds before it returns an identity, and its errors contain no claim or token value.
 
-An assertion isn't an access token. Its issuer, subject and authentication time only mean what the configured issuer's identity and release policy establish. Applications must retain the GNAP AS attribution, authorize the release of subject information and bind the expected nonce to the relevant grant.
+From a client, `gnap-client::Session::verify_subject` derives the audience and the nonce from the session itself. Parsing an assertion with `gnap-types` alone performs none of these checks.
 
-Use `Trust::verify_subject` to check an entire response against an explicitly paired AS endpoint, issuer and key. It accepts one assertion and requires each `iss_sub` identifier to match; opaque identifiers remain the issuer's policy responsibility. `gnap-client::Session::verify_subject` derives audience and nonce from the actual session under the documented project convention. See the [profile and integration guide](https://github.com/davlgd/gnap/blob/main/docs/subject-assertions.md) for the release policy, context binding, limits and demonstration boundaries.
+## Limits of the profile
+
+The profile requires integer `iat`, `exp`, and `auth_time` claims, an explicit session nonce, a single trusted audience, and an RSA key of 2048 to 4096 bits. A `kid` in the assertion must match the pinned key's identifier: import it with the public JWK, or set it with `with_key_id` for a PEM key. Encrypted assertions, other algorithms, and keys supplied by the token are refused.
+
+An assertion isn't an access token, and its claims mean only what the issuer's identity and release policy establish. The [identity guide](https://github.com/davlgd/gnap/blob/main/docs/subject-assertions.md) explains the trust configuration, the client conventions, the release policy, and every limit.
+
+```bash
+cargo test -p gnap-subject --locked
+```
 
 Part of [gnap](https://github.com/davlgd/gnap). Rust 1.95 or newer; Apache-2.0.
