@@ -9,6 +9,7 @@ use crate::ed25519::Ed25519Verifier;
 use crate::es256::Es256Verifier;
 use crate::proof::{ProofError, Verifier};
 use crate::ps256::Ps256Verifier;
+use crate::rs256::Rs256Verifier;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
@@ -23,11 +24,28 @@ const MAX_KEY_OPERATION_BYTES: usize = 1024;
 /// Most `key_ops` entries in an imported JWK.
 const MAX_KEY_OPERATIONS: usize = 32;
 
+/// The algorithms this crate accepts for HTTP Message Signatures.
+///
+/// RFC 9421 §3.3.7 admits any JWA algorithm that isn't prohibited: this crate
+/// keeps the `PS256` of the profiles in RFC 9635 Appendix C and the two
+/// algorithms RFC 9421 also registers under its own names, and leaves `RS256`
+/// to the JOSE proofs.
+pub const HTTPSIG_ALGORITHMS: [&str; 3] = ["PS256", "ES256", "EdDSA"];
+
+/// The algorithms this crate accepts for the JOSE proofs, `jws` and `jwsd`.
+///
+/// `RS256` is the algorithm of the RFC 9635 §7.3.3 and §7.3.4 examples.
+/// `PS256` stays with `httpsig`, so that each RSA padding has one proof method.
+pub const JWS_ALGORITHMS: [&str; 3] = ["RS256", "ES256", "EdDSA"];
+
 /// A public key imported from a JWK, with the verifier its algorithm calls for.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum PublicKey {
     /// RSASSA-PSS with SHA-256: `kty` `RSA`, `alg` `PS256`.
     Ps256(Ps256Verifier),
+    /// RSASSA-PKCS1-v1_5 with SHA-256: `kty` `RSA`, `alg` `RS256`.
+    Rs256(Rs256Verifier),
     /// ECDSA on P-256 with SHA-256: `kty` `EC`, `crv` `P-256`, `alg` `ES256`.
     Es256(Es256Verifier),
     /// Ed25519: `kty` `OKP`, `crv` `Ed25519`, `alg` `EdDSA`.
@@ -52,6 +70,7 @@ impl PublicKey {
         let crv = jwk.get("crv").and_then(Value::as_str);
         match (kty, crv, alg) {
             ("RSA", None, "PS256") => Ps256Verifier::from_public_jwk(jwk).map(Self::Ps256),
+            ("RSA", None, "RS256") => Rs256Verifier::from_public_jwk(jwk).map(Self::Rs256),
             ("EC", Some("P-256"), "ES256") => Es256Verifier::from_public_jwk(jwk).map(Self::Es256),
             ("OKP", Some("Ed25519"), "EdDSA") => {
                 Ed25519Verifier::from_public_jwk(jwk).map(Self::Ed25519)
@@ -63,21 +82,38 @@ impl PublicKey {
         }
     }
 
-    /// Imports a public JWK for HTTP Message Signatures (`httpsig`).
-    ///
-    /// This is the one place that says which algorithms a proof method
-    /// accepts: `httpsig` takes `PS256`, `ES256`, and `EdDSA`, the algorithms
-    /// RFC 9421 and RFC 9635 §7.3.1 define a signature for.
+    /// Imports a public JWK for HTTP Message Signatures (`httpsig`), whose
+    /// `alg` must be one of [`HTTPSIG_ALGORITHMS`].
     ///
     /// # Errors
     ///
-    /// Fails as [`Self::from_jwk`] does, or for an algorithm `httpsig`
-    /// doesn't accept.
+    /// Fails for an algorithm `httpsig` doesn't accept, checked before the
+    /// key is decoded, or as [`Self::from_jwk`] does.
     pub fn for_httpsig(jwk: &Map<String, Value>) -> Result<Self, ProofError> {
-        let key = Self::from_jwk(jwk)?;
-        match key {
-            Self::Ps256(_) | Self::Es256(_) | Self::Ed25519(_) => Ok(key),
+        Self::for_method(jwk, "httpsig", &HTTPSIG_ALGORITHMS)
+    }
+
+    /// Imports a public JWK for the JOSE proofs, `jws` and `jwsd`, whose
+    /// `alg` must be one of [`JWS_ALGORITHMS`].
+    ///
+    /// # Errors
+    ///
+    /// Fails for an algorithm these proofs don't accept, checked before the
+    /// key is decoded, or as [`Self::from_jwk`] does.
+    pub fn for_jws(jwk: &Map<String, Value>) -> Result<Self, ProofError> {
+        Self::for_method(jwk, "jws and jwsd", &JWS_ALGORITHMS)
+    }
+
+    fn for_method(
+        jwk: &Map<String, Value>,
+        method: &str,
+        algorithms: &[&str],
+    ) -> Result<Self, ProofError> {
+        let alg = string(jwk, "alg")?;
+        if !algorithms.contains(&alg) {
+            return Err(error(&format!("alg {alg} isn't accepted for {method}")));
         }
+        Self::from_jwk(jwk)
     }
 
     /// Whether the JWK is a candidate for the built-in validation: its `kty`,
@@ -92,7 +128,7 @@ impl PublicKey {
         let kty = jwk.get("kty").and_then(Value::as_str);
         let alg = jwk.get("alg").and_then(Value::as_str);
         match (kty, alg) {
-            (Some("RSA"), Some("PS256")) | (Some("EC"), Some("ES256")) => true,
+            (Some("RSA"), Some("PS256" | "RS256")) | (Some("EC"), Some("ES256")) => true,
             // `EdDSA` also names Ed448 (RFC 8037 §3.1): only Ed25519 is built
             // in, and a missing or malformed curve is refused as a candidate.
             (Some("OKP"), Some("EdDSA")) => jwk
@@ -100,6 +136,21 @@ impl PublicKey {
                 .is_none_or(|crv| crv.as_str().is_none_or(|crv| crv == "Ed25519")),
             _ => false,
         }
+    }
+
+    /// Whether the JWK is a built-in candidate, as [`Self::is_builtin`] says,
+    /// of an algorithm in [`HTTPSIG_ALGORITHMS`].
+    ///
+    /// A server that validates an `httpsig` key early uses this test: a key
+    /// that this crate implements for another proof method, such as an
+    /// `RS256` key, stays the configured resolver's to accept or refuse.
+    #[must_use]
+    pub fn is_builtin_for_httpsig(jwk: &Map<String, Value>) -> bool {
+        Self::is_builtin(jwk)
+            && jwk
+                .get("alg")
+                .and_then(Value::as_str)
+                .is_some_and(|alg| HTTPSIG_ALGORITHMS.contains(&alg))
     }
 
     /// The SHA-256 JWK thumbprint of the key (RFC 7638).
@@ -110,6 +161,7 @@ impl PublicKey {
     pub fn thumbprint(&self) -> String {
         match self {
             Self::Ps256(key) => key.thumbprint(),
+            Self::Rs256(key) => key.thumbprint(),
             Self::Es256(key) => key.thumbprint(),
             Self::Ed25519(key) => key.thumbprint(),
         }
@@ -118,6 +170,7 @@ impl PublicKey {
     fn verifier(&self) -> &dyn Verifier {
         match self {
             Self::Ps256(key) => key,
+            Self::Rs256(key) => key,
             Self::Es256(key) => key,
             Self::Ed25519(key) => key,
         }

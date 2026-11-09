@@ -168,7 +168,7 @@ fn requested_key(request: &HttpRequest) -> Result<Key, HttpResponse> {
         if let Some(jwk) = object
             .jwk
             .as_ref()
-            .filter(|jwk| gnap_crypto::PublicKey::is_builtin(jwk))
+            .filter(|jwk| gnap_crypto::PublicKey::is_builtin_for_httpsig(jwk))
         {
             if gnap_crypto::PublicKey::for_httpsig(jwk).is_err() {
                 return Err(invalid_rotation(

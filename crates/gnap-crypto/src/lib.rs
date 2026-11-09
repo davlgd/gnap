@@ -15,6 +15,7 @@ pub mod jwk;
 pub mod proof;
 pub mod ps256;
 pub mod rotation;
+pub mod rs256;
 #[allow(
     clippy::redundant_pub_crate,
     reason = "RSA helpers stay crate-private; unreachable_pub rejects pub in this module"
@@ -30,10 +31,11 @@ pub use hash::{
     InteractionHashInput,
 };
 pub use httpsig::{parse_signature_params, parse_signatures, LabelledSignature, ReceivedParams};
-pub use jwk::PublicKey;
+pub use jwk::{PublicKey, HTTPSIG_ALGORITHMS, JWS_ALGORITHMS};
 pub use proof::{JwkSigner, ProofError, Signer, Verifier};
 pub use ps256::{Ps256Signer, Ps256Verifier};
 pub use rotation::{verify_key_rotation, AcceptedRotation, RotationNonceMemory, RotationProof};
+pub use rs256::{Rs256Signer, Rs256Verifier};
 pub use rsa_key::{MAX_MODULUS_BITS, MIN_MODULUS_BITS};
 pub use verify::{
     verify_request, verify_request_with_policy, Accepted, Expectations, NonceMemory, SignedRequest,

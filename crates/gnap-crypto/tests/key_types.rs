@@ -3,12 +3,13 @@
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use gnap_crypto::{
-    Ed25519Signer, Ed25519Verifier, Es256Signer, Es256Verifier, JwkSigner, PublicKey, Signer,
-    Verifier,
+    Ed25519Signer, Ed25519Verifier, Es256Signer, Es256Verifier, JwkSigner, Ps256Signer, PublicKey,
+    Rs256Signer, Signer, Verifier,
 };
 use serde_json::{json, Map, Value};
 
-// Public test material from RFC 9421 Appendices B.1.3 and B.1.4; never a deployment key.
+// Public test material from RFC 9421 Appendices B.1.2 to B.1.4; never a deployment key.
+const RSA_PKCS1: &str = include_str!("rfc9421-b12.pkcs1.pem");
 const P256_SEC1: &str = include_str!("rfc9421-b13.sec1.pem");
 const P256_SPKI: &str = include_str!("rfc9421-b13.spki.pem");
 const ED25519_PKCS8: &str = include_str!("rfc9421-b14.pkcs8.pem");
@@ -430,4 +431,45 @@ fn ed25519_verification_is_strict_even_for_a_valid_key() {
     );
     let strict = Ed25519Verifier::from_public_jwk(&ed25519_jwk()).unwrap();
     assert!(strict.verify(message, &forged).is_err());
+}
+
+/// The JWK import says which algorithms each proof method takes, from `alg`
+/// alone and before decoding the key.
+#[test]
+fn each_proof_method_has_its_algorithms() {
+    let rs = Rs256Signer::from_pkcs1_pem(RSA_PKCS1, "rsa-key")
+        .unwrap()
+        .public_jwk()
+        .unwrap();
+    let ps = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "ps256-key")
+        .unwrap()
+        .public_jwk()
+        .unwrap();
+    assert!(matches!(PublicKey::from_jwk(&rs), Ok(PublicKey::Rs256(_))));
+    assert!(PublicKey::for_jws(&rs).is_ok());
+    let error = PublicKey::for_httpsig(&rs).err().unwrap().to_string();
+    assert!(error.contains("RS256"), "{error}");
+    assert!(PublicKey::for_jws(&ps).is_err());
+    assert!(PublicKey::for_httpsig(&ps).is_ok());
+    assert!(PublicKey::is_builtin(&rs));
+    let mut hollow = Map::new();
+    hollow.insert("kty".into(), json!("RSA"));
+    hollow.insert("alg".into(), json!("PS256"));
+    let error = PublicKey::for_jws(&hollow).err().unwrap().to_string();
+    assert!(
+        error.contains("PS256"),
+        "refused before the missing modulus: {error}"
+    );
+}
+
+/// The two RSA paddings don't verify each other's signatures.
+#[test]
+fn rs256_and_ps256_signatures_are_not_interchangeable() {
+    let rs = Rs256Signer::from_pkcs1_pem(RSA_PKCS1, "rsa-key").unwrap();
+    let ps = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "rsa-key").unwrap();
+    let data = b"one key, two paddings";
+    assert!(rs.verifier().verify(data, &ps.sign(data).unwrap()).is_err());
+    assert!(ps.verifier().verify(data, &rs.sign(data).unwrap()).is_err());
+    rs.verifier().verify(data, &rs.sign(data).unwrap()).unwrap();
+    assert_eq!(rs.thumbprint(), ps.thumbprint());
 }

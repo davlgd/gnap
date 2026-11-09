@@ -30,7 +30,7 @@ base64 = "0.23"
 subtle = "2.6"
 httpsig = "0.0.26"
 sfv = "0.16"
-rsa = "0.10"
+rsa = { version = "0.10", features = ["pkcs1v15"] }
 getrandom = { version = "0.4", features = ["sys_rng"] }
 ed25519-dalek = { version = "3.0", default-features = false, features = ["fast", "zeroize", "pem"] }
 p256 = { version = "0.14", default-features = false, features = ["std", "ecdsa", "pem"] }
