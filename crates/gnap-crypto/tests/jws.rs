@@ -738,10 +738,10 @@ fn the_envelope_is_unambiguous() {
     };
 
     let unsigned = Wire::new(JwsProof::Attached(String::new()), b"", None);
-    assert_eq!(
-        check(JwsMethod::Jwsd, &unsigned),
-        Err(VerifyError::Unsigned)
-    );
+    let result = check(JwsMethod::Jwsd, &unsigned);
+    assert_eq!(result, Err(VerifyError::Unsigned));
+    let message = result.unwrap_err().to_string();
+    assert!(!message.contains("Signature-Input"), "{message}");
 
     let mut twice = detached();
     let value = twice.headers[0].1.clone();
