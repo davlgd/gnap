@@ -27,6 +27,13 @@ use std::{collections::BTreeMap, time::Duration};
 /// The exact access type and authority profile identifier.
 pub const PROFILE: &str = "gnap-biscuit-file-v1";
 
+/// Datalog evaluation limits; the engine checks the time limit cooperatively.
+const DATALOG_LIMITS: biscuit_auth::AuthorizerLimits = biscuit_auth::AuthorizerLimits {
+    max_facts: 128,
+    max_iterations: 10,
+    max_time: Duration::from_millis(20),
+};
+
 /// Failure classes intentionally do not include secret or untrusted token text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -320,11 +327,7 @@ impl VerifiedToken {
             _ => return Err(Error::Denied),
         };
         let mut authorizer = AuthorizerBuilder::new()
-            .set_limits(biscuit_auth::AuthorizerLimits {
-                max_facts: 128,
-                max_iterations: 10,
-                max_time: Duration::from_millis(20),
-            })
+            .set_limits(DATALOG_LIMITS)
             .fact(fact("resource", &[string(request.target_uri)]))
             .map_err(|_| Error::Denied)?
             .fact(fact("operation", &[string(action)]))

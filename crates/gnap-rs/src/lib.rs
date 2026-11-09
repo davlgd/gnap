@@ -71,6 +71,12 @@ use gnap_types::{
 };
 use std::fmt;
 
+/// Largest discovery or introspection response, in bytes, checked after receipt.
+pub const MAX_RESPONSE_BYTES: usize = 8192;
+
+/// Clock difference, in seconds, that the client's request signature may show.
+pub const MAX_CLOCK_SKEW: u64 = 300;
+
 /// Redacted authorization outcomes; neither variant exposes request credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorizationError {
@@ -219,7 +225,7 @@ impl<'a, T: HttpTransport + ?Sized> Authorizer<'a, T> {
             &verifier,
             &Expectations {
                 now: verification_time,
-                max_clock_skew: 300,
+                max_clock_skew: MAX_CLOCK_SKEW,
                 key_id: None,
             },
             self.nonces,
@@ -266,7 +272,7 @@ fn decode<D: serde::de::DeserializeOwned>(
         .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"));
     let mime = types.next().map(|(_, value)| value);
     if response.status != 200
-        || response.body.len() > 8192
+        || response.body.len() > MAX_RESPONSE_BYTES
         || types.next().is_some()
         || !mime.is_some_and(|value| {
             value

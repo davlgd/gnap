@@ -302,6 +302,7 @@ pub use rs::{
 };
 pub use server::{
     AuthorizationServer, Endpoints, Finish, InteractionError, INTERACTION_LIFETIME, MAX_CLOCK_SKEW,
+    MAX_GRANT_BODY_BYTES,
 };
 pub use storage::{
     DerivedGrantStore, GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantSnapshot,

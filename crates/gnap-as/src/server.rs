@@ -52,6 +52,10 @@ pub const MAX_CLOCK_SKEW: u64 = 300;
 /// so nobody has to guess it.
 pub const INTERACTION_LIFETIME: u64 = 600;
 
+/// Largest grant or key-rotation body, in bytes, that the server parses: an
+/// implementation bound, not a GNAP message limit.
+pub const MAX_GRANT_BODY_BYTES: usize = 64 * 1024;
+
 /// Where the AS answers.
 #[derive(Debug, Clone)]
 pub struct Endpoints {
@@ -239,7 +243,7 @@ impl<P: Policy, K: KeyResolver, S: Storage + DerivedGrantStore, N: Nonces>
     /// }
     /// ```
     ///
-    /// All POST grant bodies entering this handler are bounded to 64 KiB;
+    /// All POST grant bodies entering this handler are bounded to [`MAX_GRANT_BODY_BYTES`];
     /// ordinary requests then follow the normal flow. Derivation allows
     /// one token, no interaction/user/subject/continuation, and a finite
     /// parent. RS proof uses the trusted RS registry and separate replay memory.
@@ -270,7 +274,7 @@ impl<P: Policy, K: KeyResolver, S: Storage + DerivedGrantStore, N: Nonces>
         let Some(bytes) = request
             .body
             .as_deref()
-            .filter(|body| body.len() <= 64 * 1024)
+            .filter(|body| body.len() <= MAX_GRANT_BODY_BYTES)
         else {
             return error(ErrorCode::InvalidRequest, "invalid grant request");
         };
