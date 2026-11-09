@@ -39,6 +39,8 @@ impl KeyResolver for PresentedKey {
 #[derive(Default)]
 struct Approve {
     calls: Arc<AtomicU32>,
+    /// Refuses key changes, which it decides on only after their proofs.
+    refuses_key_changes: bool,
 }
 impl Policy for Approve {
     /// Asks for interaction when a new request offers one, and approves
@@ -74,7 +76,7 @@ impl Policy for Approve {
         true
     }
     fn may_rotate_key(&self, _: &gnap_as::TokenRecord, _: &gnap_types::key::KeyObject) -> bool {
-        true
+        !self.refuses_key_changes
     }
     fn recognises_user(&self, _: &str) -> bool {
         self.calls.fetch_add(1, Ordering::Relaxed);
@@ -1221,5 +1223,62 @@ fn a_resolver_cannot_substitute_the_new_jose_key() {
         };
         let response = server.handle(&call.rotation(method, old.as_ref(), new.as_ref()), NOW + 1);
         assert_eq!(response.status, 500, "{}", method.name());
+    }
+}
+
+/// A key change's proofs are reserved before the policy decides: once a
+/// server sharing the store verified them, they can't be used again, though
+/// its policy refused the change and every credential is as it was. A fresh
+/// proof then goes through.
+#[test]
+fn a_jose_key_change_reserves_its_proofs_before_the_policy() {
+    let (old, new) = (&signers()[1], &signers()[0]);
+    for method in [JwsMethod::Jws, JwsMethod::Jwsd] {
+        let store = Arc::new(MemoryStorage::new());
+        let make = |refuses_key_changes: bool| {
+            AuthorizationServer::new(
+                Approve {
+                    refuses_key_changes,
+                    ..Approve::default()
+                },
+                PresentedKey,
+                Arc::clone(&store),
+                Counted::default(),
+                endpoints(),
+            )
+            .with_jose_proofs(true)
+            .with_key_rotation(true)
+        };
+        let (refusing, permitting) = (make(true), make(false));
+        let body = grant_body(old.as_ref(), &method_name(method));
+        let response =
+            granted(&permitting.handle(&grant_call(&body).signed(method, old.as_ref()), NOW));
+        let manage = response.access_token.unwrap().tokens[0]
+            .manage
+            .clone()
+            .unwrap();
+        let content = Change::body(&presented_key(new.as_ref(), method));
+        let call = |created| Call {
+            method: "POST",
+            uri: &manage.uri,
+            content: &content,
+            token: Some(manage.access_token.value.as_str()),
+            created,
+        };
+        let request = call(NOW + 1).rotation(method, old.as_ref(), new.as_ref());
+        let case = method.name();
+        assert_eq!(
+            error_code(&refusing.handle(&request, NOW + 1)),
+            "key_rotation_not_supported",
+            "{case}: the policy refuses after the proofs"
+        );
+        let replay = permitting.handle(&request, NOW + 1);
+        assert_eq!(
+            error_code(&replay),
+            "invalid_rotation",
+            "{case}: the proofs are spent"
+        );
+        let fresh = call(NOW + 2).rotation(method, old.as_ref(), new.as_ref());
+        granted(&permitting.handle(&fresh, NOW + 2));
     }
 }
