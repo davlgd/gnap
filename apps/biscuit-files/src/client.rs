@@ -405,9 +405,15 @@ pub fn router(app: App) -> Router {
                     )
                 }),
             )
+            // The suite's shared design.
             .route(
-                "/style.css",
-                get(|| async { ([("content-type", "text/css")], include_str!("style.css")) }),
+                "/assets/gnap.css",
+                get(|| async {
+                    (
+                        [("content-type", "text/css")],
+                        include_str!("../../ui/gnap.css"),
+                    )
+                }),
             )
             .route("/action/{action}", post(action))
             .layer(axum::extract::DefaultBodyLimit::max(512))
