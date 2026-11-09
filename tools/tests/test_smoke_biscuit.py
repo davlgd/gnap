@@ -220,8 +220,6 @@ class BiscuitSmokeTests(unittest.TestCase):
         self.assertNotIn("SECRET", output.getvalue())
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class SessionViewTests(unittest.TestCase):
@@ -237,10 +235,16 @@ class SessionViewTests(unittest.TestCase):
                        {"key_attempts_left": -1}, {"previous_key_testable": 1},
                        {"restrictions": [{"file": "secrets", "until": 1}]},
                        {"restrictions": [{"file": "notes", "until": 1, "token": "private"}]},
-                       {"restrictions": "notes"}):
+                       {"restrictions": "notes"},
+                       {"restrictions": [{"file": "notes", "until": 1}] * 9},
+                       {"key_rotations": 99}, {"key_attempts_left": 99},
+                       {"key_rotations": 2, "key_attempts_left": 2}):
             self.assertFalse(smoke.session_view({**self.VIEW, **change}), change)
         missing = dict(self.VIEW)
         del missing["retired_token_testable"]
         self.assertFalse(smoke.session_view(missing))
         self.assertFalse(smoke.session_view(None))
 
+
+if __name__ == "__main__":
+    unittest.main()

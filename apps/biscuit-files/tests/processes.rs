@@ -772,11 +772,9 @@ fn every_answer_describes_the_session_the_client_holds() {
     assert_eq!(view(&revoked)["retired_token_testable"], true);
 
     // A key-generation attempt that fails still counts, and rotates nothing.
-    let authority = processes.children.remove(0);
-    drop(Processes {
-        children: vec![authority],
-        keys: std::env::temp_dir().join("gnap-biscuit-files-view-none"),
-    });
+    let mut authority = processes.children.remove(0);
+    authority.kill().unwrap();
+    authority.wait().unwrap();
     let (code, failed) = call(&client, origin, &b, "rotate-key", json!({}));
     assert_eq!(code, 400, "{failed}");
     let (_, status) = action(&client, origin, &b, "status", json!({}));

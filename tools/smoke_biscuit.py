@@ -25,17 +25,25 @@ SESSION_FIELDS = {"restrictions", "next_request_uses", "key_rotations", "key_att
                   "previous_key_testable", "retired_token_testable"}
 
 
+# The client's own bounds: restrictive blocks per token, and key-generation
+# attempts per session, of which the rotations are the ones that succeeded.
+MAX_RESTRICTIONS = 8
+MAX_KEY_ATTEMPTS = 3
+
+
 def session_view(view):
     """The client's closed description of the session it holds."""
-    def count(value):
-        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    def count(value, bound=None):
+        return (isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                and (bound is None or value <= bound))
     return (isinstance(view, dict) and set(view) == SESSION_FIELDS
-            and isinstance(view["restrictions"], list)
+            and isinstance(view["restrictions"], list) and len(view["restrictions"]) <= MAX_RESTRICTIONS
+            and count(view["key_rotations"], MAX_KEY_ATTEMPTS) and count(view["key_attempts_left"], MAX_KEY_ATTEMPTS)
+            and view["key_rotations"] + view["key_attempts_left"] <= MAX_KEY_ATTEMPTS
             and all(isinstance(block, dict) and set(block) == {"file", "until"}
                     and block["file"] in ("notes", "draft") and count(block["until"])
                     for block in view["restrictions"])
             and view["next_request_uses"] in ("restricted", "issued", "none")
-            and count(view["key_rotations"]) and count(view["key_attempts_left"])
             and isinstance(view["previous_key_testable"], bool)
             and isinstance(view["retired_token_testable"], bool))
 
