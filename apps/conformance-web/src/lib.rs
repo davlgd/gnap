@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
+pub mod cli;
 pub mod discovery;
 pub mod lifecycle;
+pub mod net;
 pub mod probe;
 mod rs_import;
 mod token_exchange;
@@ -74,6 +76,11 @@ pub struct Check {
     pub detail: &'static str,
     pub reference: &'static str,
     pub remediation: Option<&'static str>,
+    /// A check the oracle couldn't decide, as opposed to one it had nothing
+    /// to examine for: both are `NotTested` to the web view, which shows
+    /// their detail, and the command line tells them apart.
+    #[serde(skip)]
+    pub undecided: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -149,6 +156,7 @@ fn check(
         detail,
         reference,
         remediation,
+        undecided: false,
     }
 }
 

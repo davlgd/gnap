@@ -1,3 +1,5 @@
+pub use crate::net::endpoint;
+use crate::net::loopback;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -66,40 +68,6 @@ pub fn targets(raw: &str, local: bool) -> Result<Vec<Target>, &'static str> {
     Ok(targets)
 }
 
-pub fn endpoint(raw: &str, local: bool) -> Result<Url, &'static str> {
-    let url = Url::parse(raw).map_err(|_| "Invalid lifecycle endpoint")?;
-    if raw.len() > 2048
-        || url.as_str() != raw
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || raw
-            .split("://")
-            .nth(1)
-            .is_some_and(|s| s.split('/').next().is_some_and(|a| a.contains('@')))
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err("Lifecycle endpoint must be canonical without credentials, query or fragment");
-    }
-    if local && url.scheme() == "http" && loopback(&url) {
-        return Ok(url);
-    }
-    let host = url.host_str().ok_or("Lifecycle endpoint needs a host")?;
-    if url.scheme() != "https"
-        || url.port_or_known_default() != Some(443)
-        || !host.contains('.')
-        || host.starts_with('[')
-        || host.parse::<std::net::IpAddr>().is_ok()
-    {
-        return Err("Lifecycle HTTPS endpoint requires a public DNS name on port 443");
-    }
-    Ok(url)
-}
-
-fn loopback(url: &Url) -> bool {
-    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
-}
-
 pub fn member(url: &str, prefix: &str) -> bool {
     url.strip_prefix(prefix).is_some_and(|tail| {
         !tail.is_empty()
@@ -110,8 +78,8 @@ pub fn member(url: &str, prefix: &str) -> bool {
     })
 }
 
-impl Target {
-    pub fn permits(&self, method: &str, url: &str) -> bool {
+impl crate::net::Destinations for Target {
+    fn permits(&self, method: &str, url: &str) -> bool {
         match method {
             "GET" => url == self.resource,
             "POST" => {
