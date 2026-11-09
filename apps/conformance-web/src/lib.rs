@@ -21,6 +21,7 @@ pub mod lifecycle;
 pub mod net;
 pub mod probe;
 mod rs_import;
+pub mod scenario;
 mod token_exchange;
 pub use rs_import::{Binding as TokenBinding, Context as RsContext};
 

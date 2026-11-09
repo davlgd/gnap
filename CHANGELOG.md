@@ -16,6 +16,8 @@ This file lists the changes to the published crates that affect their users, cra
 
 A session proves its requests with the method its `client.key` declares: `httpsig` as before, or `jws` and `jwsd`, for which the proof takes no parameters, the JWK has to import as a public key with the signer's `alg` and `kid`, and the first request's proof has to verify under it before it leaves. A key named by reference keeps `httpsig`. `rotate_key` changes such a key with nested JOSE proofs, which it checks under the current and the new JWK before sending, and `sign_request` keeps proving with `httpsig`.
 
+**Breaking:** `Session::revoke_token` returns `ClientError::Server` when the AS refuses the revocation with a well-formed GNAP error, instead of `ClientError::Protocol`, and keeps the token, whose state hasn't changed. A management error is well-formed when it carries no field other than `error`, not even a null one (RFC 9635 §3.6): `rotate_token` and `rotate_key` now refuse any other error as `ClientError::Protocol`. Match `ClientError::Server` to tell an AS's refusal from a malformed answer.
+
 **Breaking:** `sign_request` also refuses a request that already carries a `Detached-JWS` field, so that it never builds a request with two proof methods.
 
 `sign_jose_request` signs a request with a `jws` or `jwsd` proof, as `sign_request` does with `httpsig`: a `jwsd` proof keeps the body and its type, and a `jws` one attaches a JSON body.

@@ -1,6 +1,6 @@
 //! Token management (§6): signers, rotation, and revocation of issued tokens.
 
-use super::response::grant_response;
+use super::response::management_response;
 use super::{Session, SessionProof, SharedSigner};
 use crate::error::ClientError;
 use crate::rotation;
@@ -56,7 +56,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         let previous_value = self.held_value(index)?;
         let signer = self.management_signer(index)?;
         let response = self.call_management("POST", &manage, None, signer, now)?;
-        let parsed = grant_response(&response)?;
+        let parsed = management_response(&response)?;
 
         let rotated = {
             let previous = &self.held(index)?.1;
@@ -169,7 +169,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             }
         };
         let response = self.round_trip(http)?;
-        let parsed = grant_response(&response)?;
+        let parsed = management_response(&response)?;
 
         let rotated = {
             let previous = &self.held(index)?.1;
@@ -336,6 +336,14 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         let response = self.call_management("DELETE", &manage, None, signer, now)?;
 
         if response.status != 204 {
+            // §3.6 — a well-formed GNAP error is the AS's refusal, not a
+            // malformed answer, and the token's state is unchanged.
+            if let Ok(GrantResponse {
+                error: Some(error), ..
+            }) = management_response(&response)
+            {
+                return Err(ClientError::Server(error));
+            }
             return Err(ClientError::Protocol(format!(
                 "revoking answered {} where §6.2 says 204 No Content",
                 response.status
