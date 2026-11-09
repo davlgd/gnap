@@ -339,3 +339,24 @@ LNkim6pOxyzSeH/Pn6S6SdBD9PJ42Jnau5rC+kF8Bn9S/cTvxhHr9gP9x1EGqyaO
 MdUt+XWZoYYGO00wfQIDAQAB
 -----END PUBLIC KEY-----
 ";
+
+/// The private-key imports refuse a modulus outside the profile too. The weak
+/// key is generated here and never written to disk.
+#[test]
+fn private_pem_imports_refuse_an_out_of_profile_modulus() {
+    use rsa::pkcs1::EncodeRsaPrivateKey;
+    use rsa::pkcs8::{EncodePrivateKey, LineEnding};
+
+    let weak = rsa::PrivateKey::new(&mut getrandom::SysRng, 1024).unwrap();
+    let pkcs1 = weak.to_pkcs1_pem(LineEnding::LF).unwrap();
+    let pkcs8 = weak.to_pkcs8_pem(LineEnding::LF).unwrap();
+    for refused in [
+        Ps256Signer::from_pkcs1_pem(&pkcs1, "weak"),
+        Ps256Signer::from_pkcs8_pem(&pkcs8, "weak"),
+    ] {
+        let Err(refusal) = refused else {
+            panic!("a 1024-bit private key must be refused");
+        };
+        assert!(refusal.to_string().contains("modulus"), "{refusal}");
+    }
+}
