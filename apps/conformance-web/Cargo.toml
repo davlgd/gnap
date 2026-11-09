@@ -3,6 +3,8 @@ name = "gnap-conformance-web"
 version = "0.1.0"
 edition = "2021"
 publish = false
+# The web workbench; `gnap-conformance` is the command line.
+default-run = "gnap-conformance-web"
 
 # Independently deployable consumer of the SDK, not a seventh SDK crate.
 [workspace]

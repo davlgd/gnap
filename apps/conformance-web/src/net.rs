@@ -81,6 +81,19 @@ pub trait Destinations {
     fn permits(&self, method: &str, url: &str) -> bool;
 }
 
+/// Exactly one request: one method to one URL, compared byte for byte.
+#[derive(Debug, Clone)]
+pub struct Exact {
+    pub method: &'static str,
+    pub url: String,
+}
+
+impl Destinations for Exact {
+    fn permits(&self, method: &str, url: &str) -> bool {
+        method == self.method && url == self.url
+    }
+}
+
 /// A bounded transport for the requests `target` permits.
 ///
 /// Used from a dedicated thread: each call blocks on `runtime`.
@@ -279,4 +292,58 @@ pub fn endpoint(raw: &str, local: bool) -> Result<Url, &'static str> {
 /// Whether a URL names the loopback host.
 pub fn loopback(url: &Url) -> bool {
     matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A transport whose runtime is never reached: every refusal below is
+    /// decided before any network work.
+    fn exact(runtime: &tokio::runtime::Runtime) -> Bounded<Exact> {
+        Bounded::with_limits(
+            Exact {
+                method: "OPTIONS",
+                url: "https://as.example/gnap".into(),
+            },
+            Limits::DIAGNOSTIC,
+            false,
+            runtime.handle().clone(),
+        )
+    }
+
+    #[test]
+    fn an_exact_destination_permits_only_its_request() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let transport = exact(&runtime);
+        for (method, url) in [
+            ("POST", "https://as.example/gnap"),
+            ("OPTIONS", "https://as.example/gnap/"),
+            ("OPTIONS", "https://as.example/continue"),
+            ("OPTIONS", "https://other.example/gnap"),
+            ("OPTIONS", "https://as.example/gnap?x=1"),
+        ] {
+            assert!(
+                transport.send(HttpRequest::new(method, url)).is_err(),
+                "{method} {url}"
+            );
+        }
+        assert!(transport.last().is_none(), "nothing was sent");
+    }
+
+    #[test]
+    fn the_limits_are_project_constants() {
+        for limits in [Limits::LIFECYCLE, Limits::DIAGNOSTIC] {
+            assert!(limits.calls > 0 && limits.exchange <= limits.budget);
+            assert!(limits.connect <= limits.exchange && limits.request <= limits.exchange);
+        }
+        assert_eq!(
+            Limits::LIFECYCLE.response_body,
+            8192,
+            "the workbench's bound is kept"
+        );
+        assert_eq!(Limits::LIFECYCLE.calls, 16);
+    }
 }

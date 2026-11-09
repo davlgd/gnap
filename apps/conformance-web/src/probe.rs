@@ -337,6 +337,33 @@ async fn response_checks(
     Ok(as_response_checks(status, media, no_store, &body))
 }
 
+/// The checks of an AS's answer to the fixed malformed grant request, from
+/// the captured status, headers, and body.
+pub fn rejection_checks(status: u16, headers: &[(String, String)], body: &[u8]) -> Vec<Check> {
+    let media = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .is_some_and(|(_, value)| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("application/json")
+        });
+    let no_store = gnap_types::http::HttpResponse {
+        status,
+        headers: headers.to_vec(),
+        body: vec![],
+    }
+    .has_no_store();
+    let status = reqwest::StatusCode::from_u16(status).unwrap_or(reqwest::StatusCode::OK);
+    as_response_checks(status, media, no_store, body)
+}
+
+/// The malformed initial grant request of the probe: a POST of `{`.
+pub const MALFORMED_GRANT: &[u8] = b"{";
+
 fn as_response_checks(
     status: reqwest::StatusCode,
     media: bool,

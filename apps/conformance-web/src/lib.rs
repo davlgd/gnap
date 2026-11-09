@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
+pub mod cli;
 pub mod discovery;
 pub mod lifecycle;
 pub mod net;
