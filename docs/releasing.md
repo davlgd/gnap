@@ -1,77 +1,85 @@
-# Preparing the 0.1.0 crates
+# Releasing the crates
 
-This guide prepares the ten SDK crates for their first registry release. It does not announce that they are published. Until publication, use the [source-dependency setup](getting-started.md#integrate-a-protocol-role). The HTTP applications are examples, not packages in this release.
+This guide prepares the ten SDK crates for their first release on crates.io. The crates aren't published: use them as source dependencies, as [Getting started](getting-started.md#integrate-a-protocol-role) shows. The HTTP applications are examples, not packages of the release.
 
-Publication requires a separate maintainer decision. Do not upload a package, create a release tag or change registry ownership as part of documentation or packaging checks. Cargo describes why a published version is effectively permanent in its [publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html).
+Publishing is a separate decision of the maintainer. Don't upload a package, create a release tag, or change registry ownership while you check the packages. A published version is effectively permanent, as Cargo's [publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html) explains.
 
-## Check the source and package contents
+## Choose the toolchain
 
-Use a clean, reviewed revision with passing CI. The packaging workflow below has been exercised with Cargo 1.98; this release-tooling version is separate from the SDK's declared Rust 1.95 minimum. The asset check requires Python 3.11 or newer.
+Workspace publishing needs Cargo 1.90 or newer, so the declared minimum, Rust 1.95, can run every command of this guide. The packaging workflow is tested with Cargo 1.98, which remains the recommended version. The [mise tasks](../mise.toml) below use the Cargo on your `PATH`, without installing a toolchain. The asset check needs Python 3.11 or newer.
 
-Workspace publishing needs Cargo 1.90 or newer, so the whole-workspace dry run also works on the declared Rust 1.95 minimum; Cargo 1.98 remains the tested release-tooling version.
+## Check the package contents
 
-Repeat a dry run with care after changing code without changing the version. `--workspace` verifies each crate against its siblings through a temporary local registry, whose extracted sources stay under `~/.cargo/registry/src/` next to the `index.crates.io-*` directory. Because the crates keep the same name and version, a later run can reuse those stale extractions and verify a crate against an outdated sibling. Delete only the `gnap-*` entries of that temporary registry before rerunning.
+Start from a clean, reviewed revision whose CI passes:
 
-```sh
+```bash
 python3 -B tools/check_package_assets.py
 cargo package --workspace --list --locked
 cargo package --workspace --locked
 ```
 
-The asset check verifies local crate READMEs, documentation URLs, the inherited SPDX license, literal embedded-file paths and exact copies of canonical licenses and test fixtures. It does not inspect every possible build input or scan for secrets. The asset mapping is [package-assets.json](../tools/package-assets.json); update canonical sources and their package-local copies together.
+The asset check verifies each crate's README, documentation URL, inherited SPDX license, embedded-file paths, and its exact copies of the canonical licenses and test fixtures. It doesn't inspect every build input, nor scan for secrets. The copies are listed in [`package-assets.json`](../tools/package-assets.json): update a canonical file and its copies together.
 
-Each package has its own README and the Apache-2.0 license text. RFC-derived test keys remain deliberately public fixtures with their provenance notices; they must never become deployment credentials. Review the actual file list, including tests and examples, rather than assuming Git ignore rules are a complete publication policy.
+Review the actual file list, tests and examples included, rather than assuming that the ignore rules of Git make a complete publication policy. The RFC-derived test keys are public fixtures that keep their provenance notices, and must never become deployment credentials.
 
-Cargo creates archives under `target/package`. In a multi-package workspace, the tested Cargo version can verify unpublished local dependencies together using a temporary registry. This is local preparation, not a registry upload. An individual package's registry dependencies must otherwise be available. See [cargo package](https://doc.rust-lang.org/cargo/commands/cargo-package.html) for the command's verification boundary.
+Cargo writes the archives under `target/package`. In a workspace, it verifies the unpublished crates together through a temporary local registry, without uploading anything; see [`cargo package`](https://doc.rust-lang.org/cargo/commands/cargo-package.html). This verification compiles the libraries, but doesn't run their tests and examples: run those from the unpacked archives, without the sibling source directories, so that a stray reference to another crate's files can't succeed.
 
-Default package verification compiles libraries; it is not a substitute for running tests and examples from unpacked archives. Check those without sibling source checkouts so an accidental cross-crate file reference cannot succeed. The fixture copies exist to make that verification possible, not to exclude tests from the published source.
+### Clear a stale verification registry
+
+The temporary registry keeps its extracted sources under `~/.cargo/registry/src/`, in a directory that holds only `gnap-*` entries. Since the crates keep the same name and version from one run to the next, a later run can reuse those extractions and verify a crate against an outdated sibling. After you change the code without changing the version, delete them before you rerun:
+
+```bash
+for registry in ~/.cargo/registry/src/*/; do
+  ls "$registry" | grep -qv '^gnap-' || rm -rf "$registry"gnap-*
+done
+```
+
+The loop only empties a directory that holds nothing but `gnap-*` entries, so the crates.io cache stays untouched.
 
 ## Review before the first upload
 
-- Verify the intended crate names and registry owner immediately before release. A missing registry entry is not a reservation or proof that publication will be accepted. Keep credentials and account coordination out of public files.
-- Check all package versions and internal dependency requirements together. Path dependencies carry `version = "0.1.0"` for registry resolution; see [Cargo's dependency rules](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#multiple-locations).
-- Review third-party dependency versions, licenses, advisories and yanked releases. The pinned workspace lock alone does not validate a new consumer's dependency resolution or minimum Rust version.
-- Test a fresh consumer at the supported Rust version and inspect the generated API documentation. Review warnings rather than suppressing them to get a nominally clean release.
-- Keep README links usable from a registry page. Crate READMEs link to public guides using absolute URLs rather than workspace-relative `../../docs` paths.
-- Confirm that the public description matches the [supported profiles](support-matrix.md). Version 0.1.0 does not mean complete GNAP conformance or production-ready identity and storage services.
+- Check the crate names and the registry owner just before the release
+- Check the package versions and the internal dependency requirements together
+- Review the versions, licenses, advisories, and yanked releases of the dependencies
+- Test a fresh consumer on the supported Rust version, and read the generated API documentation
+- Keep the links of each crate README absolute, so they work from a registry page
+- Check that the public description matches the [support matrix](support-matrix.md)
 
-Machine-specific observations, unresolved dependency decisions and draft release coordination belong in ignored local notes. Public release evidence should name the reviewed revision and the checks actually performed.
+A missing registry entry isn't a reservation, nor a promise that publication will be accepted, and account details stay out of public files. A path dependency also carries `version = "0.1.0"`, which Cargo uses on the registry, as its [dependency rules](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#multiple-locations) explain.
 
-## Use the mise tasks
+The [verification guide](verification.md#dependencies) runs the dependency checks, and states the advisory that remains in the graph of `gnap-biscuit`. The pinned lockfile doesn't validate the dependency resolution of a new consumer, so test a fresh one. Review warnings rather than suppressing them to get a clean release. Version 0.1.0 doesn't mean complete GNAP conformance, nor production-ready identity and storage services. Public release evidence names the reviewed revision and the checks you ran.
 
-The repository's [mise tasks](../mise.toml) use the Cargo already on your PATH; they do not install a toolchain. Use Cargo 1.98, as for the package checks above. Native workspace publishing requires at least [Cargo 1.90](https://blog.rust-lang.org/2025/09/18/Rust-1.90.0/#cargo-adds-native-support-for-workspace-publishing). Install [mise](https://mise.jdx.dev/getting-started.html) separately if needed, review `mise.toml`, and trust it with `mise trust` if prompted.
+## Rehearse the release
 
 Rehearse the whole workspace without uploading:
 
-```sh
+```bash
 mise run publish:dry-run
 ```
 
-This runs `cargo publish --workspace --registry crates-io --locked --dry-run`. Cargo handles dependency ordering and verifies unpublished workspace dependencies together. The dry-run builds archives and can access the registry, but uploads nothing; it is not an offline check or a guarantee of registry acceptance. Review warnings about yanked dependencies and future compiler incompatibilities before publishing; a successful dry-run does not resolve them. It keeps Cargo's clean-tree and lockfile checks enabled. See [cargo publish](https://doc.rust-lang.org/cargo/commands/cargo-publish.html).
+This runs `cargo publish --workspace --registry crates-io --locked --dry-run`, which orders the crates by dependency and verifies the unpublished ones together. It builds the archives and can contact the registry, but uploads nothing: it isn't an offline check, nor a guarantee that the registry will accept them. It keeps Cargo's clean-tree and lockfile checks, and reports yanked dependencies and future compiler incompatibilities, which a successful run doesn't resolve. See [`cargo publish`](https://doc.rust-lang.org/cargo/commands/cargo-publish.html).
 
-To inspect commands without running even the Cargo dry-run, use `mise run --dry-run publish:dry-run`. These are two different dry-run modes.
+To print the commands without running even the Cargo dry run, use `mise run --dry-run publish:dry-run`.
 
-## Publish only after approval
+## Publish
 
-Publication is performed by the maintainer, not by the coding agents or CI. Once the release checks above are complete, the maintainer can run:
+The maintainer publishes, not the coding agents or CI. Once the checks above pass, the maintainer runs:
 
-```sh
+```bash
 mise run publish
 ```
 
-The task asks for confirmation (default: no), then runs `cargo publish --workspace --registry crates-io --locked`. Both tasks run from the repository root, select its SDK members and take versions from their manifests. They do not publish the standalone HTTP applications or create tags. No task is chained to the upload task; the dry-run never starts it.
+The task asks for confirmation, with *no* as the default, then runs `cargo publish --workspace --registry crates-io --locked`. It publishes the SDK members at the versions of their manifests, without the applications or a tag, and no other task triggers it.
 
-Workspace publication is not atomic. If an upload or index wait fails, inspect which versions reached crates.io before retrying; do not blindly rerun the whole workspace. For a partial release, publish only the remaining crates with `cargo publish -p <crate> --registry crates-io --locked`, after checking their prerequisites. Never use `--no-verify` to conceal a failing check.
+Workspace publication isn't atomic. If an upload or an index wait fails, check which versions reached crates.io before you retry, rather than rerunning the whole workspace. Publish the remaining crates one at a time with `cargo publish -p <crate> --registry crates-io --locked`, once their dependencies are on the registry. Never use `--no-verify` to get past a failing check.
 
-For manual publication or recovery, one valid order, including the current development dependencies, is:
+To publish by hand or to recover, use an order in which each crate's dependencies, development ones included, come first:
 
-1. `gnap-registry`, `gnap-net` (independent roots).
-2. `gnap-types`.
-3. `gnap-core`, `gnap-crypto`.
-4. `gnap-subject`.
-5. `gnap-client`.
-6. `gnap-as`, `gnap-rs`, `gnap-biscuit`.
+1. `gnap-registry` and `gnap-net`
+2. `gnap-types`
+3. `gnap-core` and `gnap-crypto`
+4. `gnap-subject`
+5. `gnap-client`
+6. `gnap-as`, `gnap-rs`, and `gnap-biscuit`
 
-Recompute the manual order when dependencies change and verify each prerequisite is visible in the registry before publishing a dependent crate.
-
-After publication, verify registry versions, package contents and docs.rs builds, then update installation instructions and publish the approved release notes and tag. A local archive check alone does not establish those outcomes.
+Recompute this order when the dependencies change, and check that each dependency is visible on the registry before you publish a crate that needs it. After the release, verify the versions, the package contents, and the docs.rs builds, then update the installation instructions, and publish the release notes and the tag.
