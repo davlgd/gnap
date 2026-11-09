@@ -32,7 +32,12 @@ impl DerivationPolicy for introspection::Registration {
         if rs.id != RsId(resource_registration::RS_OWNER.into())
             || rs.key != self.key
             || token.derivation.is_some()
-            || token.client.as_value().is_some()
+            // The parent is a live session of the lab's, by reference or by
+            // the key it presents; never an external client.
+            || !matches!(
+                super::lab::classify(&self.lab, &token.client, std::time::Instant::now()),
+                super::lab::ClientClass::Lab(_)
+            )
             || requested.cardinality != Cardinality::Single
             || requested.tokens.len() != 1
             || requested.tokens[0].access != wanted

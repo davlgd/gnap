@@ -38,6 +38,7 @@ async fn actual_http_derivation_separates_roles_bounds_children_and_cascades_par
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());
     let serving = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -427,6 +428,7 @@ fn downstream_read_uses_the_injected_clock_at_parent_expiration() {
         signer: app.resource_client.signer.clone(),
         nonces: MemoryStorage::default(),
         transport: transport.clone(),
+        jose_replay: introspection::jose_replay(),
     });
     let request = signed(
         &app,
@@ -479,6 +481,7 @@ fn failed_downstream_still_deletes_once_and_lost_cleanup_is_not_success() {
             signer: app.resource_client.signer.clone(),
             nonces: MemoryStorage::default(),
             transport: transport.clone(),
+            jose_replay: introspection::jose_replay(),
         };
         let request = signed(
             &app,
@@ -536,6 +539,7 @@ fn derived_reply_must_match_the_local_profile_without_reflecting_errors() {
                 headers: vec![("content-type".into(), "application/json".into())],
                 body: serde_json::to_vec(&body).unwrap(),
             })),
+            jose_replay: introspection::jose_replay(),
         };
         assert_eq!(
             derivation::issue(
@@ -556,6 +560,7 @@ fn derived_reply_must_match_the_local_profile_without_reflecting_errors() {
             headers: vec![("content-type".into(), "text/plain".into())],
             body: b"synthetic-secret".to_vec(),
         })),
+        jose_replay: introspection::jose_replay(),
     };
     assert!(matches!(
         derivation::issue(
@@ -586,6 +591,7 @@ fn child_cleanup_requires_an_empty_204_and_never_accepts_an_arbitrary_destinatio
                 body: body.as_bytes().to_vec(),
                 headers: vec![],
             })),
+            jose_replay: introspection::jose_replay(),
         };
         assert_eq!(derivation::revoke(&client, &child, now()).is_ok(), accepted);
     }

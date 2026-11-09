@@ -57,7 +57,11 @@ fn identity_release_requires_matching_consent_and_verified_consumer_context() {
         .unwrap();
     app.decisions.lock().unwrap().identity = Some(identity.clone());
     let transport = Direct(&app.server);
-    let policy = ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone());
+    let policy = ConsentPolicy(
+        app.decisions.clone(),
+        app.rs_registration.resources.clone(),
+        app.storage.lab.clone(),
+    );
     for allow in [false, true] {
         let mut request: GrantRequest = serde_json::from_value(json!({
             "client":"test-client", "access_token":{"access":[FOLDER_READ]},
@@ -254,7 +258,8 @@ fn identity_release_requires_matching_consent_and_verified_consumer_context() {
 #[test]
 fn local_http_worker_refuses_identity_before_creating_client_or_grant() {
     let app = crate::tests::test_app_at("http://127.0.0.1:8080");
-    let clients_before = app.decisions.lock().unwrap().clients.len();
+    let clients_before = app.storage.lab.lock().unwrap().count();
+    let lab = app.storage.lab.clone();
     let decisions = app.decisions.clone();
     let references = app.bootstrap.get().unwrap().as_ref().unwrap().clone();
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -268,6 +273,7 @@ fn local_http_worker_refuses_identity_before_creating_client_or_grant() {
                 decisions: app.decisions,
                 references,
                 lifetime: SESSION_LIFETIME,
+                generated: None,
             },
             receiver,
         )
@@ -275,6 +281,7 @@ fn local_http_worker_refuses_identity_before_creating_client_or_grant() {
     let (reply, received) = tokio::sync::oneshot::channel();
     sender
         .send(WorkerCommand::Browser(Command {
+            proof: crate::lab::ProofChoice::default(),
             session: "unused-client".into(),
             action: "start-identity".into(),
             reply,
@@ -284,6 +291,6 @@ fn local_http_worker_refuses_identity_before_creating_client_or_grant() {
     drop(sender);
     worker.join().unwrap();
     assert!(result.unwrap_err().contains("HTTPS"));
-    assert_eq!(decisions.lock().unwrap().clients.len(), clients_before);
+    assert_eq!(lab.lock().unwrap().count(), clients_before);
     assert!(decisions.lock().unwrap().grants.is_empty());
 }

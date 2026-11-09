@@ -5,11 +5,21 @@ use tower::ServiceExt;
 
 /// Starts a session through the front door, as a browser would, and returns
 /// the identity its cookie carries.
-async fn start(router: &Router, origin: &str) -> String {
+pub(super) async fn start(router: &Router, origin: &str) -> String {
     start_with(router, origin, "start").await
 }
 
-async fn start_with(router: &Router, origin: &str, action: &str) -> String {
+pub(super) async fn start_with(router: &Router, origin: &str, action: &str) -> String {
+    start_proving(router, origin, action, "").await
+}
+
+/// Starts a session with `body`, which may choose the proof method.
+pub(super) async fn start_proving(
+    router: &Router,
+    origin: &str,
+    action: &str,
+    body: &str,
+) -> String {
     let response = router
         .clone()
         .oneshot(
@@ -18,12 +28,21 @@ async fn start_with(router: &Router, origin: &str, action: &str) -> String {
                 .uri(format!("/api/{action}"))
                 .header("host", origin.strip_prefix("http://").unwrap())
                 .header("origin", origin)
-                .body(axum::body::Body::empty())
+                .body(axum::body::Body::from(body.to_owned()))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        panic!(
+            "{action} answered {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
     let cookie = response.headers()["set-cookie"].to_str().unwrap();
     cookie
         .split(';')
@@ -34,7 +53,7 @@ async fn start_with(router: &Router, origin: &str, action: &str) -> String {
 }
 
 /// The routes of a session's recorded attempts, in order.
-fn routes(view: &Value) -> Vec<String> {
+pub(super) fn routes(view: &Value) -> Vec<String> {
     view["trace"]["attempts"]
         .as_array()
         .unwrap()
@@ -45,7 +64,20 @@ fn routes(view: &Value) -> Vec<String> {
 
 /// A lab served on a loopback port, with its worker, whose sessions last
 /// `lifetime`.
-async fn lab(lifetime: Duration) -> (App, Router, String) {
+pub(super) async fn lab(lifetime: Duration) -> (App, Router, String) {
+    let (app, router, origin, _) = observed_lab(lifetime, None).await;
+    (app, router, origin)
+}
+
+/// The keys a lab's worker generated, each with its session.
+pub(super) type GeneratedKeys = mpsc::Receiver<(String, Arc<gnap_crypto::Ed25519Signer>)>;
+
+/// A lab whose worker reports the keys it generates, and whose client reaches
+/// `reach` in place of the lab's own origin when one is given.
+pub(super) async fn observed_lab(
+    lifetime: Duration,
+    reach: Option<String>,
+) -> (App, Router, String, GeneratedKeys) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let mut app = tests::test_app_at(&origin);
@@ -56,11 +88,13 @@ async fn lab(lifetime: Duration) -> (App, Router, String) {
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let (sender, receiver) = mpsc::sync_channel(8);
     app.commands = sender;
+    let (generated, keys) = mpsc::channel();
     let (worker_origin, signer, server, storage, decisions) = (
-        origin.clone(),
+        reach.unwrap_or_else(|| origin.clone()),
         app.signer.clone(),
         app.server.clone(),
         app.storage.clone(),
@@ -77,6 +111,7 @@ async fn lab(lifetime: Duration) -> (App, Router, String) {
                 decisions,
                 references,
                 lifetime,
+                generated: Some(generated),
             },
             receiver,
         )
@@ -84,11 +119,11 @@ async fn lab(lifetime: Duration) -> (App, Router, String) {
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());
     let served = router.clone();
     tokio::spawn(async move { axum::serve(listener, served).await.unwrap() });
-    (app, router, origin)
+    (app, router, origin, keys)
 }
 
 /// The status a browser reads, with the cookie it holds, if any.
-async fn status(router: &Router, origin: &str, cookie: Option<&str>) -> Value {
+pub(super) async fn status(router: &Router, origin: &str, cookie: Option<&str>) -> Value {
     let mut request = Request::builder()
         .uri("/api/status")
         .header("host", origin.strip_prefix("http://").unwrap());

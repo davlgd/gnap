@@ -318,6 +318,9 @@ fn owner_cookie(headers: &HeaderMap) -> Option<&str> {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'))
     .then_some(value)
 }
+/// Whether an interaction belongs to an external client's grant. A grant the
+/// lab created for one of its own sessions isn't, even when that session
+/// presents its key by value; the page then checks the session itself.
 pub(super) fn is_external(app: &App, handle: &str) -> bool {
     app.storage
         .lookup(GrantSelector::Interaction(handle))
@@ -331,6 +334,7 @@ pub(super) fn is_external(app: &App, handle: &str) -> bool {
                 .client
                 .as_value()
                 .is_some()
+                && !app.storage.is_lab_grant(snapshot.id)
         })
 }
 pub(super) fn entry(app: &App, handle: &str, headers: &HeaderMap) -> Response {

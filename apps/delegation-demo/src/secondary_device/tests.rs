@@ -531,6 +531,7 @@ async fn two_independent_http_sessions_decide_then_poll_and_read_the_resource() 
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let (sender, receiver) = mpsc::sync_channel(8);
     app.commands = sender;
@@ -552,6 +553,7 @@ async fn two_independent_http_sessions_decide_then_poll_and_read_the_resource() 
                 decisions,
                 references,
                 lifetime: SESSION_LIFETIME,
+                generated: None,
             },
             receiver,
         )
@@ -572,10 +574,18 @@ async fn two_independent_http_sessions_decide_then_poll_and_read_the_resource() 
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap();
-    for allow in [true, false] {
+    // Each proof method through the second screen; a refusal once is enough.
+    for (allow, proof) in [
+        (true, "httpsig"),
+        (false, "httpsig"),
+        (true, "jwsd"),
+        (true, "jws"),
+    ] {
         let response = client
             .post(format!("{origin}/api/start-code"))
             .header("origin", &origin)
+            .header("content-type", "application/json")
+            .body(format!(r#"{{"proof":"{proof}"}}"#))
             .send()
             .await
             .unwrap();
@@ -589,6 +599,7 @@ async fn two_independent_http_sessions_decide_then_poll_and_read_the_resource() 
             .to_owned();
         let started: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
         assert_eq!(started["state"], "pending");
+        assert_eq!(started["proof"]["method"], proof);
         assert!(started["interaction_uri"].is_null());
         assert_eq!(started["user_code_uri"]["uri"], format!("{origin}/code"));
         let response = client
@@ -683,7 +694,19 @@ async fn two_independent_http_sessions_decide_then_poll_and_read_the_resource() 
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             let result: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
-            assert_eq!(result["last_resource_status"], 200);
+            assert_eq!(result["last_resource_status"], 200, "{proof}: {result}");
+            let attempts = result["trace"]["attempts"].as_array().unwrap();
+            let read = &attempts[attempts.len() - 1]["request"];
+            assert_eq!(read["route"], "folder");
+            assert_eq!(
+                read["proof"],
+                if proof == "httpsig" {
+                    "httpsig"
+                } else {
+                    "jwsd"
+                },
+                "a read has no content: a jws read is detached"
+            );
         } else {
             assert_eq!(result["token_present"], false);
         }

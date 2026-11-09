@@ -130,6 +130,7 @@ async fn two_token_grant_over_http_keeps_labels_rights_and_lifecycles_apart() {
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());
     let serving = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -573,6 +574,7 @@ async fn browser_flow_selects_tokens_by_label_over_http() {
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let (sender, receiver) = mpsc::sync_channel(8);
     app.commands = sender;
@@ -594,6 +596,7 @@ async fn browser_flow_selects_tokens_by_label_over_http() {
                 decisions,
                 references,
                 lifetime: SESSION_LIFETIME,
+                generated: None,
             },
             receiver,
         )

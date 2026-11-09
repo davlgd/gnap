@@ -42,6 +42,7 @@ mod derivation;
 mod external_client;
 mod identity;
 mod introspection;
+mod lab;
 mod multiple;
 mod push_finish;
 mod resource_registration;
@@ -52,7 +53,6 @@ struct ConsentRegistry {
     external: external_client::Registry,
     push: push_finish::Registry,
     identity: Option<Arc<identity::Identity>>,
-    clients: HashSet<String>,
     grants: HashMap<GrantId, Consent>,
 }
 struct Consent {
@@ -228,11 +228,16 @@ async fn canonical_authority(
 struct RetainedGrants {
     base: MemoryStorage,
     continuation_deadlines: HashMap<GrantId, u64>,
+    /// The grants created for one of the lab's own sessions: a class kept for
+    /// quotas and retention, never read as a permission.
+    lab_grants: HashSet<GrantId>,
 }
 #[derive(Default)]
 struct IndexedStorage {
     state: Mutex<RetainedGrants>,
     nonces: MemoryStorage,
+    /// The lab's clients, which the server's components share. A leaf lock.
+    lab: lab::SharedLabKeys,
     #[cfg(test)]
     before_exchange: Mutex<Option<ExchangeHook>>,
 }
@@ -257,6 +262,7 @@ impl RetainedGrants {
             {
                 self.base.remove(id, snapshot.revision)?;
                 self.continuation_deadlines.remove(&id);
+                self.lab_grants.remove(&id);
             } else {
                 let clear_continuation =
                     continuation_expired && candidate.record.continuation_token.is_some();
@@ -286,13 +292,16 @@ impl IndexedStorage {
 }
 impl GrantStore for IndexedStorage {
     fn create(&self, aggregate: GrantAggregate) -> Result<GrantSnapshot, StoreError> {
+        // The client's class is read before the storage lock, the key's
+        // thumbprint first; the registry's leaf lock is taken alone.
+        let class = lab::classify(&self.lab, &aggregate.record.request.client, Instant::now());
         let mut state = self.lock()?;
         let now = now();
         state.cleanup(now)?;
         if state.continuation_deadlines.len() >= MAX_GRANTS {
             return Err(StoreError::Unavailable);
         }
-        let external = aggregate.record.request.client.as_value().is_some();
+        let external = class == lab::ClientClass::External;
         if external {
             let mut count = 0;
             let mut same_key = 0;
@@ -302,7 +311,7 @@ impl GrantStore for IndexedStorage {
                     .lookup(GrantSelector::Id(*id))?
                     .ok_or(StoreError::Invalid)?;
                 let client = &previous.aggregate.record.request.client;
-                if client.as_value().is_some() {
+                if client.as_value().is_some() && !state.lab_grants.contains(id) {
                     count += 1;
                     same_key += usize::from(external_client::same_client_key(
                         client,
@@ -323,6 +332,9 @@ impl GrantStore for IndexedStorage {
             .ok_or(StoreError::Exhausted)?;
         let snapshot = state.base.create(aggregate)?;
         state.continuation_deadlines.insert(snapshot.id, deadline);
+        if matches!(class, lab::ClientClass::Lab(_)) {
+            state.lab_grants.insert(snapshot.id);
+        }
         Ok(snapshot)
     }
     fn lookup(&self, selector: GrantSelector<'_>) -> Result<Option<GrantSnapshot>, StoreError> {
@@ -358,6 +370,7 @@ impl GrantStore for IndexedStorage {
         let mut state = self.lock()?;
         state.base.remove(id, revision)?;
         state.continuation_deadlines.remove(&id);
+        state.lab_grants.remove(&id);
         Ok(())
     }
 }
@@ -396,6 +409,21 @@ impl NonceStore for IndexedStorage {
     }
 }
 
+impl IndexedStorage {
+    /// Whether a grant was created for one of the lab's own sessions: its
+    /// class at creation, for routing and quotas, never a permission.
+    fn is_lab_grant(&self, id: GrantId) -> bool {
+        self.lock()
+            .is_ok_and(|state| state.lab_grants.contains(&id))
+    }
+}
+impl gnap_as::JwsReplayStore for IndexedStorage {
+    // The proofs share the nonce store's bound and retention; a session that
+    // ends never takes its reservations with it.
+    fn reserve_jws_proofs(&self, ids: &[gnap_crypto::ReplayId], now: u64) -> bool {
+        self.nonces.reserve_jws_proofs(ids, now)
+    }
+}
 impl RotationNonceStore for IndexedStorage {
     fn remember_nonce_pair(
         &self,
@@ -407,7 +435,18 @@ impl RotationNonceStore for IndexedStorage {
     }
 }
 
-struct ConsentPolicy(Decisions, Arc<gnap_as::MemoryResourceSetStore>);
+/// The lab's consent rules: its own sessions decide through the browser,
+/// external clients through their registry.
+struct ConsentPolicy(
+    Decisions,
+    Arc<gnap_as::MemoryResourceSetStore>,
+    lab::SharedLabKeys,
+);
+impl ConsentPolicy {
+    fn class(&self, request: &GrantRequest) -> lab::ClientClass {
+        lab::classify(&self.2, &request.client, Instant::now())
+    }
+}
 fn requested_rights(
     request: &GrantRequest,
     resources: &gnap_as::MemoryResourceSetStore,
@@ -458,25 +497,31 @@ fn resolve_rights(
 }
 impl Policy for ConsentPolicy {
     fn token_lifetime(&self, request: &GrantRequest) -> Option<NonZeroU64> {
-        NonZeroU64::new(if request.client.as_value().is_some() {
+        NonZeroU64::new(if self.class(request) == lab::ClientClass::External {
             external_client::LIFETIME
         } else {
             1200
         })
     }
     fn keep_grant_open(&self, request: &GrantRequest) -> bool {
-        request.client.as_value().is_none()
+        self.class(request) != lab::ClientClass::External
             && request.subject.is_none()
             && !push_finish::is_push(request)
     }
     fn evaluate(&self, request: &GrantRequest) -> Decision {
-        if request.client.as_value().is_some() {
-            return self
-                .0
-                .lock()
-                .unwrap()
-                .external
-                .evaluate(request, EvaluationContext::Initial);
+        match self.class(request) {
+            lab::ClientClass::External => {
+                return self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .external
+                    .evaluate(request, EvaluationContext::Initial);
+            }
+            lab::ClientClass::Unknown if request.client.as_value().is_some() => {
+                return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
+            }
+            _ => {}
         }
         if !push_finish::acceptable_request(request, &self.0.lock().unwrap().push, None) {
             return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
@@ -491,8 +536,14 @@ impl Policy for ConsentPolicy {
         }
     }
     fn evaluate_context(&self, request: &GrantRequest, context: EvaluationContext<'_>) -> Decision {
-        if request.client.as_value().is_some() {
-            return self.0.lock().unwrap().external.evaluate(request, context);
+        match self.class(request) {
+            lab::ClientClass::External => {
+                return self.0.lock().unwrap().external.evaluate(request, context);
+            }
+            lab::ClientClass::Unknown if request.client.as_value().is_some() => {
+                return Decision::Deny(gnap_registry::ErrorCode::RequestDenied);
+            }
+            _ => {}
         }
         let grant = match context {
             EvaluationContext::Initial => None,
@@ -548,30 +599,31 @@ impl Policy for ConsentPolicy {
         }
     }
 }
-fn client_id(client: &Client) -> String {
-    client.as_reference().unwrap_or_default().to_owned()
-}
 struct KnownKeys {
     signer: Arc<Ps256Signer>,
     rs_key: gnap_types::key::KeyObject,
     decisions: Decisions,
+    lab: lab::SharedLabKeys,
 }
 impl KeyResolver for KnownKeys {
     fn resolve(&self, client: &Client) -> Option<Box<dyn Verifier>> {
-        if client.as_value().is_some() {
-            return self.decisions.lock().ok()?.external.resolve(client);
-        }
         if client.as_reference() == Some(introspection::RS_ID) {
             return gnap_crypto::Ps256Verifier::from_public_jwk(self.rs_key.jwk.as_ref()?)
                 .ok()
                 .map(|key| Box::new(key) as Box<dyn Verifier>);
         }
-        self.decisions
-            .lock()
-            .unwrap()
-            .clients
-            .contains(&client_id(client))
-            .then(|| Box::new(self.signer.verifier()) as Box<dyn Verifier>)
+        match lab::classify(&self.lab, client, Instant::now()) {
+            // A session by reference proves with the shared key; one that
+            // presents its own key, with that key.
+            lab::ClientClass::Lab(_) => match client.as_value() {
+                None => Some(Box::new(self.signer.verifier()) as Box<dyn Verifier>),
+                Some(value) => gnap_crypto::PublicKey::for_jws(value.key.as_value()?.jwk.as_ref()?)
+                    .ok()
+                    .map(|key| Box::new(key) as Box<dyn Verifier>),
+            },
+            lab::ClientClass::External => self.decisions.lock().ok()?.external.resolve(client),
+            lab::ClientClass::Unknown => None,
+        }
     }
 }
 
@@ -662,6 +714,8 @@ struct App {
 struct Command {
     session: String,
     action: String,
+    /// The proof method a start chose; ignored by other actions.
+    proof: lab::ProofChoice,
     reply: tokio::sync::oneshot::Sender<Result<Value, String>>,
 }
 enum WorkerCommand {
@@ -671,7 +725,14 @@ enum WorkerCommand {
 struct BrowserSession<'a> {
     push: Option<push_finish::Registration>,
     identity: Option<Arc<identity::Identity>>,
-    client: Session<trace::Recording<&'a Network>, &'a Ps256Signer>,
+    client: Session<trace::Recording<&'a Network>, lab::LabSigner<'a>>,
+    /// What the session's client signs with, and over which proof method.
+    key: lab::LabSigner<'a>,
+    proof: lab::ProofChoice,
+    /// The second the last JOSE resource read was signed at: an Ed25519
+    /// signature over the same header and target repeats itself, so a read
+    /// waits for a later second.
+    last_jose_read: u64,
     /// What the client attempted, for the exchange inspector.
     trace: trace::SharedTrace,
     grant_id: GrantId,
@@ -783,7 +844,12 @@ fn consent_complete_choice(
         .lookup(GrantSelector::Interaction(handle))
         .map_err(|_| "Consent storage unavailable")?
         .ok_or("Unknown interaction")?;
-    if snapshot.id != grant || client_id(&snapshot.aggregate.record.request.client) != client {
+    let owner = lab::classify(
+        &storage.lab,
+        &snapshot.aggregate.record.request.client,
+        Instant::now(),
+    );
+    if snapshot.id != grant || owner != lab::ClientClass::Lab(client.to_owned()) {
         return Err("Interaction does not belong to this browser grant".into());
     }
     // Lock order: decisions, then storage. Storage never calls into decisions.
@@ -817,6 +883,25 @@ fn now() -> u64 {
     gnap_types::unix_now()
 }
 
+/// Longest wait for a second later than a JOSE read's last one.
+const FRESH_SECOND_WAIT: Duration = Duration::from_secs(2);
+
+/// The first second of `clock` later than `last`, waited for on the monotonic
+/// clock for at most `budget`: a wall clock set back can't hold the worker.
+fn fresh_second(last: u64, clock: impl Fn() -> u64, budget: Duration) -> Option<u64> {
+    let until = Instant::now() + budget;
+    loop {
+        let second = clock();
+        if second > last {
+            return Some(second);
+        }
+        if Instant::now() >= until {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
     let push_finish = push_finish::view(session.push.as_ref());
     let tokens = session.client.usable_tokens(now());
@@ -832,6 +917,7 @@ fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
         "state": session.state,
         "mode": session.mode.name(),
         "events": session.events,
+        "proof": {"method": session.proof.name(), "alg": gnap_crypto::proof::Signer::algorithm(&session.key)},
         "trace": session.trace.lock().ok().and_then(|trace| serde_json::to_value(&*trace).ok()),
         "rights": rights,
         "tokens": multiple::view(tokens.as_ref()),
@@ -852,9 +938,9 @@ fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
 
 fn client_session<'a>(
     transport: trace::Recording<&'a Network>,
-    signer: &'a Ps256Signer,
+    signer: lab::LabSigner<'a>,
     origin: &str,
-) -> Session<trace::Recording<&'a Network>, &'a Ps256Signer> {
+) -> Session<trace::Recording<&'a Network>, lab::LabSigner<'a>> {
     Session::new(transport, signer, format!("{origin}/gnap"))
         .supporting(&["redirect"])
         .with_finish_timeout(FINISH_TIMEOUT)
@@ -870,6 +956,10 @@ struct Worker {
     references: resource_registration::References,
     /// How long a browser session lives.
     lifetime: Duration,
+    /// Where the tests receive each session key the worker generates, so
+    /// that they can sign as that session's client would.
+    #[cfg(test)]
+    generated: Option<mpsc::Sender<(String, Arc<gnap_crypto::Ed25519Signer>)>>,
 }
 
 fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
@@ -881,6 +971,8 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
         decisions,
         references,
         lifetime,
+        #[cfg(test)]
+        generated,
     } = worker;
     let transport = Network {
         client: reqwest::blocking::Client::builder()
@@ -891,6 +983,7 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
             .expect("HTTP client"),
         origin: origin.clone(),
     };
+    let lab = storage.lab.clone();
     let mut sessions: HashMap<String, BrowserSession<'_>> = HashMap::new();
     loop {
         let received = receiver.recv_timeout(Duration::from_secs(30));
@@ -900,8 +993,10 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
         sessions.retain(|id, session| {
             let live = session.born.elapsed() < lifetime;
             if !live {
+                if let Ok(mut keys) = lab.lock() {
+                    keys.forget(id);
+                }
                 let mut decisions = decisions.lock().unwrap();
-                decisions.clients.remove(id);
                 decisions.push.remove_client(id);
                 decisions.grants.remove(&session.grant_id);
             }
@@ -931,11 +1026,56 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                 if sessions.len() >= MAX_SESSIONS {
                     return Err("Demo busy: 64 active sessions; retry later".into());
                 }
-                decisions
-                    .lock()
-                    .unwrap()
-                    .clients
-                    .insert(command.session.clone());
+                // The session lives from now, and its registration until the
+                // same instant: one monotonic deadline for both.
+                if command.proof.jose().is_some()
+                    && (identity.is_some() || command.action == "start-push")
+                {
+                    return Err("Identity disclosure and push finish use HTTP message signatures in this lab".into());
+                }
+                // A JOSE session proves with a key of its own, generated now,
+                // before anything is registered or sent.
+                let key = match command.proof.jose() {
+                    None => lab::LabSigner::Shared(signer.as_ref()),
+                    Some(_) => {
+                        let id = fresh_nonce().map_err(|_| "Key randomness unavailable")?;
+                        lab::LabSigner::Own(Arc::new(
+                            gnap_crypto::Ed25519Signer::generate(format!("lab-{id}"))
+                                .map_err(|_| "Key generation unavailable")?,
+                        ))
+                    }
+                };
+                let presented = match &key {
+                    lab::LabSigner::Shared(_) => None,
+                    lab::LabSigner::Own(own) => Some(gnap_types::key::KeyObject {
+                        proof: gnap_types::key::Proof::Named(command.proof.method()),
+                        jwk: Some(own.public_jwk().map_err(|_| "Key export unavailable")?),
+                        cert: None,
+                        cert_s256: None,
+                    }),
+                };
+                #[cfg(test)]
+                if let (Some(observer), lab::LabSigner::Own(own)) = (&generated, &key) {
+                    let _ = observer.send((command.session.clone(), own.clone()));
+                }
+                let thumbprint = presented.as_ref().and_then(lab::key_thumbprint);
+                // The session lives from now, and its registration until the
+                // same instant: one monotonic deadline for both.
+                let born = Instant::now();
+                {
+                    let mut keys = lab.lock().map_err(|_| "Lab registry unavailable")?;
+                    match (&presented, thumbprint) {
+                        (None, _) => keys.register_reference(&command.session, born + lifetime),
+                        (Some(presented), Some(thumbprint)) => keys.register_key(
+                            &command.session,
+                            thumbprint,
+                            presented.clone(),
+                            born + lifetime,
+                        ),
+                        (Some(_), None) => Err(lab::RegistrationError::Collision),
+                    }
+                    .map_err(|_| "Demo busy: retry later")?;
+                }
                 let codes = command.action == "start-code";
                 let push = if command.action == "start-push" {
                     Some(
@@ -951,10 +1091,10 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                 let trace = trace::SharedTrace::default();
                 let recording = trace::Recording::new(&transport, origin.clone(), trace.clone());
                 let mut client = if codes {
-                    Session::new(recording, signer.as_ref(), format!("{origin}/gnap"))
+                    Session::new(recording, key.clone(), format!("{origin}/gnap"))
                         .supporting(&["user_code_uri"])
                 } else {
-                    client_session(recording, signer.as_ref(), &origin)
+                    client_session(recording, key.clone(), &origin)
                 };
                 let mode = if command.action == "start-multiple" {
                     multiple::Mode::Multiple
@@ -972,8 +1112,12 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                 } else {
                     json!({"start": ["redirect"], "finish": {"method":"redirect", "uri":format!("{origin}/callback"), "nonce":fresh_nonce().map_err(|e| e.to_string())?}})
                 };
+                // A JOSE session presents its key by value, and nothing else.
+                let client_field = presented
+                    .as_ref()
+                    .map_or_else(|| json!(command.session), |key| json!({"key": key}));
                 let mut grant: GrantRequest = serde_json::from_value(json!({
-                    "client": command.session,
+                    "client": client_field,
                     "access_token": access_token,
                     "interact": interact
                 }))
@@ -1019,11 +1163,14 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                         push,
                         identity,
                         client,
+                        key,
+                        proof: command.proof,
+                        last_jose_read: 0,
                         trace,
                         grant_id,
                         handle,
                         code,
-                        born: Instant::now(),
+                        born,
                         operations: 0,
                         state: "pending",
                         events: vec![
@@ -1274,12 +1421,25 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                     } else {
                         "/resource/folder"
                     };
-                    let request = sign_request(
-                        HttpRequest::new("GET", format!("{origin}{path}")),
-                        signer.as_ref(),
-                        Some(&token),
-                        now(),
-                    )
+                    // The resource read proves with the session's own method.
+                    let read = HttpRequest::new("GET", format!("{origin}{path}"));
+                    let request = match session.proof.jose() {
+                        None => sign_request(read, &session.key, Some(&token), now()),
+                        Some(method) => {
+                            // A later second than the previous read's, so
+                            // that this proof isn't the previous one.
+                            session.last_jose_read =
+                                fresh_second(session.last_jose_read, now, FRESH_SECOND_WAIT)
+                                    .ok_or("The clock went back; retry the read in a moment")?;
+                            gnap_client::sign_jose_request(
+                                read,
+                                method,
+                                &session.key,
+                                Some(&token),
+                                session.last_jose_read,
+                            )
+                        }
+                    }
                     .map_err(|_| "Resource signing failed")?;
                     // The resource read goes through the session's own record.
                     let response =
@@ -1329,12 +1489,31 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
             && multiple::is_start(&command.action)
             && !sessions.contains_key(&command.session)
         {
-            let mut choices = decisions.lock().unwrap();
-            choices.clients.remove(&command.session);
-            choices.push.remove_client(&command.session);
+            if let Ok(mut keys) = lab.lock() {
+                keys.forget(&command.session);
+            }
+            decisions
+                .lock()
+                .unwrap()
+                .push
+                .remove_client(&command.session);
         }
         let _ = command.reply.send(result);
     }
+}
+
+/// Whether a grant request's JSON body names a live session of the lab's as
+/// its client. A body that isn't JSON, or has no such client, doesn't.
+fn lab_session_request(keys: &lab::SharedLabKeys, request: &HttpRequest) -> bool {
+    serde_json::from_slice::<Value>(request.body.as_deref().unwrap_or_default())
+        .ok()
+        .and_then(|body| serde_json::from_value::<Client>(body.get("client")?.clone()).ok())
+        .is_some_and(|client| {
+            matches!(
+                lab::classify(keys, &client, Instant::now()),
+                lab::ClientClass::Lab(_)
+            )
+        })
 }
 
 fn session_cookie(headers: &HeaderMap) -> Option<String> {
@@ -1478,11 +1657,20 @@ async fn resource(
     }
 }
 async fn dispatch(app: &App, session: String, action: String) -> Result<Value, String> {
+    dispatch_with(app, session, action, lab::ProofChoice::default()).await
+}
+async fn dispatch_with(
+    app: &App,
+    session: String,
+    action: String,
+    proof: lab::ProofChoice,
+) -> Result<Value, String> {
     let (reply, receiver) = tokio::sync::oneshot::channel();
     app.commands
         .try_send(WorkerCommand::Browser(Command {
             session: session.clone(),
             action,
+            proof,
             reply,
         }))
         .map_err(|_| "Demo queue full; retry shortly".to_owned())?;
@@ -1503,6 +1691,7 @@ async fn action(
     State(app): State<App>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
+    body: axum::body::Bytes,
 ) -> Response {
     if !browser_origin(&headers, &app.origin) {
         return (
@@ -1539,6 +1728,41 @@ async fn action(
     {
         return StatusCode::NOT_FOUND.into_response();
     }
+    // A start may name its proof method, in a short body read whole; any
+    // other action carries no body.
+    let proof = match (multiple::is_start(action), body.is_empty()) {
+        (_, true) => lab::ProofChoice::default(),
+        // An object, read whole: serde would also read a struct from an array.
+        (true, false)
+            if body.len() <= lab::MAX_START_BODY
+                && body.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') =>
+        {
+            match serde_json::from_slice::<lab::StartBody>(&body) {
+                Ok(start) => start.proof,
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error":"Unknown proof method"})),
+                    )
+                        .into_response()
+                }
+            }
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"Unexpected request body"})),
+            )
+                .into_response()
+        }
+    };
+    if proof.jose().is_some() && matches!(action, "start-identity" | "start-push") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"Identity disclosure and push finish use HTTP message signatures in this lab"})),
+        )
+            .into_response();
+    }
     let session = if multiple::is_start(action) {
         if !matches!(app.bootstrap.get(), Some(Ok(_))) {
             return (
@@ -1560,7 +1784,7 @@ async fn action(
             None => return StatusCode::UNAUTHORIZED.into_response(),
         }
     };
-    let result = dispatch(&app, session.clone(), action.into()).await;
+    let result = dispatch_with(&app, session.clone(), action.into(), proof).await;
     let mut response = match result {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({"error":e}))).into_response(),
@@ -1667,9 +1891,12 @@ async fn protocol(
     };
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        // The external clients' narrow wire profile; the lab's own sessions,
+        // which present their key by value too, follow the lab's rules.
         if uri.path() == "/gnap"
             && request.method == "POST"
             && !external_client::wire_profile(&request)
+            && !lab_session_request(&app.storage.lab, &request)
         {
             return Ok(HttpResponse {
                 status: 400,
@@ -1780,11 +2007,12 @@ async fn main() {
     let storage = Arc::new(IndexedStorage::default());
     let resources = resource_registration::store();
     let server = AuthorizationServer::new(
-        ConsentPolicy(decisions.clone(), resources.clone()),
+        ConsentPolicy(decisions.clone(), resources.clone(), storage.lab.clone()),
         KnownKeys {
             signer: signer.clone(),
             rs_key: introspection::public_key(&rs_signer),
             decisions: decisions.clone(),
+            lab: storage.lab.clone(),
         },
         storage.clone(),
         OsNonces,
@@ -1800,7 +2028,8 @@ async fn main() {
     // the production HTTPS path never opts in to this exception.
     let server = server
         .with_user_code_uri(format!("{origin}/code"))
-        .expect("code entry URI");
+        .expect("code entry URI")
+        .with_jose_proofs(true);
     let server = Arc::new(if origin.starts_with("http:") {
         eprintln!("Development-only HTTP loopback discovery enabled; RFC 9635 §9 requires HTTPS in production.");
         server.with_development_http_discovery()
@@ -1814,6 +2043,7 @@ async fn main() {
         reports_key: introspection::public_key(&reports_signer),
         client_key: introspection::public_key(&signer),
         decisions: decisions.clone(),
+        lab: storage.lab.clone(),
         nonces: MemoryStorage::default(),
         derivation_nonces: MemoryStorage::default(),
         resources,
@@ -1825,6 +2055,7 @@ async fn main() {
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let metadata_client = Arc::new(introspection::ResourceClient {
         origin: origin.clone(),
@@ -1833,6 +2064,7 @@ async fn main() {
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let reports_client = Arc::new(introspection::ResourceClient {
         origin: origin.clone(),
@@ -1841,6 +2073,7 @@ async fn main() {
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let app = App {
         origin: origin.clone(),
@@ -1902,6 +2135,8 @@ async fn main() {
                     decisions,
                     references,
                     lifetime: SESSION_LIFETIME,
+                    #[cfg(test)]
+                    generated: None,
                 },
                 receiver,
             ),
@@ -1921,7 +2156,7 @@ async fn main() {
 fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
     Router::new()
         .route("/", get(|| async { Html(include_str!("../static/index.html")) }))
-        .route("/health", get(|State(app):State<App>| async move { Json(json!({"status":"ok", "bootstrap":resource_registration::state(&app.bootstrap), "profile":"GNAP HTTPSig client/AS demonstrator; not certification"})) }))
+        .route("/health", get(|State(app):State<App>| async move { Json(json!({"status":"ok", "bootstrap":resource_registration::state(&app.bootstrap), "profile":"GNAP client/AS demonstrator with HTTPSig and JWS proofs; not certification"})) }))
         .route("/api/status", get(status))
         .route("/code", get(secondary_device::entry))
         .route("/code/lookup", post(secondary_device::submit).layer(DefaultBodyLimit::max(1024)))
@@ -1929,7 +2164,7 @@ fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
         .route("/code.js", get(|| async { ([("content-type", "text/javascript")], include_str!("../static/code.js")) }))
         // The suite's shared design, from `apps/ui`.
         .route("/assets/gnap.css", get(|| async { ([("content-type", "text/css; charset=utf-8")], include_str!("../../ui/gnap.css")) }))
-        .route("/api/{action}", post(action))
+        .route("/api/{action}", post(action).layer(DefaultBodyLimit::max(lab::MAX_START_BODY)))
         .route("/callback", get(callback))
         .route("/push-callback/{id}", post(push_finish::receive).layer(DefaultBodyLimit::max(1024)))
         .route("/interact/{handle}", get(interaction).post(external_client::submit).layer(DefaultBodyLimit::max(1024)))
@@ -2403,17 +2638,19 @@ mod tests {
                 .unwrap();
         }
         let decisions: Decisions = Arc::default();
-        decisions
+        storage
+            .lab
             .lock()
             .unwrap()
-            .clients
-            .insert("test-client".into());
+            .register_reference("test-client", Instant::now() + SESSION_LIFETIME)
+            .unwrap();
         let server = AuthorizationServer::new(
-            ConsentPolicy(decisions.clone(), resources.clone()),
+            ConsentPolicy(decisions.clone(), resources.clone(), storage.lab.clone()),
             KnownKeys {
                 signer: signer.clone(),
                 rs_key: introspection::public_key(&rs_signer),
                 decisions: decisions.clone(),
+                lab: storage.lab.clone(),
             },
             storage.clone(),
             OsNonces,
@@ -2424,7 +2661,10 @@ mod tests {
                 token_management: format!("{origin}/token"),
             },
         );
-        let server = server.with_user_code_uri(format!("{origin}/code")).unwrap();
+        let server = server
+            .with_user_code_uri(format!("{origin}/code"))
+            .unwrap()
+            .with_jose_proofs(true);
         let server = Arc::new(if origin.starts_with("http:") {
             server.with_development_http_discovery()
         } else {
@@ -2437,6 +2677,7 @@ mod tests {
             reports_key: introspection::public_key(&reports_signer),
             client_key: introspection::public_key(&signer),
             decisions: decisions.clone(),
+            lab: storage.lab.clone(),
             nonces: MemoryStorage::default(),
             derivation_nonces: MemoryStorage::default(),
             resources,
@@ -2451,6 +2692,7 @@ mod tests {
                 origin: origin.into(),
             }),
             nonces: MemoryStorage::default(),
+            jose_replay: introspection::jose_replay(),
         });
         let metadata_client = Arc::new(introspection::ResourceClient {
             origin: origin.into(),
@@ -2459,6 +2701,7 @@ mod tests {
                 origin: origin.into(),
             }),
             nonces: MemoryStorage::default(),
+            jose_replay: introspection::jose_replay(),
         });
         let reports_client = Arc::new(introspection::ResourceClient {
             origin: origin.into(),
@@ -2467,6 +2710,7 @@ mod tests {
                 origin: origin.into(),
             }),
             nonces: MemoryStorage::default(),
+            jose_replay: introspection::jose_replay(),
         });
         App {
             origin: origin.into(),
@@ -2942,6 +3186,8 @@ mod introspection_tests;
 mod multiple_tests;
 #[cfg(test)]
 mod ongoing_tests;
+#[cfg(test)]
+mod proof_tests;
 #[cfg(test)]
 mod registration_tests;
 #[cfg(test)]

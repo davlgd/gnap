@@ -62,6 +62,10 @@ function render(data) {
   const enabled = {start: startable, 'start-identity': startable, 'start-multiple': startable, 'start-code': startable, approve: data.state === 'pending' && !codes, 'approve-reports': data.state === 'pending' && !codes && lot && (data.requested_tokens || []).some(t => t.label === 'reports'), deny: data.state === 'pending' && !codes, continue: continuable && wait === 0, read: documents, 'read-archive': documents, 'read-metadata': documents, 'read-reports': reports, rotate: documents, revoke: documents, 'rotate-reports': reports, 'revoke-reports': reports, 'revoke-grant': data.continuation_open && wait === 0, downscope: changeable && (lot ? (reports || (data.rights || []).includes('synthetic-archive:read')) : (data.rights || []).length > 1), expand: changeable && !complete, 'check-retired':data.retired_token_present};
   for (const button of document.querySelectorAll('[data-action]')) button.disabled = !enabled[button.dataset.action];
   document.querySelector('[data-action="start-push"]').disabled = !startable;
+  lastStartable = startable;
+  lockHttpsigOnly();
+  const proof = data.proof && Object.hasOwn(PROOF_NAMES, data.proof.method) ? data.proof : null;
+  document.querySelector('#proof').textContent = proof ? `${PROOF_NAMES[proof.method]}, ${Object.hasOwn(PROOF_ALGS, proof.alg) ? PROOF_ALGS[proof.alg] : 'Unknown'}` : 'None yet';
   if (push?.expired) for (const action of ['approve', 'deny']) document.querySelector(`[data-action="${action}"]`).disabled = true;
   if (identityLive) identityExpiryTimer = setTimeout(() => { document.querySelector('#identity').textContent = 'The displayed assertion has expired. Refresh the status to verify again.'; }, data.identity.expires_at * 1000 - Date.now());
   // This refreshes only this client's view. It never polls GNAP continuation.
@@ -74,11 +78,18 @@ for (const button of actionButtons) button.addEventListener('click', async () =>
   const before = actionButtons.map(item => item.disabled);
   for (const item of actionButtons) item.disabled = true;
   // The buttons as they were, for an action that renders no new state.
-  const unlock = () => actionButtons.forEach((item, i) => { item.disabled = before[i]; });
+  const unlock = () => {
+    actionButtons.forEach((item, i) => { item.disabled = before[i]; });
+    lockHttpsigOnly();
+  };
   // A new grant starts a new record.
   if (button.dataset.action.startsWith('start')) { shownAttempts = []; document.querySelector('#trace').replaceChildren(); }
   try {
-    const response = await fetch(`/api/${button.dataset.action}`, {method: 'POST', credentials: 'same-origin'});
+    // A start carries the proof method chosen for its grant.
+    const start = button.dataset.action.startsWith('start');
+    const response = await fetch(`/api/${button.dataset.action}`, start
+      ? {method: 'POST', credentials: 'same-origin', headers: {'content-type': 'application/json'}, body: JSON.stringify({proof: chosenProof()})}
+      : {method: 'POST', credentials: 'same-origin'});
     const data = await response.json();
     busy = false;
     generation += 1;
@@ -109,7 +120,7 @@ const LABELS = {
   lane: { authorization_server: 'to-as', documents_server: 'to-documents', reports_server: 'to-reports' },
   route: { grant: '/gnap', continue: '/continue', token_management: '/token/…', folder: '/resource/folder', archive: '/resource/archive', folder_metadata: '/resource/folder-metadata', reports: '/resource/reports' },
   method: { GET: 'GET', POST: 'POST', PATCH: 'PATCH', DELETE: 'DELETE', OPTIONS: 'OPTIONS' },
-  proof: { httpsig: 'HTTP message signature', jws: 'Attached JWS', jwsd: 'Detached JWS', ambiguous: 'Ambiguous: several proof fields', unparsable: 'Present but unparsable', none: 'None' },
+  proof: { httpsig: 'HTTP message signature', jws: 'JWS in the body', jwsd: 'Detached-JWS field', ambiguous: 'Ambiguous: several proof fields', unparsable: 'Present but unparsable', none: 'None' },
   covered: { '@method': '@method', '@target-uri': '@target-uri', 'content-digest': 'content-digest', 'content-type': 'content-type', 'content-length': 'content-length', authorization: 'authorization' },
   alg: { 'rsa-pss-sha512': 'rsa-pss-sha512', 'ecdsa-p256-sha256': 'ecdsa-p256-sha256', ed25519: 'ed25519' },
   digest: { 'sha-256': 'sha-256', 'sha-512': 'sha-512' },
@@ -198,3 +209,22 @@ function renderTrace(trace) {
   dropped.hidden = !(trace && count(trace.dropped));
   dropped.textContent = dropped.hidden ? '' : `${count(trace.dropped)} later exchange(s) not kept: the record keeps the first 64.`;
 }
+
+// The proof the next start uses. HTTP message signatures unless a JOSE
+// method is checked; the identity and push scenarios use them only.
+const PROOF_NAMES = { httpsig: 'HTTP message signatures', jwsd: 'Detached JWS', jws: 'JWS in the body' };
+const PROOF_ALGS = { PS256: 'PS256', EdDSA: 'EdDSA' };
+let lastStartable = false;
+function chosenProof() {
+  if (document.querySelector('#proof-jwsd').checked === true) return 'jwsd';
+  if (document.querySelector('#proof-jws').checked === true) return 'jws';
+  return 'httpsig';
+}
+// While an action runs, every command stays locked, whatever the choice.
+function lockHttpsigOnly() {
+  if (busy) return;
+  for (const action of ['start-identity', 'start-push']) {
+    document.querySelector(`[data-action="${action}"]`).disabled = !lastStartable || chosenProof() !== 'httpsig';
+  }
+}
+for (const id of ['#proof-httpsig', '#proof-jwsd', '#proof-jws']) document.querySelector(id).addEventListener('change', lockHttpsigOnly);

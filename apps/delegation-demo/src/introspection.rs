@@ -22,6 +22,8 @@ pub(super) struct Registration {
     pub reports_key: KeyObject,
     pub client_key: KeyObject,
     pub decisions: Decisions,
+    /// The lab's clients, to know a token's client as live or ended.
+    pub lab: super::lab::SharedLabKeys,
     pub nonces: MemoryStorage,
     pub derivation_nonces: MemoryStorage,
     pub resources: Arc<MemoryResourceSetStore>,
@@ -72,7 +74,17 @@ impl IntrospectionPolicy for Registration {
         token: &TokenRecord,
         minimum: Option<&[AccessItem]>,
     ) -> IntrospectionDecision {
-        if token.client.as_value().is_some() {
+        // The token's client, as the lab knows it now: a session that ended no
+        // longer authorizes its tokens.
+        let class = super::lab::classify(&self.lab, &token.client, std::time::Instant::now());
+        let registered = matches!(class, super::lab::ClientClass::Lab(_));
+        // A live session that presents its own key binds its tokens to it;
+        // the others prove with the application's shared key.
+        let client_key = match (registered, token.client.as_value()) {
+            (true, Some(value)) => value.key.as_value().unwrap_or(&self.client_key),
+            _ => &self.client_key,
+        };
+        if class == super::lab::ClientClass::External {
             if rs.as_reference() != Some(RS_ID)
                 || minimum
                     .is_some_and(|rights| rights != [AccessItem::Reference(FOLDER_READ.into())])
@@ -118,11 +130,6 @@ impl IntrospectionPolicy for Registration {
             // The reports RS knows one right. A token of the documents RS,
             // whatever its label, is not active here; nor is a derived child.
             let expected = vec![AccessItem::Reference(multiple::REPORTS_READ.into())];
-            let registered = self
-                .decisions
-                .lock()
-                .map(|registry| registry.clients.contains(&client_id(&token.client)))
-                .unwrap_or(false);
             let accepted = token.derivation.is_none()
                 && registered
                 && token.token.access.as_ref() == Some(&expected)
@@ -130,12 +137,12 @@ impl IntrospectionPolicy for Registration {
                     .token
                     .key
                     .as_ref()
-                    .is_none_or(|key| key.as_value() == Some(&self.client_key))
+                    .is_none_or(|key| key.as_value() == Some(client_key))
                 && minimum.is_none_or(|rights| rights == expected);
             return if accepted {
                 IntrospectionDecision::Active {
                     access: expected,
-                    key: Some(self.client_key.clone()),
+                    key: Some(client_key.clone()),
                 }
             } else {
                 IntrospectionDecision::Inactive
@@ -147,11 +154,6 @@ impl IntrospectionPolicy for Registration {
         let Some(access) = token.token.access.as_ref() else {
             return IntrospectionDecision::Inactive;
         };
-        let registered = self
-            .decisions
-            .lock()
-            .map(|registry| registry.clients.contains(&client_id(&token.client)))
-            .unwrap_or(false);
         if rs.as_reference() != Some(RS_ID)
             || token.derivation.is_some()
             || !registered
@@ -159,7 +161,7 @@ impl IntrospectionPolicy for Registration {
                 .token
                 .key
                 .as_ref()
-                .is_some_and(|key| key.as_value() != Some(&self.client_key))
+                .is_some_and(|key| key.as_value() != Some(client_key))
             || access.is_empty()
             || !access.iter().all(known)
             || minimum.is_some_and(|rights| {
@@ -173,7 +175,7 @@ impl IntrospectionPolicy for Registration {
         }
         IntrospectionDecision::Active {
             access: access.clone(),
-            key: Some(self.client_key.clone()),
+            key: Some(client_key.clone()),
         }
     }
 }
@@ -183,6 +185,18 @@ pub(super) struct ResourceClient {
     pub signer: Arc<Ps256Signer>,
     pub transport: Arc<Transport>,
     pub nonces: MemoryStorage,
+    /// The `jws` and `jwsd` proofs this resource server accepted, for as long
+    /// as the application runs: never one per request.
+    pub jose_replay: gnap_crypto::ReplayCache,
+}
+
+/// Most JOSE proofs one resource server remembers.
+pub(super) const MAX_RS_JOSE_PROOFS: usize = 4096;
+
+/// A resource server's memory of the JOSE proofs it accepted, over the window
+/// the resource server SDK allows a proof's time to drift.
+pub(super) fn jose_replay() -> gnap_crypto::ReplayCache {
+    gnap_crypto::ReplayCache::new(MAX_RS_JOSE_PROOFS, gnap_rs::MAX_CLOCK_SKEW)
 }
 
 #[derive(Clone, Copy)]
@@ -356,7 +370,8 @@ impl ResourceClient {
             self.signer.as_ref(),
             &nonces,
             &gnap_rs::AudiencePolicy::IntrospectionContext,
-        );
+        )
+        .with_jose_proofs(&self.jose_replay);
         // The SDK verifies trust, binding and presentation. This application
         // additionally retains its existing, deliberately narrow token profile.
         let policy = |token: &gnap_rs::TokenInfo<'_>| {

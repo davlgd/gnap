@@ -8,14 +8,21 @@
 <main class="wide">
 <h1>Delegate access to a folder, then change your mind</h1>
 <p class="lede">A client asks for read access to a synthetic folder and archive. You decide as the resource owner, then watch what each choice does to the grant and its tokens.</p>
-<div class="note"><p><strong>A public sandbox with synthetic data.</strong> It shows a restricted GNAP profile with HTTP message signatures, not complete coverage or a certification. The client, the authorization server and the resource servers run in one deployment, but they exchange real signed HTTP requests.</p></div>
+<div class="note"><p><strong>A public sandbox with synthetic data.</strong> It shows a restricted GNAP profile with HTTP message signatures or JWS proofs, not complete coverage or a certification. The client, the authorization server and the resource servers run in one deployment, but they exchange real signed HTTP requests.</p></div>
 
 <div class="bench">
 <div class="bench-tools">
 
 <section id="scenario" class="panel step" aria-labelledby="scenario-title">
 <h2 id="scenario-title"><span class="step-number">1</span>Choose a scenario</h2>
-<p>Every scenario starts a fresh grant request from the client. No client secret reaches your browser: all visitors share the application's one signing key, generated when it starts, so this shows how a key is bound, not one key per visitor.</p>
+<p>Every scenario starts a fresh grant request from the client. No client secret or private key reaches your browser.</p>
+<fieldset class="proofs">
+<legend>Proof for the next start</legend>
+<label class="inline"><input type="radio" name="proof" id="proof-httpsig" value="httpsig" checked> HTTP message signatures, with the application's one PS256 key, which every visitor shares</label>
+<label class="inline"><input type="radio" name="proof" id="proof-jwsd" value="jwsd"> Detached JWS, with an EdDSA key the session generates for itself</label>
+<label class="inline"><input type="radio" name="proof" id="proof-jws" value="jws"> JWS in the request body, with an EdDSA key the session generates for itself</label>
+<p class="hint">The method holds for the whole grant: to change it, start again. Identity disclosure and the server-to-client callback use HTTP message signatures in this lab.</p>
+</fieldset>
 <ul class="scenarios">
 <li><div><h3>Consent in this browser</h3><p>The client asks for the folder and the archive, and you decide on the authorization server's page.</p></div><button data-action="start" aria-label="Start: Consent in this browser" class="primary">Start</button></li>
 <li><div><h3>Consent on a second screen</h3><p>You enter a short code in another browser instead of following a redirect, and the client polls for your decision.</p></div><button data-action="start-code" aria-label="Start: Consent on a second screen">Start</button></li>
@@ -58,6 +65,7 @@
 <h2 id="grant-title">Grant state</h2>
 <dl class="facts">
 <dt>State</dt><dd><strong id="state" class="state">Loading…</strong></dd>
+<dt>Proof</dt><dd id="proof">None yet</dd>
 <dt>Live rights</dt><dd><code id="current-rights">None</code></dd>
 <dt>Live tokens</dt><dd><code id="tokens">None</code></dd>
 <dt>Identity</dt><dd id="identity">Identity was not requested.</dd>
