@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GNAP delegation lab</title><link rel="stylesheet" href="/assets/gnap.css"><script src="/app.js" defer></script></head>
 <body>
 <header class="site-header">
-<a class="wordmark" href="/">GNAP delegation lab<small>a client, an authorization server and two resource servers</small></a>
+<a class="wordmark" href="/">GNAP delegation lab<small>a client, an authorization server and three resource servers</small></a>
 <nav class="site-nav" aria-label="Lab"><a href="#scenario">Scenario</a><a href="#consent">Consent</a><a href="#use">Use</a><a href="#change">Change</a><a href="#grant">Grant state</a></nav>
 </header>
 <main class="wide">
@@ -17,27 +17,28 @@
 <h2 id="scenario-title"><span class="step-number">1</span>Choose a scenario</h2>
 <p>Every scenario starts a fresh grant request from the client. No client secret reaches your browser: all visitors share the application's one signing key, generated when it starts, so this shows how a key is bound, not one key per visitor.</p>
 <ul class="scenarios">
-<li><div><h3>Consent in this browser</h3><p>The client asks for the folder and the archive, and you decide on the authorization server's page.</p></div><button data-action="start" class="primary">Start</button></li>
-<li><div><h3>Consent on a second screen</h3><p>You enter a short code in another browser instead of following a redirect, and the client polls for your decision.</p></div><button data-action="start-code">Start</button></li>
-<li><div><h3>Two tokens in one request</h3><p>One consent covers a documents token and a reports token, which you can approve together or approve the reports one alone.</p></div><button data-action="start-multiple">Start</button></li>
-<li><div><h3>Disclose a fictional identity</h3><p>The client also asks who the resource owner is, and receives a signed assertion about the sandbox's one fictional subject. HTTPS only.</p></div><button data-action="start-identity">Start</button></li>
-<li><div><h3>Finish with a server-to-client callback</h3><p>Consent happens in this browser, but the authorization server sends the finish notification straight to the client over HTTP.</p></div><button data-action="start-push">Start</button></li>
+<li><div><h3>Consent in this browser</h3><p>The client asks for the folder and the archive, and you decide on the authorization server's page.</p></div><button data-action="start" aria-label="Start: Consent in this browser" class="primary">Start</button></li>
+<li><div><h3>Consent on a second screen</h3><p>You enter a short code in another browser instead of following a redirect, and the client polls for your decision.</p></div><button data-action="start-code" aria-label="Start: Consent on a second screen">Start</button></li>
+<li><div><h3>Two tokens in one request</h3><p>One consent covers a documents token and a reports token, which you can approve together or approve the reports one alone.</p></div><button data-action="start-multiple" aria-label="Start: Two tokens in one request">Start</button></li>
+<li><div><h3>Disclose a fictional identity</h3><p>The client also asks who the resource owner is, and receives a signed assertion about the sandbox's one fictional subject. HTTPS only.</p></div><button data-action="start-identity" aria-label="Start: Disclose a fictional identity">Start</button></li>
+<li><div><h3>Finish with a server-to-client callback</h3><p>Consent happens in this browser, but the authorization server sends the finish notification straight to the client over HTTP.</p></div><button data-action="start-push" aria-label="Start: Finish with a server-to-client callback">Start</button></li>
 </ul>
+<p><a class="to-report" href="#grant">Go to the grant state</a></p>
 <p id="identity-consent" class="hint" hidden>Allowing this request also discloses the fictional subject to this application, as opaque and issuer-and-subject identifiers and a five-minute ID Token. Denying releases neither the identity nor a token. Approval closes the grant's continuation: its resource token can still be used or revoked, but the grant can't be changed or polled.</p>
 </section>
 
 <section id="consent" class="panel step" aria-labelledby="consent-title">
 <h2 id="consent-title"><span class="step-number">2</span>Decide as the resource owner</h2>
 <p>Requested rights: <code id="requested-rights">Loading…</code>. None of them writes or deletes anything. This is a consent exercise, not a signed-in account.</p>
-<div class="actions"><button data-action="approve" class="primary">Allow this exact request</button><button data-action="approve-reports">Allow the reports token only</button><button data-action="deny">Deny</button><button data-action="continue">Continue after the callback</button></div>
-<p class="hint">Complete consent and the callback within five minutes, or start a fresh request; a callback already validated stays usable. The client waits for the authorization server's wait period before continuing, and polling an approved grant issues no other token.</p>
+<div class="actions"><button data-action="approve" class="primary">Allow this exact request</button><button data-action="approve-reports">Allow the reports token only</button><button data-action="deny">Deny</button><button data-action="continue">Continue after the callback</button><a class="to-report" href="#grant">Go to the grant state</a></div>
+<p class="hint">After a redirect or a push, complete consent and the callback within five minutes, or start a fresh request; a callback already validated stays usable. On a second screen, the code lasts ten minutes and there is no callback: come back and poll. The client waits for the authorization server's wait period before continuing, and polling an approved grant issues no other token.</p>
 </section>
 
 <section id="use" class="panel step" aria-labelledby="use-title">
 <h2 id="use-title"><span class="step-number">3</span>Use the access</h2>
 <p>Each resource server asks the authorization server about the token, with its own key (RFC 9767), then checks the caller's signature, the exact right, and the expiry. Neither token values nor private keys ever reach this page.</p>
 <div class="actions"><button data-action="read" class="primary">Read the folder</button><button data-action="read-archive">Try the archive</button><button data-action="read-metadata">Read metadata through a second server</button><button data-action="read-reports">Read the reports</button></div>
-<div class="actions"><button data-action="rotate">Rotate the token</button><button data-action="revoke">Revoke the token</button><button data-action="rotate-reports">Rotate the reports token</button><button data-action="revoke-reports">Revoke the reports token</button><button data-action="check-retired">Prove the retired token is refused</button></div>
+<div class="actions"><button data-action="rotate">Rotate the token</button><button data-action="revoke">Revoke the token</button><button data-action="rotate-reports">Rotate the reports token</button><button data-action="revoke-reports">Revoke the reports token</button><button data-action="check-retired">Prove the retired token is refused</button><a class="to-report" href="#grant">Go to the grant state</a></div>
 <pre id="resource" class="output">No resource has been read yet.</pre>
 <details><summary>What each action does</summary>
 <p class="hint">Two tokens from one request each have their own rights, resource server and management: rotating or revoking one leaves the other alone, and neither works at the other's resource. The metadata read lets the folder server obtain a separate token for a second server, with one read right, bound to the folder server's key, for at most 60 seconds; the folder server tries to revoke it after the call. An exchange that can't complete refuses access for now with 503, which differs from a refused token or proof (401). Parent tokens and browser sessions last at most 20 minutes.</p>
@@ -47,7 +48,7 @@
 <section id="change" class="panel step" aria-labelledby="change-title">
 <h2 id="change-title"><span class="step-number">4</span>Change or end the grant</h2>
 <p>A reduction within the live rights is approved directly; an expansion asks you again, and the earlier tokens keep working until you decide. Approving replaces them all. A denial closes the continuation without revoking those earlier tokens.</p>
-<div class="actions"><button data-action="downscope">Keep the folder only</button><button data-action="expand">Ask for the folder and the archive</button><button data-action="revoke-grant">Revoke the whole grant</button></div>
+<div class="actions"><button data-action="downscope">Keep the folder only</button><button data-action="expand">Ask for the folder and the archive</button><button data-action="revoke-grant">Revoke the whole grant</button><a class="to-report" href="#grant">Go to the grant state</a></div>
 <p class="hint">You can cancel a pending request, or revoke an approved grant, while its continuation is open and once the wait period has passed.</p>
 </section>
 
@@ -62,9 +63,10 @@
 <dt>Identity</dt><dd id="identity">Identity was not requested.</dd>
 </dl>
 <div id="device-code" class="note" hidden><p>Open <strong id="code-uri"></strong> in another browser profile or a private window, and enter <strong id="user-code"></strong> there to decide. Don't add the code to the address. On loopback this only works on this machine. The code expires after ten minutes; come back here and continue to poll once you've decided.</p></div>
-<div id="push-finish" class="note" hidden><p id="push-status"></p><p class="hint">There is one delivery attempt, with no retry and no fallback to polling: a lost callback needs a fresh request.</p></div>
+<div id="push-finish" class="note" hidden><p id="push-status"></p><p class="hint">This page refreshes the client's own status only. Continuing becomes possible once the client validates the callback and the wait period has passed. Approval closes the continuation after the token is issued: the token still works and can be revoked, but the grant can no longer be changed or polled. There is one delivery attempt, with no retry and no fallback to polling: a lost callback needs a fresh request.</p></div>
 <p id="error" class="error" role="alert"></p>
-<h3>Observed steps</h3>
+<h3>Recorded steps</h3>
+<p class="hint">The application's record of the exchanges it completed, in order. It isn't an exhaustive trace: a failed exchange may leave no entry, and refreshing this page's status isn't a GNAP poll.</p>
 <ol id="events" class="timeline"></ol>
 <p class="fine">An in-memory sandbox: a restart ends every session and token. Only this application's own endpoints are called.</p>
 </aside>
