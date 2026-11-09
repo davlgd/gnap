@@ -170,7 +170,7 @@ has been implemented.
 
 A change is ready after relevant tests pass, its application scenario works where
 applicable, its documentation describes the actual support, and its reviews and
-CI satisfy the [merge gate](../CONTRIBUTING.md#review-and-publication).
+CI satisfy the [merge gate](../CONTRIBUTING.md#review-and-merge).
 Coordinated consumer feedback is not independent-vendor interoperability.
 This matrix alone does not establish complete GNAP, either interoperability
 profile, or production readiness.

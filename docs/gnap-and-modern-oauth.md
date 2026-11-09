@@ -27,7 +27,7 @@ guarantee. GNAP is a separate protocol, not a wire-compatible OAuth upgrade.
 ## Eight comparisons worth testing
 
 | Concern | GNAP mechanism | Modern OAuth counterpart | What we should establish |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Evolving authorization | A continuing grant can be updated and re-evaluated through its continuation API. [RFC 9635 §5](https://www.rfc-editor.org/rfc/rfc9635.html#section-5) | Authorization and refresh flows, plus extensions such as [RAR](https://www.rfc-editor.org/rfc/rfc9396.html) and [Token Exchange](https://www.rfc-editor.org/rfc/rfc8693.html), support related workflows, but are not that same continuation contract. | Whether one explicit grant lifecycle reduces application coordination. Do not call a rights-changing update simple token refresh. |
 | Interaction choices | Interaction start and finish capabilities are negotiated separately within the grant. [RFC 9635 §2.5](https://www.rfc-editor.org/rfc/rfc9635.html#section-2.5) | [Device Authorization](https://www.rfc-editor.org/rfc/rfc8628.html) supports constrained devices; [OpenID CIBA](https://openid.net/specs/openid-client-initiated-backchannel-authentication-core-1_0.html) supports decoupled authentication and poll/ping/push delivery. CIBA is an OpenID specification, not an IETF RFC or an exact GNAP equivalent. | Reuse across browser and device applications, not a claim that OAuth requires a browser redirect everywhere. |
 | Proof of possession | Key-bound access tokens are the default; bearer tokens remain possible. [RFC 9635 §11.9](https://www.rfc-editor.org/rfc/rfc9635.html#section-11.9) | [DPoP, RFC 9449](https://www.rfc-editor.org/rfc/rfc9449.html), and [mTLS, RFC 8705](https://www.rfc-editor.org/rfc/rfc8705.html), already sender-constrain OAuth tokens. DPoP is not itself client authentication. | Consistency and usability of key binding throughout our APIs. Token theft resistance is not exclusive to GNAP. |
@@ -79,7 +79,7 @@ subsequent implementations, including multi-token issuance and downstream
 derivation. Use synthetic data and isolated test credentials throughout.
 
 | Experiment | Observable success and negative cases | Further work and checks |
-|---|---|---|
+| --- | --- | --- |
 | Document workspace with progressive privileges | Start read-only; request editing when the user selects Edit. Record a new approval decision, reject editing before approval, and reject a stale callback after the request changes. | Extend the synthetic two-resource read policy to actual editing and its authorization rules. |
 | Browser and terminal clients for the same API | Complete browser approval, then operate a terminal client without a callback listener. Record polling limits and cancellation; later add a genuine secondary-device code flow. | A terminal consumer; code-based interaction remains a separate unimplemented step. |
 | Request-integrity laboratory | Change only the body, query, method or authorization value after signing; each invalid presentation is rejected. Replay an otherwise valid request and present the token with a different key. | Build a visitor-facing runner from the existing signature and HTTP tests, with explicit target authorization. |

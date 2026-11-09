@@ -31,7 +31,7 @@ change the checks or retroactively constitute a new network observation.
 Result: **8 pass, 0 fail, 5 not_tested**, with `certification: false`:
 
 | Checks | Result | Interpretation |
-|---|---|---|
+| --- | --- | --- |
 | HTTP status, media type, JSON object, unique top-level members | Pass | Expected successful OPTIONS response; HTTP 200 and unique members include explicitly labelled diagnostic-profile rules. |
 | HTTPS endpoint syntax and exact queried-URL identity | Pass | The announced URL matches the actual configured HTTPS target. |
 | `key_proofs_supported` | Pass | Announced `httpsig` occurs in registry data; its execution was not tested. |
