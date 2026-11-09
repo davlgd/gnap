@@ -12,6 +12,10 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** a response must carry exactly one `Content-Type` field naming `application/json`, as RFC 9635 §3 requires: the session refuses a missing field.
 
+**Breaking:** a second `Session::start` that declares another proof method than the first is refused before anything is sent: a grant keeps the method it started with.
+
+A session proves its requests with the method its `client.key` declares: `httpsig` as before, or `jws` and `jwsd`, for which the JWK's `alg` and `kid` must be the signer's and the proof takes no parameters. A key named by reference keeps `httpsig`. `rotate_key` refuses to change a key that a session proves with `jws` or `jwsd`, and `sign_request` keeps proving with `httpsig`.
+
 `HttpTransport` is implemented for `&T`, `Box<T>`, and `Arc<T>`. `Session::verify_subject` takes a signer of any supported algorithm, requiring `S: JwkSigner` instead of `Borrow<Ps256Signer>`, and a key change accepts a public PS256, ES256, or Ed25519 JWK.
 
 ### gnap-as
