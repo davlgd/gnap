@@ -1,11 +1,31 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GNAP message diagnostics</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
-<body><main>
-<h1>GNAP message diagnostics</h1>
-<p><a href="/lifecycle">Run an operator-approved authenticated lifecycle scenario</a></p>
-<p>Inspect an imported GNAP message, AS discovery response or RFC 9767 RS-facing message. A passing check is <strong>not a certification</strong> of an AS, RS or client. Core-message checks share SDK validators. AS discovery and RFC 9767 imports use separate HTTP/JSON assertions and shared registry data, not the SDK validators; the optional digest check shares <code>gnap-crypto</code>. Neither is a complete independent protocol implementation.</p>
-<aside><strong>Test data only.</strong> Do not paste production access tokens, private keys, personal data or full authenticated traces. Imports are sent to this server over HTTPS in deployment. The application does not persist or log them; hosting infrastructure is outside this promise. Your browser may retain form contents.</aside>
-<label for="kind">Message or comparison type</label>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GNAP workbench</title><link rel="stylesheet" href="/assets/gnap.css"><script src="/assets/gnap.js" defer></script><script src="/app.js" defer></script></head>
+<body>
+<header class="site-header">
+<a class="wordmark" href="/">GNAP workbench<small>for authorization servers, resource servers and clients</small></a>
+<nav class="site-nav" aria-label="Workbench"><a href="/inspect">Inspect a message</a><a href="/probe">Probe an endpoint</a><a href="/lifecycle">Run a lifecycle</a><a href="#cli">Command line</a></nav>
+</header>
+<main class="wide">
+<h1>Check what a GNAP server does, clause by clause</h1>
+<p class="lede">Each check names the RFC 9635 or RFC 9767 clause it tests. Passing them is not a certification: each check covers only what its detail states, not GNAP conformance as a whole.</p>
+
+<table class="tasks">
+<thead><tr><th scope="col">Task</th><th scope="col">What it sends</th></tr></thead>
+<tbody>
+<tr><td><a href="#inspect">Inspect a captured message</a><p>A grant request or response, a discovery document, or an RFC 9767 message you paste here.</p></td><td><span class="sends" data-sends="nothing">Only your paste, to this workbench</span></td></tr>
+<tr><td><a href="#probe-endpoint">Probe an approved endpoint</a><p>One malformed grant request, or one discovery request, to a target the operator approved.</p></td><td><span class="sends" data-sends="unsigned">One unsigned request</span></td></tr>
+<tr><td><a href="/lifecycle">Run a signed lifecycle</a><p>A grant from its request to its revocation, with your decision at the authorization server.</p></td><td><span class="sends" data-sends="signed">Signed requests</span></td></tr>
+<tr><td><a href="#cli">Use the command line</a><p>The same checks against a server you choose, from your terminal or CI.</p></td><td><span class="sends" data-sends="signed">Depends on the command</span></td></tr>
+</tbody>
+</table>
+
+<div class="bench">
+<div class="bench-tools">
+<section id="inspect" class="panel" aria-labelledby="inspect-title">
+<h2 id="inspect-title">Inspect a captured message</h2>
+<p>Core GNAP messages go through the SDK's own validators. AS discovery and RFC 9767 messages get separate HTTP and JSON assertions on shared registry data, and the optional digest check uses <code>gnap-crypto</code>. None of these is a complete independent implementation.</p>
+<div class="note"><p><strong>Use test data only.</strong> Don't paste production tokens, private keys, personal data, or whole authenticated traces. Imports reach this server over HTTPS when it is deployed; it neither stores nor logs them, though its hosting is outside that promise, and your browser may keep form contents.</p></div>
+<label for="kind">Message type</label>
 <select id="kind">
 <option value="grant_request">Grant request</option>
 <option value="grant_response">Grant response</option>
@@ -21,20 +41,53 @@
 <option value="derivation_response">Grant response to a derivation request (RFC 9767)</option>
 <option value="token_exchange">Token labels: request/response pair (local diagnostic)</option>
 </select>
-<p id="kind-help">Select the message actually captured. Request and response checks are distinct.</p>
-<p>Derivation imports inspect selected grant-message fields only. They do not prove parent-token validity, RS1 authentication, downstream rights, audience or revocation linkage. Continuation, interaction and error responses are not successful issuance observations.</p>
-<p>Token-label comparison takes a local <code>{"request":{...},"response":{...}}</code> pair, not a GNAP wire message. It checks label relationships, not the pair's authenticity, effective rights or token lifecycle. Headers, digest and comparison context do not apply.</p>
-<div id="discovery-context" hidden><label for="queried-endpoint">Exact URL queried for discovery (optional; never fetched)</label><input id="queried-endpoint" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="https://test-as.example/gnap"><label for="http-status">Captured HTTP status (optional)</label><input id="http-status" type="number" min="100" max="599" inputmode="numeric"><p>Missing context is not tested. Optional capability lists may be omitted. HTTP loopback remains a development deviation, not a conformant discovery endpoint.</p></div>
-<label for="body">Exact JSON body (32 KiB UTF-8 maximum)</label><textarea id="body" rows="12" spellcheck="false" autocomplete="off">{"client":"demo-client","access_token":{"access":["example-read"]}}</textarea>
-<label for="headers">Captured headers as JSON pairs (optional; leave blank if not captured)</label><textarea id="headers" rows="3" spellcheck="false" autocomplete="off" placeholder='[["Cache-Control","no-store"]]'></textarea>
-<div id="digest-context"><label for="digest">Content-Digest value (optional; verified against exact body bytes)</label><input id="digest" autocomplete="off" spellcheck="false"></div>
-<details id="context-section" hidden><summary>Optional caller-declared comparison context</summary><p>This is your declaration, not verified network or token evidence. No URL is fetched. Leave blank when unknown. Context cannot override a contradiction in the message.</p><label for="rs-context">Context JSON object</label><textarea id="rs-context" rows="3" spellcheck="false" autocomplete="off" aria-describedby="context-help"></textarea><p id="context-help"></p></details>
-<div class="actions"><button id="analyze" type="button">Analyze import</button><button id="fixture" type="button">Load invalid continuation example</button><button id="token-fixture" type="button">Load partial token approval example</button><button id="discovery-fixture" type="button">Load AS discovery example</button><button id="clear" type="button">Clear inputs and report</button><button id="download" type="button" disabled>Download report</button></div>
-<p id="summary" role="status" aria-live="polite"></p><section id="report" aria-label="Check results"></section>
-<h2>Bounded live AS/RS tests</h2><p>Only exact endpoints preapproved by this service's operator are available. Choose a rejection test (AS malformed grant or RS credential-free GET), or AS discovery (one OPTIONS request). No redirects or credentials. Rejection alone cannot prove a working grant; discovery declarations cannot prove working capabilities. Global shared cooldown: 60 seconds per process across all operations. You cannot supply an arbitrary URL.</p>
+<p id="kind-help" class="hint">Select the message actually captured. Request and response checks are distinct.</p>
+<div id="discovery-context" hidden><label for="queried-endpoint">Exact URL queried for discovery (optional, never fetched)</label><input id="queried-endpoint" class="code" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="https://test-as.example/gnap"><label for="http-status">Captured HTTP status (optional)</label><input id="http-status" type="number" min="100" max="599" inputmode="numeric"><p class="hint">Missing context isn't tested, and optional capability lists may be omitted. HTTP on loopback is a development deviation, not a conformant discovery endpoint.</p></div>
+<label for="body">Exact JSON body (32 KiB of UTF-8 at most)</label><textarea id="body" rows="12" spellcheck="false" autocomplete="off">{"client":"demo-client","access_token":{"access":["example-read"]}}</textarea>
+<label for="headers">Captured headers as JSON pairs (optional)</label><textarea id="headers" rows="3" spellcheck="false" autocomplete="off" placeholder='[["Cache-Control","no-store"]]'></textarea>
+<div id="digest-context"><label for="digest">Content-Digest value (optional, checked against the exact body bytes)</label><input id="digest" class="code" autocomplete="off" spellcheck="false"></div>
+<details id="context-section" hidden><summary>Optional caller-declared comparison context</summary><p class="hint">This is your declaration, not verified network or token evidence. No URL is fetched. Leave it blank when unknown: context can't override a contradiction in the message.</p><label for="rs-context">Context JSON object</label><textarea id="rs-context" rows="3" spellcheck="false" autocomplete="off" aria-describedby="context-help"></textarea><p id="context-help" class="hint"></p></details>
+<p class="hint">Derivation imports inspect selected grant-message fields only: they don't prove the parent token's validity, RS1's authentication, downstream rights, audience, or revocation. Continuation, interaction and error responses aren't observations of a successful issuance. The token-label pair is a local <code>{"request":{...},"response":{...}}</code> object, not a GNAP wire message.</p>
+<div class="actions"><button id="analyze" type="button" class="primary">Analyze the message</button><button id="fixture" type="button">Load an invalid continuation</button><button id="token-fixture" type="button">Load a partial token approval</button><button id="discovery-fixture" type="button">Load an AS discovery document</button><button id="clear" type="button">Clear inputs and report</button><a class="to-report" href="#results">Go to the report</a></div>
+</section>
+
+<section id="probe-endpoint" class="panel" aria-labelledby="probe-title">
+<h2 id="probe-title">Probe an approved endpoint</h2>
+<p>Only the exact endpoints this service's operator approved are offered, and you can't supply another URL. A probe sends either a malformed grant to an AS, an unauthenticated GET to an RS, or one OPTIONS discovery request to an AS, without redirects or credentials. A refusal doesn't prove that a grant works, and a discovery document doesn't prove its capabilities.</p>
 <label for="target">Operator-approved target</label><select id="target" disabled><option>No targets loaded</option></select>
-<label for="operation">Test operation</label><select id="operation"><option value="rejection">Reject an unauthenticated/malformed request</option><option value="as_discovery">AS discovery — OPTIONS (AS targets only)</option></select>
-<label><input id="consent" type="checkbox"> I authorize this single test against the selected test endpoint.</label><button id="probe" type="button" disabled>Run bounded AS/RS test</button>
-<h2>Limits of these diagnostics</h2><p>Imports and unsigned probes do not verify signatures, replay protection, consent, token lifecycle, authenticated introspection or effective rights. The separate, opt-in authenticated lifecycle scenario exercises selected synthetic-resource outcomes after manual consent. It still reuses the client SDK and does not certify an AS, RS or client. AS discovery checks the document, not execution of advertised features. RFC 9767 imports inspect message shapes and declared comparisons only; an imported <code>active: true</code> does not prove a token is active. Resource registration imports do not prove registration, reference resolution, compatible token formats or introspection support for the RS. Absent optional fields and unknown registry names produce <code>not_tested</code> with different explanations; neither is silently certified. No imported URL is fetched. Live probes check normal TLS certificate verification only, not a complete TLS security audit.</p>
-<p>References: <a href="https://www.rfc-editor.org/rfc/rfc9635.html" rel="noreferrer">RFC 9635</a>, <a href="https://www.rfc-editor.org/rfc/rfc9767.html" rel="noreferrer">RFC 9767</a>, <a href="https://www.iana.org/assignments/gnap/" rel="noreferrer">IANA GNAP registries</a>, and <a href="https://www.iana.org/assignments/secevent/#subject-identifier-formats" rel="noreferrer">IANA Subject Identifier Formats</a>.</p>
-</main></body></html>
+<label for="operation">Request to send</label><select id="operation"><option value="rejection">Reject an unauthenticated or malformed request</option><option value="as_discovery">AS discovery with OPTIONS (AS targets only)</option></select>
+<label class="inline"><input id="consent" type="checkbox"> I authorize this single request to the selected test endpoint.</label>
+<div class="actions"><button id="probe" type="button" class="primary" disabled>Send the request</button><a class="to-report" href="#results">Go to the report</a></div>
+<p class="hint">One request every 60 seconds across all visitors and operations of this server.</p>
+</section>
+
+</div>
+<section id="results" class="panel bench-report" aria-labelledby="results-title">
+<h2 id="results-title">Report</h2>
+<p id="summary" class="summary" role="status" aria-live="polite"></p>
+<div class="report-head"><ul id="tally" class="tally" aria-label="Checks in report order"></ul><div id="filters" class="filters" role="group" aria-label="Show checks" hidden><button id="filter-all" type="button" aria-pressed="true">All</button><button id="filter-pass" type="button" aria-pressed="false">Passed</button><button id="filter-fail" type="button" aria-pressed="false">Failed</button><button id="filter-not_tested" type="button" aria-pressed="false">Not tested</button></div></div>
+<p id="report-empty" class="empty">Analyze a message or send a probe: its checks appear here.</p>
+<section id="report" class="checks" aria-label="Check results"></section>
+<p id="filter-empty" class="empty" hidden>No check in this report has that status.</p>
+<div class="actions"><button id="download" type="button" disabled>Download the report as JSON</button></div>
+</section>
+</div>
+
+<section id="cli" aria-labelledby="cli-title">
+<h2 id="cli-title">Run the same checks from a terminal</h2>
+<p>The <code>gnap-conformance</code> command prints the same findings as text or JSON, and its exit code tells failed (1) from inconclusive (2). It reaches the server you name, which makes it the tool for your own authorization server and for CI.</p>
+<pre class="command">cargo run --manifest-path apps/conformance-web/Cargo.toml --bin gnap-conformance -- \
+  discover https://as.example/gnap</pre>
+<pre class="command">gnap-conformance probe https://as.example/gnap --json</pre>
+<pre class="command">gnap-conformance lifecycle https://as.example/gnap --proof jwsd --alg EdDSA --access read</pre>
+<p>The <a href="https://github.com/davlgd/gnap/blob/main/apps/conformance-web/README.md#check-a-server-from-the-command-line" rel="noreferrer">workbench guide</a> lists every option and what each command sends.</p>
+</section>
+
+<section aria-labelledby="limits-title">
+<h2 id="limits-title">What these checks don't establish</h2>
+<p>Imports and unsigned probes don't verify signatures, replay protection, consent, a token's lifecycle, authenticated introspection, or effective rights. The signed lifecycle exercises selected outcomes on a synthetic resource after your consent; it reuses the client SDK and doesn't certify an AS, an RS, or a client.</p>
+<p>AS discovery checks the document, not the advertised features. RFC 9767 imports inspect message shapes and the comparisons you declare: an imported <code>active: true</code> doesn't prove that a token is active, and a resource registration doesn't prove that a reference resolves. Absent optional fields and unknown registry names are reported as not tested, each with its own explanation. No imported URL is fetched, and probes check TLS certificate validation only, not a TLS audit.</p>
+<p class="fine">References: <a href="https://www.rfc-editor.org/rfc/rfc9635.html" rel="noreferrer">RFC 9635</a>, <a href="https://www.rfc-editor.org/rfc/rfc9767.html" rel="noreferrer">RFC 9767</a>, the <a href="https://www.iana.org/assignments/gnap/" rel="noreferrer">IANA GNAP registries</a>, and the <a href="https://www.iana.org/assignments/secevent/#subject-identifier-formats" rel="noreferrer">IANA Subject Identifier Formats</a>.</p>
+</section>
+</main>
+</body></html>
