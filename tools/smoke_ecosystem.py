@@ -107,7 +107,9 @@ def demo(base, outcomes):
     expect(status == 200 and isinstance(body, dict), "AS discovery is not a JSON object response")
     expect(headers.get_content_type() == "application/json", "AS discovery has the wrong media type")
     expect(body.get("grant_request_endpoint") == base + "/gnap", "Discovery changed the exact grant endpoint")
-    expect(body.get("key_proofs_supported") == ["httpsig"], "Demo advertised unexpected proof capabilities")
+    # The lab's clients prove with HTTP message signatures or, with a key of
+    # their own, a JWS; its resource servers use HTTP message signatures only.
+    expect(body.get("key_proofs_supported") == ["httpsig", "jws", "jwsd"], "Demo advertised unexpected proof capabilities")
     expect(body.get("key_rotation_supported") is False, "Demo advertised unsupported key rotation")
     expect(headers.get("cache-control") == "no-store", "Discovery response is cacheable")
     expect(headers.get("set-cookie") is None, "Discovery created browser state")
