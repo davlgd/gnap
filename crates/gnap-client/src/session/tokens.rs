@@ -5,7 +5,6 @@ use super::{Session, SessionProof, SharedSigner};
 use crate::error::ClientError;
 use crate::rotation;
 use crate::transport::{HttpRequest, HttpResponse, HttpTransport};
-use gnap_core::{check_response, State};
 use gnap_crypto::proof::Signer;
 use gnap_registry::AccessTokenFlag;
 use gnap_types::key::Key;
@@ -338,14 +337,24 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
 
         if response.status != 204 {
             // §3.6 — a well-formed GNAP error is the AS's refusal, not a
-            // malformed answer, and the token's state is unchanged. An error
-            // carrying other fields is malformed.
-            if let Ok(parsed) = grant_response(&response) {
-                if let Some(error) = parsed.error.clone() {
-                    if check_response(State::Approved, &parsed).is_empty() {
-                        return Err(ClientError::Server(error));
-                    }
-                }
+            // malformed answer, and the token's state is unchanged. "Other
+            // fields MUST NOT be included": the raw object is checked, since
+            // parsing drops a known field whose value is null.
+            let only_error = serde_json::from_slice::<serde_json::Value>(&response.body)
+                .ok()
+                .and_then(|body| {
+                    body.as_object()
+                        .map(|fields| fields.keys().all(|k| k == "error"))
+                })
+                .unwrap_or(false);
+            if let (
+                true,
+                Ok(GrantResponse {
+                    error: Some(error), ..
+                }),
+            ) = (only_error, grant_response(&response))
+            {
+                return Err(ClientError::Server(error));
             }
             return Err(ClientError::Protocol(format!(
                 "revoking answered {} where §6.2 says 204 No Content",
