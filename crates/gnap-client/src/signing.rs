@@ -312,7 +312,6 @@ pub fn sign_jose_request(
                 .into(),
         ));
     }
-    let content = request.body.clone().unwrap_or_default();
     let proof = sign_jws(
         method,
         &JwsParams {
@@ -321,7 +320,7 @@ pub fn sign_jose_request(
             created: now,
             access_token: token.map(TokenValue::as_str),
         },
-        &content,
+        request.body.as_deref().unwrap_or_default(),
         signer,
     )?;
     match proof {
