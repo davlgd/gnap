@@ -113,8 +113,8 @@ impl HttpTransport for &Failing {
 }
 
 /// A client named by reference, or one whose key is named by reference,
-/// proves with `httpsig`; and a start lost at the transport leaves no grant,
-/// so the session can start again, with another method too.
+/// proves with `httpsig`; and a start lost at the transport restores the
+/// local state, so the session can start again, with another method too.
 #[test]
 fn references_prove_with_httpsig_and_a_lost_start_can_be_retried() {
     let es256 = Es256Signer::generate("es256-key").unwrap();
@@ -146,5 +146,9 @@ fn references_prove_with_httpsig_and_a_lost_start_can_be_retried() {
             "{method}: {result:?}"
         );
     }
-    assert_eq!(transport.0.get(), 2, "the lost start left no grant behind");
+    assert_eq!(
+        transport.0.get(),
+        2,
+        "an inconclusive start can be tried again"
+    );
 }

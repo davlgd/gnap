@@ -358,8 +358,9 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
 
     fn start_inner(&mut self, request: &GrantRequest, now: u64) -> Result<Step, ClientError> {
         // A session drives one grant: starting another would replace the
-        // local state of one the AS may still hold. A start lost before any
-        // GNAP answer leaves no grant, so it can be tried again.
+        // local state of one the AS holds. An inconclusive start restores the
+        // local state, so it can be tried again; the AS may still have
+        // created a grant, as the module documentation says.
         if self.protocol.proof.is_some() {
             return Err(ClientError::Usage(
                 "this session already started a grant; start another grant in a new session".into(),

@@ -12,7 +12,7 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** a response must carry exactly one `Content-Type` field naming `application/json`, as RFC 9635 §3 requires: the session refuses a missing field.
 
-**Breaking:** a session drives one grant: once a start has reached the AS, another `Session::start` is refused before anything is sent, since it would replace the local state of a grant the AS may still hold. A start lost at the transport leaves no grant, and can be tried again. Start another grant in a new session.
+**Breaking:** a session drives one grant: once the session has accepted a GNAP answer to a start, another `Session::start` is refused before anything is sent, since it would replace the local state of a grant the AS holds. An inconclusive start, lost at the transport or answered unusably, restores the local state and can be tried again, though the AS may already have created a grant, so that a retry can create a second one. Start another grant in a new session.
 
 A session proves its requests with the method its `client.key` declares: `httpsig` as before, or `jws` and `jwsd`, for which the proof takes no parameters, the JWK has to import as a public key with the signer's `alg` and `kid`, and the first request's proof has to verify under it before it leaves. A key named by reference keeps `httpsig`. `rotate_key` refuses to change a key that a session proves with `jws` or `jwsd`, and `sign_request` keeps proving with `httpsig`.
 
