@@ -1,7 +1,7 @@
 //! Token management (§6): signers, rotation, and revocation of issued tokens.
 
 use super::response::grant_response;
-use super::{Session, SharedSigner};
+use super::{Session, SessionProof, SharedSigner};
 use crate::error::ClientError;
 use crate::rotation;
 use crate::transport::{HttpRequest, HttpResponse, HttpTransport};
@@ -136,7 +136,14 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         let (object, verifier) = rotation::presentable(presented, replacement.as_ref())?;
         let (index, manage) = self.managed(label)?;
         let previous_value = self.held_value(index)?;
-        let current = self.presentation_signer(index)?;
+        let (proof, current) = self.presentation(index)?;
+        if proof != SessionProof::Httpsig {
+            return Err(ClientError::Usage(
+                "this session proves the token's key with jws or jwsd, and changing such a \
+                 key isn't supported (RFC 9635 §7.3.3.1, §7.3.4.1)"
+                    .into(),
+            ));
+        }
         let body = serde_json::to_vec(&serde_json::json!({ "key": object }))
             .map_err(|e| ClientError::Usage(format!("serializing the new key: {e}")))?;
         let http = HttpRequest::new("POST", &manage.uri).json_body(body);
@@ -188,11 +195,17 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
     /// Fails when no such token is held, the token is bearer, or its explicit
     /// binding is not known to this session. `None` is ambiguous with several
     /// held tokens. No request is sent and no signature is made by this lookup.
+    ///
+    /// The signer isn't a proof method: [`sign_request`](crate::sign_request)
+    /// proves with `httpsig`, whatever proof the session's grant uses.
     pub fn signer_for(&self, label: Option<&str>) -> Result<&dyn Signer, ClientError> {
-        self.presentation_signer(self.select(label)?)
+        self.presentation(self.select(label)?)
+            .map(|(_, signer)| signer)
     }
 
-    fn presentation_signer(&self, index: usize) -> Result<&dyn Signer, ClientError> {
+    /// The proof method and the signer that present a token's key: a rotated
+    /// token's own key, with `httpsig`, or the session's, with its method.
+    fn presentation(&self, index: usize) -> Result<(SessionProof, &dyn Signer), ClientError> {
         let token = &self.held(index)?.1;
         if token.is_bearer() {
             return Err(ClientError::Usage(
@@ -200,7 +213,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             ));
         }
         if let Some(signer) = self.rotated.get(token.value.as_str()) {
-            return Ok(signer.as_ref());
+            return Ok((SessionProof::Httpsig, signer.as_ref()));
         }
         if token.key.is_some() {
             return Err(ClientError::Usage(
@@ -209,15 +222,15 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
                     .into(),
             ));
         }
-        Ok(&self.signer)
+        Ok((self.session_proof(), &self.signer))
     }
 
-    fn management_signer(&self, index: usize) -> Result<&dyn Signer, ClientError> {
+    fn management_signer(&self, index: usize) -> Result<(SessionProof, &dyn Signer), ClientError> {
         // §7.3 binds bearer-token management to the client instance's key.
         if self.held(index)?.1.is_bearer() {
-            Ok(&self.signer)
+            Ok((self.session_proof(), &self.signer))
         } else {
-            self.presentation_signer(index)
+            self.presentation(index)
         }
     }
 
@@ -351,7 +364,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         method: &str,
         manage: &TokenManage,
         body: Option<Vec<u8>>,
-        signer: &dyn Signer,
+        (proof, signer): (SessionProof, &dyn Signer),
         now: u64,
     ) -> Result<HttpResponse, ClientError> {
         // §6 — "The client instance MUST present proof of the key associated
@@ -359,6 +372,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         // token", which is §7.2 applied to the management token. After a key
         // rotation (§6.1.1) that key is the token's new key, not the session's.
         let http = Self::signed_request(
+            proof,
             method,
             &manage.uri,
             body,
