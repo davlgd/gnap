@@ -50,7 +50,7 @@ pub(crate) fn is_canonical(code: &str) -> bool {
 /// Each five-bit group selects one symbol without modulo bias. The nonce source
 /// must be unpredictable; hashing a test counter does not make it secure.
 pub(crate) fn generate(source: &impl Nonces) -> Option<String> {
-    let seed = source.next();
+    let seed = source.next().ok()?;
     if seed.is_empty() || seed.len() > MAX_SEED_BYTES {
         return None;
     }

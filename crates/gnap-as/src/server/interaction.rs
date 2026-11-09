@@ -151,7 +151,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // source's contract; the character set is checked here because a
         // reference that has to survive a query parameter cannot hold anything
         // else.
-        let interact_ref = self.nonces.next();
+        let interact_ref = self
+            .nonces
+            .next()
+            .map_err(|_| InteractionError::Misconfigured("the nonce source is unavailable"))?;
         if interact_ref.is_empty() || !interact_ref.bytes().all(is_unreserved) {
             return Err(InteractionError::Misconfigured(
                 "the interaction reference must be a non-empty ASCII string of unreserved \

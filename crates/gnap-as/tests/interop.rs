@@ -91,10 +91,10 @@ impl KeyResolver for OneKey {
 struct Counted(Cell<u32>);
 
 impl Nonces for Counted {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         let n = self.0.get() + 1;
         self.0.set(n);
-        format!("nonce{n:04}")
+        Ok(format!("nonce{n:04}"))
     }
 }
 
@@ -645,8 +645,8 @@ fn a_broken_nonce_source_is_reported_not_fatal() {
     /// Returns a value with a space in it, which `token68` forbids.
     struct BadNonces;
     impl Nonces for BadNonces {
-        fn next(&self) -> String {
-            "not a token68 value".into()
+        fn next(&self) -> Result<String, gnap_as::NonceError> {
+            Ok("not a token68 value".into())
         }
     }
 
@@ -681,6 +681,67 @@ fn a_broken_nonce_source_is_reported_not_fatal() {
         text.contains("Nonces"),
         "the message should point at the cause: {text}"
     );
+}
+
+/// A random source that stops working fails the request with a 500, and a
+/// failed rotation leaves the issued token and its credential in place.
+#[test]
+fn an_unavailable_nonce_source_fails_without_publishing() {
+    /// Counts draws, and fails every draw while the shared switch is on.
+    struct Switchable {
+        draws: Cell<u32>,
+        failing: Rc<Cell<bool>>,
+    }
+    impl Nonces for Switchable {
+        fn next(&self) -> Result<String, gnap_as::NonceError> {
+            if self.failing.get() {
+                return Err(gnap_as::NonceError);
+            }
+            self.draws.set(self.draws.get() + 1);
+            Ok(format!("nonce{:04}", self.draws.get()))
+        }
+    }
+
+    let failing = Rc::new(Cell::new(true));
+    let as_ = AuthorizationServer::new(
+        AlwaysInteract {
+            interacted: Cell::new(true),
+        },
+        OneKey(RSA_SPKI),
+        MemoryStorage::new(),
+        Switchable {
+            draws: Cell::new(0),
+            failing: Rc::clone(&failing),
+        },
+        Endpoints {
+            grant: GRANT.into(),
+            continuation: CONTINUE.into(),
+            interaction: "https://as.example/i".into(),
+            token_management: "https://as.example/token".into(),
+        },
+    )
+    .with_key_rotation(false);
+    let transport = Direct::wrapping(&as_);
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+
+    let mut refused = Session::new(&transport, &signer, GRANT);
+    assert!(refused.start(&request(), 1_000).is_err());
+    let (_, response) = transport.exchanges.borrow()[0].clone();
+    assert_eq!(response.status, 500);
+    assert!(String::from_utf8_lossy(&response.body).contains("nonce source"));
+
+    failing.set(false);
+    let mut client = Session::new(&transport, &signer, GRANT);
+    client.start(&request(), 1_000).unwrap();
+    failing.set(true);
+    assert!(client.rotate_token(None, 1_001).is_err());
+    let (_, response) = transport.exchanges.borrow().last().unwrap().clone();
+    assert_eq!(response.status, 500);
+
+    // The refused rotation published nothing: the same credential rotates once
+    // the source works again.
+    failing.set(false);
+    client.rotate_token(None, 1_002).unwrap();
 }
 
 /// GNAP-9635-§2.5-M07 — when interaction is required and the client offers no
@@ -3178,8 +3239,8 @@ fn stripping_signed_rotation_content_cannot_rotate_a_token_value() {
 fn an_unusable_rotation_preserves_the_original_token() {
     struct Scripted(RefCell<std::collections::VecDeque<String>>);
     impl Nonces for Scripted {
-        fn next(&self) -> String {
-            self.0.borrow_mut().pop_front().expect("script exhausted")
+        fn next(&self) -> Result<String, gnap_as::NonceError> {
+            Ok(self.0.borrow_mut().pop_front().expect("script exhausted"))
         }
     }
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
@@ -3711,8 +3772,8 @@ fn lifetime_omission_is_preserved_and_overflowing_issuance_fails() {
 fn invalid_generated_values_preserve_the_existing_deadline() {
     struct InvalidNonces;
     impl Nonces for InvalidNonces {
-        fn next(&self) -> String {
-            "invalid token value".into()
+        fn next(&self) -> Result<String, gnap_as::NonceError> {
+            Ok("invalid token value".into())
         }
     }
     let as_ = management_server(InvalidNonces);

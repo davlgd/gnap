@@ -190,9 +190,13 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             return response;
         }
 
+        let (candidate, management_token) = match (self.nonce(), self.nonce()) {
+            (Ok(candidate), Ok(management)) => (candidate, management),
+            (Err(response), _) | (_, Err(response)) => return response,
+        };
         let (Ok(candidate), Ok(management_token)) = (
-            TokenValue::new(self.nonces.next()),
-            TokenValue::new(self.nonces.next()),
+            TokenValue::new(candidate),
+            TokenValue::new(management_token),
         ) else {
             return error(
                 ErrorCode::InvalidRotation,
@@ -206,7 +210,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // makes the rights explicit: they "MUST be included in the response and
         // MUST be the same as the token before rotation". Even a key change
         // preserves the rights, label and flags of the original token.
-        let rotated_handle = self.nonces.next();
+        let rotated_handle = match self.nonce() {
+            Ok(handle) => handle,
+            Err(response) => return response,
+        };
         let mut rotated = record.clone();
         if let Some(binding) = binding {
             rotated.token.key = Some(binding);

@@ -287,7 +287,7 @@ pub use derivation::{DerivationPolicy, DerivedAccess, DerivedToken, ParentToken}
 pub use encoding::{
     EncodedToken, OpaqueTokenEncoder, TokenEncoder, TokenEncodingContext, TokenEncodingError,
 };
-pub use nonce::{Nonces, OsNonces};
+pub use nonce::{NonceError, Nonces, OsNonces};
 pub use policy::{
     Decision, EvaluationContext, KeyResolver, Policy, ReleasedSubject, ResolvedTokenKey,
     SubjectGround, TokenApproval,

@@ -75,10 +75,10 @@ impl KeyResolver for KnownKey {
 struct Counter(Cell<u32>);
 
 impl Nonces for Counter {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         let n = self.0.get() + 1;
         self.0.set(n);
-        format!("value{n:04}")
+        Ok(format!("value{n:04}"))
     }
 }
 

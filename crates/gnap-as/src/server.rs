@@ -393,6 +393,13 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         self
     }
 
+    /// A fresh unguessable value, or the 500 response to send without one.
+    fn nonce(&self) -> Result<String, HttpResponse> {
+        self.nonces
+            .next()
+            .map_err(|_| misconfigured("the nonce source is unavailable"))
+    }
+
     /// The store, for inspection.
     pub const fn storage(&self) -> &S {
         &self.storage

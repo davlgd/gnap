@@ -330,10 +330,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         now: u64,
     ) -> Result<GrantResponse, HttpResponse> {
         let request = &record.request;
-        let nonce = record
-            .as_nonce
-            .clone()
-            .unwrap_or_else(|| self.nonces.next());
+        let nonce = record.as_nonce.clone().map_or_else(|| self.nonce(), Ok)?;
         let mut interact = InteractResponse::default();
 
         // §3.3 — never answer with a mode the client did not offer.
@@ -348,7 +345,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 // §4.2 has to find this grant again once the RO is done, and
                 // the interaction URI is all the AS will see at that point;
                 // the handle in it is the link back.
-                let issued = self.nonces.next();
+                let issued = self.nonce()?;
                 interact.redirect = Some(format!(
                     "{}/{}",
                     self.endpoints.interaction.trim_end_matches('/'),
@@ -361,7 +358,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             }
             if let Some(code) = &user_code {
                 if handle.is_none() {
-                    handle = Some(self.nonces.next());
+                    handle = Some(self.nonce()?);
                 }
                 if offers("user_code") {
                     interact.user_code = Some(code.clone());
@@ -397,7 +394,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             ));
         }
 
-        let token = self.nonces.next();
+        let token = self.nonce()?;
         let Ok(token_value) = TokenValue::new(token.clone()) else {
             return Err(misconfigured(
                 "Nonces returned a continuation value outside token68 (RFC 9635 §3.2.1)",

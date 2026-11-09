@@ -61,19 +61,19 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         authenticated: Option<&GrantSnapshot>,
         expires_in: Option<u64>,
     ) -> Result<PreparedToken, HttpResponse> {
-        let candidate = TokenValue::new(self.nonces.next()).map_err(|_| {
+        let candidate = TokenValue::new(self.nonce()?).map_err(|_| {
             misconfigured("Nonces returned an access value outside token68 (RFC 9635 §3.2.1)")
         })?;
         // Preserve the nominal candidate → handle → credential order, but
         // reserve all three before encoding. A repeating source must not pass
         // the management credential to the encoder as its candidate.
-        let management = self.nonces.next();
-        let management_token = TokenValue::new(self.nonces.next()).map_err(|_| {
+        let management = self.nonce()?;
+        let management_token = TokenValue::new(self.nonce()?).map_err(|_| {
             misconfigured("Nonces returned a management value outside token68 (RFC 9635 §3.2.1)")
         })?;
         let continuation = if keep_open {
             Some(
-                TokenValue::new(self.nonces.next())
+                TokenValue::new(self.nonce()?)
                     .map_err(|_| misconfigured("Nonces returned an invalid continuation value"))?,
             )
         } else {

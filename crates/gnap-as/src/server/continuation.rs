@@ -356,7 +356,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         failure: Option<GnapError>,
         now: u64,
     ) -> HttpResponse {
-        let token = self.nonces.next();
+        let token = match self.nonce() {
+            Ok(token) => token,
+            Err(response) => return response,
+        };
         let Ok(value) = TokenValue::new(token.clone()) else {
             return misconfigured(
                 "Nonces returned a continuation value outside token68 (RFC 9635 §3.2.1)",

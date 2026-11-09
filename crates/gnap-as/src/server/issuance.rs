@@ -191,9 +191,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         let repeated =
             |value: &str| authenticated.is_some_and(|old| credential_used(&old.aggregate, value));
         for index in 0..approvals.len() {
-            let candidate = generated(self.nonces.next())?;
-            let handle = self.nonces.next();
-            let management = generated(self.nonces.next())?;
+            let candidate = generated(self.nonce()?)?;
+            let handle = self.nonce()?;
+            let management = generated(self.nonce()?)?;
             if handle.is_empty()
                 || !handles.insert(handle.clone())
                 || authenticated.is_some_and(|old| old.aggregate.tokens.contains_key(&handle))
@@ -219,7 +219,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             });
         }
         let continuation = if keep_open {
-            let value = generated(self.nonces.next())?;
+            let value = generated(self.nonce()?)?;
             if repeated(value.as_str())
                 || roles
                     .insert(value.as_str().into(), Role::Continuation)

@@ -85,9 +85,9 @@ impl IntrospectionPolicy for NoIntrospection {
 #[derive(Default)]
 struct References(Cell<u64>);
 impl Nonces for References {
-    fn next(&self) -> String {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
         self.0.set(self.0.get() + 1);
-        format!("reference{}", self.0.get())
+        Ok(format!("reference{}", self.0.get()))
     }
 }
 #[derive(Default)]
@@ -570,8 +570,8 @@ impl ResourceServerResolver for InvalidOwner {
 
 struct OversizedReference;
 impl Nonces for OversizedReference {
-    fn next(&self) -> String {
-        "x".repeat(257)
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
+        Ok("x".repeat(257))
     }
 }
 
