@@ -89,12 +89,15 @@ impl PublicKey {
     pub fn is_builtin(jwk: &Map<String, Value>) -> bool {
         let kty = jwk.get("kty").and_then(Value::as_str);
         let alg = jwk.get("alg").and_then(Value::as_str);
-        matches!(
-            (kty, alg),
-            (Some("RSA"), Some("PS256"))
-                | (Some("EC"), Some("ES256"))
-                | (Some("OKP"), Some("EdDSA"))
-        )
+        match (kty, alg) {
+            (Some("RSA"), Some("PS256")) | (Some("EC"), Some("ES256")) => true,
+            // `EdDSA` also names Ed448 (RFC 8037 §3.1): only Ed25519 is built
+            // in, and a missing or malformed curve is refused as a candidate.
+            (Some("OKP"), Some("EdDSA")) => jwk
+                .get("crv")
+                .is_none_or(|crv| crv.as_str().is_none_or(|crv| crv == "Ed25519")),
+            _ => false,
+        }
     }
 
     /// The SHA-256 JWK thumbprint of the key (RFC 7638).

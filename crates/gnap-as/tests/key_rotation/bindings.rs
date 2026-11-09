@@ -266,3 +266,33 @@ fn a_custom_algorithm_by_value_is_left_to_the_configured_resolver() {
     let rotated = single(&server.handle(&request, NOW + 1));
     assert_eq!(rotated.key, Some(custom));
 }
+
+/// `EdDSA` with a curve other than Ed25519 reaches the resolver, while an
+/// Ed25519 candidate without a usable curve is refused before it.
+#[test]
+fn an_eddsa_key_of_another_curve_is_left_to_the_resolver_but_a_missing_curve_is_not() {
+    let okp = |crv: &Value| -> Key {
+        let mut jwk = json!({"kty":"OKP","alg":"EdDSA","kid":"replacement",
+            "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"});
+        if !crv.is_null() {
+            jwk["crv"] = crv.clone();
+        }
+        serde_json::from_value(json!({"proof":"httpsig","jwk":jwk})).unwrap()
+    };
+    // The default resolver doesn't implement Ed448, so it reports that it
+    // can't rotate to it, instead of the early refusal of a malformed key.
+    for (crv, expected) in [
+        (json!("Ed448"), "key_rotation_not_supported"),
+        (Value::Null, "invalid_rotation"),
+        (json!(25519), "invalid_rotation"),
+    ] {
+        let server = server(true, true);
+        let tokens = grant(&server);
+        let request = add_new_proof(old_proof(&tokens[0], &okp(&crv)), new_key());
+        assert_eq!(
+            error_code(&server.handle(&request, NOW + 1)),
+            expected,
+            "{crv}"
+        );
+    }
+}
