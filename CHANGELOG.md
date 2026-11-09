@@ -20,9 +20,9 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** `Decision::Approve` applies to a request for one token or for none. When the request holds several, the server refuses it as a configuration fault: select them with `Decision::ApproveTokens`. A request for no token, which asks only for subject information, gets no token, and an approval that grants it rights is refused too.
 
-**Breaking:** a grant, continuation, or management request with a repeated `Content-Type` field is refused, whatever the order of its values.
+**Breaking:** a grant, continuation, or management request whose body comes with a repeated `Content-Type` field is refused, whatever the order of its values.
 
-`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of stored records hides their credentials, nonces, handles, and codes. `MAX_GRANT_BODY_BYTES` names the bound on a grant or key-rotation body.
+`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonce, interaction handle and reference, and user code; the request and the token it holds keep their own `Debug` output. `MAX_GRANT_BODY_BYTES` names the bound on a grant or key-rotation body.
 
 ### gnap-crypto
 
