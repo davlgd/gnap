@@ -131,8 +131,9 @@ pub struct Accepted {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyError {
     /// The request carries no proof of the method it was verified for: no
-    /// `Signature-Input` and `Signature` pair for `httpsig`, and neither a
-    /// `Detached-JWS` field nor `application/jose` content for `jws` and `jwsd`.
+    /// `Signature-Input` and `Signature` pair for `httpsig`, no `Detached-JWS`
+    /// field for `jwsd`, and neither that field nor `application/jose` content
+    /// for `jws`.
     Unsigned,
     /// Every candidate was refused; this is the reason the last one was.
     Rejected(String),
