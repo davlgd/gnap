@@ -80,6 +80,23 @@ impl PublicKey {
         }
     }
 
+    /// Whether the JWK names a combination of `kty` and `alg` that this crate
+    /// implements, so that [`Self::from_jwk`] is the import to apply.
+    ///
+    /// A JWK of another algorithm isn't refused by this check: a deployment
+    /// may verify it through its own key resolver.
+    #[must_use]
+    pub fn is_builtin(jwk: &Map<String, Value>) -> bool {
+        let kty = jwk.get("kty").and_then(Value::as_str);
+        let alg = jwk.get("alg").and_then(Value::as_str);
+        matches!(
+            (kty, alg),
+            (Some("RSA"), Some("PS256"))
+                | (Some("EC"), Some("ES256"))
+                | (Some("OKP"), Some("EdDSA"))
+        )
+    }
+
     /// The SHA-256 JWK thumbprint of the key (RFC 7638).
     ///
     /// It covers only the key's required members, not `alg` or `kid`, so it

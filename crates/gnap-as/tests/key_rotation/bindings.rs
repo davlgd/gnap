@@ -200,3 +200,69 @@ fn a_resolved_reference_is_pinned_by_value_for_subsequent_management() {
     let refreshed = single(&server.handle(&current, NOW + 2));
     assert_eq!(refreshed.key, expected);
 }
+
+/// A verifier that a deployment supplies for an algorithm this SDK doesn't
+/// implement, here built on a PS256 key for the test.
+struct CustomAlgorithm(Ps256Verifier);
+
+impl Verifier for CustomAlgorithm {
+    fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), gnap_crypto::ProofError> {
+        self.0.verify(data, signature)
+    }
+    fn algorithm(&self) -> &'static str {
+        "X-CUSTOM"
+    }
+    fn expected_key_id(&self) -> Option<&str> {
+        self.0.expected_key_id()
+    }
+}
+
+/// Resolves a by-value key of the custom algorithm itself.
+struct CustomKeys;
+
+impl KeyResolver for CustomKeys {
+    fn resolve(&self, client: &Client) -> Option<Box<dyn Verifier>> {
+        Keys.resolve(client)
+    }
+
+    fn resolve_token_key(
+        &self,
+        client: &Client,
+        binding: Option<&Key>,
+    ) -> Option<ResolvedTokenKey> {
+        let custom = binding.and_then(Key::as_value).filter(|key| {
+            key.jwk
+                .as_ref()
+                .is_some_and(|jwk| jwk.get("alg") == Some(&json!("X-CUSTOM")))
+        });
+        let Some(key) = custom else {
+            return Keys.resolve_token_key(client, binding);
+        };
+        Some(ResolvedTokenKey {
+            key: key.clone(),
+            verifier: Box::new(CustomAlgorithm(new_key().verifier())),
+        })
+    }
+}
+
+/// A public key of an algorithm outside this SDK reaches the configured
+/// resolver when presented by value, as it would by reference.
+#[test]
+fn a_custom_algorithm_by_value_is_left_to_the_configured_resolver() {
+    let server = configured_server(
+        true,
+        Approve {
+            key_rotation: true,
+            value_rotation: true,
+        },
+        CustomKeys,
+    );
+    let tokens = grant(&server);
+    let mut jwk = new_key().public_jwk().unwrap();
+    jwk.insert("alg".into(), json!("X-CUSTOM"));
+    let custom: Key =
+        serde_json::from_value(json!({"proof": "httpsig", "jwk": Value::Object(jwk)})).unwrap();
+    let request = add_new_proof(old_proof(&tokens[0], &custom), new_key());
+    let rotated = single(&server.handle(&request, NOW + 1));
+    assert_eq!(rotated.key, Some(custom));
+}

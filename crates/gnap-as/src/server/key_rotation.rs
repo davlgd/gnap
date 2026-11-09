@@ -163,7 +163,13 @@ fn requested_key(request: &HttpRequest) -> Result<Key, HttpResponse> {
                 "the requested key must contain only public key material",
             ));
         }
-        if let Some(jwk) = object.jwk.as_ref() {
+        // A built-in algorithm is checked here; any other public key is left to
+        // the configured resolver, by value as by reference.
+        if let Some(jwk) = object
+            .jwk
+            .as_ref()
+            .filter(|jwk| gnap_crypto::PublicKey::is_builtin(jwk))
+        {
             if gnap_crypto::PublicKey::for_httpsig(jwk).is_err() {
                 return Err(invalid_rotation(
                     "the requested public key cannot be used with httpsig",

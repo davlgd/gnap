@@ -22,7 +22,7 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** a grant, continuation, or management request that carries a body and a repeated `Content-Type` field is refused.
 
-`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonces, interaction handle and references, and user code. `MAX_GRANT_BODY_BYTES` names the body bound of the derivation and key-rotation handlers; the HTTP adapter still bounds ordinary grant requests. The default token-key resolution, the resource-server registry, the derivation handler, and a key change accept public ES256 and Ed25519 JWKs as well as PS256 ones.
+`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonces, interaction handle and references, and user code. `MAX_GRANT_BODY_BYTES` names the body bound of the derivation and key-rotation handlers; the HTTP adapter still bounds ordinary grant requests. The default token-key resolution, the resource-server registry, the derivation handler, and a key change accept public ES256 and Ed25519 JWKs as well as PS256 ones. A key change checks these built-in algorithms early, and leaves a JWK of any other algorithm to the configured resolver.
 
 ### gnap-crypto
 
