@@ -338,11 +338,11 @@ fn every_key_type_signs_and_verifies_a_gnap_request() {
             .iter()
             .filter(|other| other.key_id() != signer.key_id())
         {
-            let wrong = PublicKey::from_jwk(&other.public_jwk().unwrap()).unwrap();
-            let expectations = Expectations {
-                key_id: None,
-                ..expectations
-            };
+            // The other key takes this signer's `kid`, so only the signature
+            // check can tell the two apart.
+            let mut impostor = other.public_jwk().unwrap();
+            impostor.insert("kid".into(), json!(signer.key_id()));
+            let wrong = PublicKey::from_jwk(&impostor).unwrap();
             assert!(
                 verify_request(&request, &wrong, &expectations, &|_: &str, _: u64| true).is_err(),
                 "{} accepted a {} signature",

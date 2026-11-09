@@ -869,8 +869,9 @@ fn by_value_rs_identity_is_serialized_without_becoming_the_audience_or_client_ke
 fn es256_and_ed25519_token_keys_authorize_their_own_requests_only() {
     use gnap_crypto::{Ed25519Signer, Es256Signer, JwkSigner};
 
-    let es256 = Es256Signer::generate("es256-client").unwrap();
-    let ed25519 = Ed25519Signer::generate("ed25519-client").unwrap();
+    // The same `kid`, so that only the key material tells the two apart.
+    let es256 = Es256Signer::generate("same-kid").unwrap();
+    let ed25519 = Ed25519Signer::generate("same-kid").unwrap();
     let pairs: [(&dyn JwkSigner, &dyn JwkSigner); 2] = [(&es256, &ed25519), (&ed25519, &es256)];
     for (signer, other) in pairs {
         let signed = sign_request(
