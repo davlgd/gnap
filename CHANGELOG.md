@@ -16,11 +16,11 @@ This file lists the changes to the published crates that affect their users, cra
 
 ### gnap-as
 
-**Breaking:** `Nonces::next` returns `Result<String, NonceError>`, so an implementation wraps its value in `Ok`. When a draw fails, no partial grant or token state is published: grant, continuation, and management requests get a 500, a resource registration a 503, and an interaction completion an `InteractionError`. `OsNonces` no longer panics.
+**Breaking:** `Nonces::next` returns `Result<String, NonceError>`, so an implementation wraps its value in `Ok`. When a draw fails, no partial grant or token state is published: grant, continuation, and management requests get a 500, a resource registration a 503, and an interaction completion an `InteractionError`. A nonce reserved by the request's proof stays consumed, and `OsNonces` no longer panics.
 
 **Breaking:** `Decision::Approve` applies to a request for one token or for none. When the request holds several, the server refuses it as a configuration fault: select them with `Decision::ApproveTokens`. A request for no token, which asks only for subject information, gets no token, and an approval that grants it rights is refused too.
 
-**Breaking:** a grant, continuation, or management request whose body has a repeated `Content-Type` field is refused.
+**Breaking:** a grant, continuation, or management request that carries a body and a repeated `Content-Type` field is refused.
 
 `OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonce, interaction handle and reference, and user code; the request and the token it holds keep their own `Debug` output. `MAX_GRANT_BODY_BYTES` names the bound on a grant or key-rotation body.
 
