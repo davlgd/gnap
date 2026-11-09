@@ -133,5 +133,5 @@ pub mod transport;
 
 pub use error::ClientError;
 pub use session::{AttributedSubject, Session, SharedSigner, Step, VerifiedSubject};
-pub use signing::sign_request;
+pub use signing::{sign_jose_request, sign_request};
 pub use transport::{HttpRequest, HttpResponse, HttpTransport};
