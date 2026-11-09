@@ -1,0 +1,191 @@
+/* The GNAP suite's shared design. Served same-origin by each application,
+   under a CSP that forbids inline styles and any external resource: system
+   fonts only, and no style is computed from data. */
+
+:root {
+  --ground: #eef1f4;
+  --surface: #ffffff;
+  --ink: #121c25;
+  --muted: #52616e;
+  --rule: #cbd4dc;
+  --accent: #3d3aa8;
+  --accent-soft: #e6e5f7;
+  --pass: #17663c;
+  --pass-soft: #dff0e6;
+  --fail: #a4221a;
+  --fail-soft: #f8e1df;
+  --unsure: #7a4f00;
+  --unsure-soft: #f6ead2;
+  --skip: #52616e;
+  --skip-soft: #e5e9ed;
+  --focus: #3d3aa8;
+
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* A 1.25 scale from a 1rem body. */
+  --step--1: 0.875rem;
+  --step-0: 1rem;
+  --step-1: 1.25rem;
+  --step-2: 1.563rem;
+  --step-3: 1.953rem;
+
+  --space: 1rem;
+  --radius: 6px;
+  --measure: 68ch;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #0e1318;
+    --surface: #151c23;
+    --ink: #e2e8ed;
+    --muted: #94a3b0;
+    --rule: #2b3742;
+    --accent: #aaa7ff;
+    --accent-soft: #24233f;
+    --pass: #63d394;
+    --pass-soft: #12291d;
+    --fail: #ff8f85;
+    --fail-soft: #33171a;
+    --unsure: #f0b955;
+    --unsure-soft: #2d2412;
+    --skip: #94a3b0;
+    --skip-soft: #1d252d;
+    --focus: #aaa7ff;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { background: var(--ground); color: var(--ink); font: 400 var(--step-0)/1.55 var(--sans); }
+body { margin: 0; min-height: 100vh; background: var(--ground); color: var(--ink); }
+
+/* Page frame */
+.site-header {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 2rem;
+  padding: 1rem clamp(1rem, 4vw, 2.5rem);
+  border-bottom: 1px solid var(--rule); background: var(--surface);
+}
+.wordmark { font-weight: 700; font-size: var(--step-1); letter-spacing: -0.01em; color: var(--ink); text-decoration: none; }
+.wordmark small { font-weight: 400; color: var(--muted); font-size: var(--step--1); margin-left: 0.5rem; }
+.site-nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; }
+.site-nav a { color: var(--muted); text-decoration: none; padding: 0.25rem 0; border-bottom: 2px solid transparent; }
+.site-nav a:hover, .site-nav a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
+
+main { max-width: 64rem; margin: 0 auto; padding: 2rem clamp(1rem, 4vw, 2.5rem) 4rem; }
+main > section, main > .panel, main > .bench { margin-top: 2.5rem; }
+main.wide { max-width: 82rem; }
+
+/* A bench: tools on the left, their report beside them on a wide screen. */
+.bench { display: grid; gap: 1.5rem; align-items: start; }
+.bench-tools { display: grid; gap: 1.5rem; min-width: 0; }
+@media (min-width: 64rem) {
+  .bench { grid-template-columns: minmax(0, 1fr) minmax(22rem, 30rem); }
+  .bench-report { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
+}
+
+h1, h2, h3 { line-height: 1.2; letter-spacing: -0.01em; text-wrap: balance; }
+h1 { font-size: var(--step-3); font-weight: 700; margin: 0 0 0.75rem; }
+h2 { font-size: var(--step-2); font-weight: 650; margin: 0 0 0.75rem; }
+h3 { font-size: var(--step-1); font-weight: 600; margin: 0 0 0.5rem; }
+p, li { max-width: var(--measure); }
+p { margin: 0 0 0.85rem; }
+.lede { font-size: var(--step-1); color: var(--muted); max-width: 52ch; }
+.fine { font-size: var(--step--1); color: var(--muted); }
+
+a { color: var(--accent); text-underline-offset: 0.15em; }
+code, pre, textarea.code, input.code, .mono { font-family: var(--mono); font-size: 0.9em; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+
+/* Panels: one surface style, used where a block is a unit of work. */
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: clamp(1rem, 3vw, 1.75rem); }
+.panel > :last-child { margin-bottom: 0; }
+
+/* A note that says what this tool doesn't do, or what to keep out of it. */
+.note { border-left: 4px solid var(--unsure); background: var(--unsure-soft); padding: 0.75rem 1rem; border-radius: 0 var(--radius) var(--radius) 0; max-width: var(--measure); }
+.note > :last-child { margin-bottom: 0; }
+
+/* Forms */
+label { display: block; font-weight: 600; margin: 1.1rem 0 0.35rem; }
+label.inline { display: flex; gap: 0.6rem; align-items: flex-start; font-weight: 400; }
+input, select, textarea, button { font: inherit; color: inherit; max-width: 100%; }
+input:not([type="checkbox"]), select, textarea {
+  width: 100%; padding: 0.55rem 0.7rem; border: 1px solid var(--rule); border-radius: var(--radius);
+  background: var(--ground); color: var(--ink);
+}
+textarea { font-family: var(--mono); font-size: 0.9rem; line-height: 1.45; resize: vertical; }
+input[type="checkbox"] { width: 1.1rem; height: 1.1rem; margin-top: 0.2rem; accent-color: var(--accent); flex: none; }
+.hint { font-size: var(--step--1); color: var(--muted); margin: 0.35rem 0 0; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.25rem; align-items: center; }
+button {
+  padding: 0.55rem 1rem; border-radius: var(--radius); border: 1px solid var(--rule);
+  background: var(--surface); color: var(--ink); cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Task table: what each tool sends, before you use it. */
+.tasks { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+.tasks th, .tasks td { text-align: left; vertical-align: top; padding: 0.85rem 1rem 0.85rem 0; border-top: 1px solid var(--rule); }
+.tasks thead th { font-size: var(--step--1); color: var(--muted); font-weight: 600; border-top: 0; padding-bottom: 0.4rem; }
+.tasks td:first-child a { font-weight: 600; }
+.tasks td:first-child p { margin: 0.25rem 0 0; color: var(--muted); font-size: var(--step--1); }
+.sends { display: inline-block; font-size: var(--step--1); padding: 0.1rem 0.5rem; border-radius: 999px; white-space: nowrap; }
+.sends[data-sends="nothing"] { background: var(--pass-soft); color: var(--pass); }
+.sends[data-sends="unsigned"] { background: var(--unsure-soft); color: var(--unsure); }
+.sends[data-sends="signed"] { background: var(--accent-soft); color: var(--accent); }
+@media (max-width: 40rem) {
+  .tasks thead { display: none; }
+  .tasks tr { display: block; border-top: 1px solid var(--rule); padding: 0.75rem 0; }
+  .tasks td { display: block; border: 0; padding: 0.15rem 0; }
+}
+
+/* Report: the tally strip, then one row per check. */
+.report-head { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; align-items: center; justify-content: space-between; margin-top: 1.5rem; }
+.tally { display: flex; flex-wrap: wrap; gap: 3px; list-style: none; margin: 0; padding: 0; max-width: 100%; }
+.tally li { width: 0.8rem; height: 1.4rem; border-radius: 2px; background: var(--skip-soft); }
+.tally li[data-status="pass"], .tally li[data-status="passed"] { background: var(--pass); }
+.tally li[data-status="fail"], .tally li[data-status="failed"] { background: var(--fail); }
+.tally li[data-status="not_tested"], .tally li[data-status="inconclusive"] { background: var(--unsure); }
+
+.filters { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.filters[hidden] { display: none; }
+.filters button { padding: 0.3rem 0.75rem; font-size: var(--step--1); border-radius: 999px; }
+.filters button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+
+.summary { margin: 1rem 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.summary:empty { display: none; }
+
+.checks { margin-top: 0.75rem; }
+.check {
+  display: grid; grid-template-columns: 2.25rem minmax(0, 1fr) auto; gap: 0.15rem 1rem;
+  padding: 0.85rem 0; border-top: 1px solid var(--rule); overflow-wrap: anywhere;
+}
+.check .mark {
+  grid-row: span 3; width: 1.8rem; height: 1.8rem; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 700; font-size: var(--step--1); background: var(--skip-soft); color: var(--skip);
+}
+.check[data-status="pass"] .mark, .check[data-status="passed"] .mark { background: var(--pass-soft); color: var(--pass); }
+.check[data-status="fail"] .mark, .check[data-status="failed"] .mark { background: var(--fail-soft); color: var(--fail); }
+.check[data-status="not_tested"] .mark, .check[data-status="inconclusive"] .mark { background: var(--unsure-soft); color: var(--unsure); }
+.check h3 { font: 600 var(--step-0)/1.35 var(--mono); margin: 0.15rem 0 0; }
+.check .status { font-size: var(--step--1); color: var(--muted); }
+.check .cite { grid-column: 3; grid-row: 1; font-size: var(--step--1); white-space: nowrap; align-self: start; padding-top: 0.2rem; }
+.check p { grid-column: 2 / 4; margin: 0.3rem 0 0; }
+.check .next { color: var(--ink); font-weight: 500; }
+@media (max-width: 40rem) {
+  .check { grid-template-columns: 2.25rem minmax(0, 1fr); }
+  .check .cite { grid-column: 2; grid-row: auto; white-space: normal; }
+  .check p { grid-column: 2; }
+}
+
+.empty { color: var(--muted); padding: 1.5rem 0; border-top: 1px solid var(--rule); }
+
+/* Commands to copy */
+.command { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.75rem 1rem; overflow-x: auto; white-space: pre; }
