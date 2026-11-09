@@ -1170,3 +1170,64 @@ fn the_interaction_wait_ignores_a_wall_clock_jump() {
     assert!(polls >= 3, "{polls} polls: {sent:?}");
     assert!(clock.elapsed.get() <= 30 + gnap_conformance_web::scenario::CLEANUP_WAIT);
 }
+
+/// A rotation that returns a token already past its lifetime leaves the
+/// reads around revocation inconclusive, never skipped.
+#[test]
+fn an_expired_rotated_token_leaves_the_last_reads_inconclusive() {
+    fn expired_rotation(request: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+        if request.method == "POST" && request.url.starts_with("https://as.example/manage") {
+            return with_lifetime(forward(), 0);
+        }
+        forward()
+    }
+    let server = server(false, false);
+    let (report, _) = run_with(
+        &server,
+        &plan("jwsd", "ES256", true, false),
+        &|_| {},
+        live_tokens,
+        expired_rotation,
+    );
+    for id in ["resource-access-before-revocation", "revoked-token-refused"] {
+        assert_eq!(
+            outcome(&report, id),
+            Some(Outcome::Inconclusive),
+            "{id}: {}",
+            report.text()
+        );
+    }
+    assert_eq!(report.exit_code(), 2);
+}
+
+/// A first answer that is a GNAP error with a continuation is polled, but
+/// the grant request itself is inconclusive, even when a poll approves.
+#[test]
+fn a_recoverable_first_answer_is_inconclusive() {
+    fn too_fast_first(request: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+        let response = forward();
+        if request.method == "POST" && request.url == GRANT {
+            let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+            return json_answer(
+                400,
+                &serde_json::json!({"error": "too_fast", "continue": body["continue"]}),
+            );
+        }
+        response
+    }
+    let server = server(false, false);
+    let (report, _) = run_with(
+        &server,
+        &plan("httpsig", "ES256", false, false),
+        &|_| {},
+        live_tokens,
+        too_fast_first,
+    );
+    assert_eq!(
+        outcome(&report, "grant-request"),
+        Some(Outcome::Inconclusive),
+        "{}",
+        report.text()
+    );
+    assert_eq!(report.exit_code(), 2);
+}

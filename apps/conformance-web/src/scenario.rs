@@ -504,13 +504,20 @@ pub fn lifecycle<T: HttpTransport>(
         }
         _ => false,
     };
+    // §3.6 — an error with a continuation lets the scenario poll, but the
+    // request itself wasn't granted.
+    let answered = if matches!(result, Ok(Step::Recoverable(_))) {
+        Outcome::Inconclusive
+    } else {
+        judged(&result)
+    };
     run.push(
         "grant-request",
-        judged(&result),
+        answered,
         GRANT,
         "The AS answered the grant request with an approval or a pending grant the client \
          accepts. A GNAP error, such as an unknown client, is the AS's policy and leaves the \
-         scenario inconclusive.",
+         scenario inconclusive, even when it comes with a continuation the scenario polls.",
     );
     if result.is_err() {
         return finish(run, transport, started);
@@ -724,6 +731,21 @@ pub fn lifecycle<T: HttpTransport>(
     // token, with the last key, has to be accepted first, or a refusal after
     // revocation could come from anything else.
     let last = run.token.clone();
+    if last.is_none() && plan.resource.is_some() {
+        // As when a rotation returns a token already past its lifetime.
+        run.push(
+            "resource-access-before-revocation",
+            Outcome::Inconclusive,
+            PRESENTATION,
+            "The scenario no longer holds a usable token, so it couldn't read the resource.",
+        );
+        run.push(
+            "revoked-token-refused",
+            Outcome::Inconclusive,
+            REVOCATION,
+            "The scenario no longer holds a usable token, so it couldn't check its refusal.",
+        );
+    }
     let accepted = last
         .as_ref()
         .is_some_and(|held| run.witness(transport, "resource-access-before-revocation", held));
