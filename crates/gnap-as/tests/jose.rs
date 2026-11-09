@@ -41,8 +41,26 @@ struct Approve {
     calls: Arc<AtomicU32>,
 }
 impl Policy for Approve {
+    /// Asks for interaction when a new request offers one, and approves
+    /// otherwise, a modification included.
+    fn evaluate_context(
+        &self,
+        request: &GrantRequest,
+        context: gnap_as::EvaluationContext<'_>,
+    ) -> Decision {
+        match context {
+            gnap_as::EvaluationContext::Initial => self.evaluate(request),
+            _ => self.evaluate_after_interaction(request),
+        }
+    }
     fn evaluate(&self, request: &GrantRequest) -> Decision {
         self.calls.fetch_add(1, Ordering::Relaxed);
+        if request.interact.is_some() {
+            return Decision::RequireInteraction;
+        }
+        self.evaluate_after_interaction(request)
+    }
+    fn evaluate_after_interaction(&self, request: &GrantRequest) -> Decision {
         let requested = &request.access_token.as_ref().unwrap().tokens[0];
         Decision::ApproveTokens {
             tokens: vec![TokenApproval {
@@ -619,4 +637,192 @@ fn a_modification_carries_its_authenticated_content() {
             method.name()
         );
     }
+}
+
+/// A transport that hands each request to the server and keeps what it sent.
+struct Direct<'a> {
+    server: &'a Server<MemoryStorage>,
+    now: std::cell::Cell<u64>,
+    sent: std::cell::RefCell<Vec<HttpRequest>>,
+}
+impl gnap_client::HttpTransport for Direct<'_> {
+    type Error = std::convert::Infallible;
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
+        self.sent.borrow_mut().push(request.clone());
+        Ok(self.server.handle(&request, self.now.get()))
+    }
+}
+
+impl<'a> Direct<'a> {
+    const fn new(server: &'a Server<MemoryStorage>) -> Self {
+        Self {
+            server,
+            now: std::cell::Cell::new(NOW),
+            sent: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Checks that each request sent carries the JOSE proof of `method`, and
+    /// nothing of `httpsig`.
+    fn assert_jose(&self, method: JwsMethod) {
+        for request in self.sent.borrow().iter() {
+            let has = |name: &str| request.header_values(name).count();
+            assert_eq!(
+                has("signature") + has("signature-input") + has("content-digest"),
+                0
+            );
+            let attached = request
+                .header_values("content-type")
+                .any(|value| value == "application/jose");
+            let detached = has(DETACHED_JWS_HEADER);
+            match method {
+                JwsMethod::Jwsd => assert!(detached == 1 && !attached, "{request:?}"),
+                JwsMethod::Jws => assert!(
+                    (detached == 1) != attached && has("content-type") <= 1,
+                    "{request:?}"
+                ),
+            }
+        }
+    }
+}
+
+fn session_request(signer: &dyn JwkSigner, method: JwsMethod) -> GrantRequest {
+    serde_json::from_value(json!({
+        "client": {"key": {"proof": method.name(), "jwk": signer.public_jwk().unwrap()}},
+        "access_token": {"access": ["read"]},
+        "interact": {"start": ["redirect"], "finish": {
+            "method": "redirect", "uri": "https://client.example/cb", "nonce": "client-nonce"
+        }}
+    }))
+    .unwrap()
+}
+
+/// A client session proves every request with the method its key declares:
+/// the grant, the return from interaction, a modification, the management
+/// of its token, and the revocation of the grant.
+#[test]
+fn a_session_drives_a_grant_with_either_jose_method() {
+    use gnap_client::{Session, Step};
+    use gnap_types::interact::InteractCallback;
+    for method in [JwsMethod::Jws, JwsMethod::Jwsd] {
+        for signer in signers() {
+            let case = format!("{} {}", method.name(), signer.algorithm());
+            let server = server(true);
+            let wire = Direct::new(&server);
+            let mut client = Session::new(&wire, Arc::clone(signer), GRANT);
+            let pending = client
+                .start(&session_request(signer.as_ref(), method), NOW)
+                .unwrap_or_else(|e| panic!("{case}: {e}"));
+            let Step::Pending(pending) = pending else {
+                panic!("{case}: the policy asks for interaction");
+            };
+            let handle = pending
+                .interact
+                .as_ref()
+                .unwrap()
+                .redirect
+                .as_ref()
+                .unwrap();
+            let handle = handle.rsplit('/').next().unwrap();
+            let gnap_as::Finish::Redirect { uri } =
+                server.complete_interaction(handle, NOW + 1).unwrap()
+            else {
+                panic!("{case}: a redirect finish");
+            };
+            client
+                .accept_callback(&InteractCallback::from_redirect(&uri).unwrap(), NOW + 1)
+                .unwrap();
+            wire.now.set(NOW + 5);
+            let approved = client
+                .continue_grant(NOW + 5)
+                .unwrap_or_else(|e| panic!("{case}: {e}"));
+            assert!(matches!(approved, Step::Approved(_)), "{case}");
+
+            let changes: gnap_types::message::ContinueRequest =
+                serde_json::from_value(json!({"access_token": {"access": ["write"]}})).unwrap();
+            wire.now.set(NOW + 10);
+            let modified = client
+                .modify_grant(&changes, NOW + 10)
+                .unwrap_or_else(|e| panic!("{case}: {e}"));
+            let token = &modified.response().access_token.as_ref().unwrap().tokens[0];
+            assert_eq!(
+                serde_json::to_value(&token.access).unwrap(),
+                json!(["write"]),
+                "{case}"
+            );
+
+            wire.now.set(NOW + 11);
+            client
+                .rotate_token(None, NOW + 11)
+                .unwrap_or_else(|e| panic!("{case}: {e}"));
+            wire.now.set(NOW + 12);
+            client
+                .revoke_token(None, NOW + 12)
+                .unwrap_or_else(|e| panic!("{case}: {e}"));
+            wire.now.set(NOW + 15);
+            client
+                .revoke_grant(NOW + 15)
+                .unwrap_or_else(|e| panic!("{case}: {e}"));
+            wire.assert_jose(method);
+            assert_eq!(wire.sent.borrow().len(), 6, "{case}");
+        }
+    }
+}
+
+/// A session keeps the proof method of its first request: a second start
+/// that declares another one is refused before anything is sent, and the
+/// grant goes on with the first. A key change isn't supported with JOSE.
+#[test]
+fn a_session_keeps_its_jose_method() {
+    use gnap_client::{ClientError, Session, SharedSigner};
+    let signer = &signers()[1];
+    let server = server(true);
+    let wire = Direct::new(&server);
+    let mut client = Session::new(&wire, Arc::clone(signer), GRANT);
+    let mut approved = session_request(signer.as_ref(), JwsMethod::Jws);
+    approved.interact = None;
+    let step = client.start(&approved, NOW).unwrap();
+    assert!(matches!(step, gnap_client::Step::Approved(_)), "{step:?}");
+    let refused = client.start(&session_request(signer.as_ref(), JwsMethod::Jwsd), NOW + 1);
+    assert!(matches!(refused, Err(ClientError::Usage(_))), "{refused:?}");
+    assert_eq!(wire.sent.borrow().len(), 1);
+
+    let first = wire.sent.borrow()[0].clone();
+    assert!(first
+        .header_values("content-type")
+        .any(|v| v == "application/jose"));
+    // A replacement the session could present over `httpsig`: only the
+    // session's own JOSE proof stops the change.
+    let replacement = Arc::new(Es256Signer::generate("replacement").unwrap());
+    let key: gnap_types::key::Key = serde_json::from_value(json!({
+        "proof": "httpsig", "jwk": replacement.public_jwk().unwrap()
+    }))
+    .unwrap();
+    let refused = client.rotate_key(None, replacement as SharedSigner, &key, NOW + 2);
+    assert!(matches!(refused, Err(ClientError::Usage(_))), "{refused:?}");
+    assert_eq!(
+        wire.sent.borrow().len(),
+        1,
+        "no request for a refused key change"
+    );
+}
+
+/// The AS counts two proofs of the same request in the same second as one:
+/// sending it again is fresh only from the next second.
+#[test]
+fn a_jose_retry_is_fresh_from_the_next_second() {
+    use gnap_client::Session;
+    let signer = &signers()[2];
+    let server = server(true);
+    let wire = Direct::new(&server);
+    let request = session_request(signer.as_ref(), JwsMethod::Jwsd);
+    Session::new(&wire, Arc::clone(signer), GRANT)
+        .start(&request, NOW)
+        .unwrap();
+    let again = Session::new(&wire, Arc::clone(signer), GRANT).start(&request, NOW);
+    assert!(again.is_err(), "the same second is the same proof");
+    wire.now.set(NOW + 1);
+    Session::new(&wire, Arc::clone(signer), GRANT)
+        .start(&request, NOW + 1)
+        .expect("the next second is a new proof");
 }

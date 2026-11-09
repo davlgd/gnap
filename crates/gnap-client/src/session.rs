@@ -22,7 +22,9 @@
 //! a remote rollback: the AS may already have committed the request. Calls are
 //! never retried automatically. A caller choosing to
 //! retry sends a fresh proof, but the old continuation credential or interaction
-//! reference may already be spent; a terminal GNAP error then requires a new
+//! reference may already be spent. With `jws` or `jwsd`, a proof is fresh only
+//! from the next second: the AS's replay protection counts two proofs of the
+//! same request in the same second as one; a terminal GNAP error then requires a new
 //! grant in a new `Session`. Valid GNAP errors are absorbed, including a
 //! replacement continuation.
 //!
@@ -33,6 +35,7 @@ use crate::error::ClientError;
 use crate::transport::{HttpRequest, HttpResponse, HttpTransport};
 use gnap_core::{Event, Grant, State};
 use gnap_crypto::hash::HashMethod;
+use gnap_crypto::jws::JwsMethod;
 use gnap_crypto::proof::Signer;
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{AccessToken, Cardinality, TokenValue};
@@ -176,6 +179,18 @@ struct SessionState {
     /// Receipt time and optional exclusive deadline for the current set of
     /// interaction responses. Responses without `interact` do not renew it.
     interaction_window: Option<InteractionWindow>,
+    /// How the session proves its key, settled by the first request (§7.3).
+    proof: Option<SessionProof>,
+}
+
+/// The proof method of the session's key (§7.3): the one its `client.key`
+/// declares, and `httpsig` for a key named by reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionProof {
+    /// HTTP Message Signatures (§7.3.1).
+    Httpsig,
+    /// A JOSE proof, attached or detached (§7.3.3, §7.3.4).
+    Jose(JwsMethod),
 }
 
 /// Subject information and the AS that stated it (§3.4-M15).
@@ -216,6 +231,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
                 issued: None,
                 interaction_finished: false,
                 interaction_window: None,
+                proof: None,
             },
             supported_modes: None,
             finish_timeout: None,
@@ -350,18 +366,6 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             if let Some(key) = client.key.as_value() {
                 key.validate()
                     .map_err(|e| ClientError::Usage(format!("client.key: {e}")))?;
-                // §2.3-M07 — the key is "the proofing mechanism associated with
-                // the key", and the only one this session can perform is
-                // `httpsig` (§7.3.1). Declaring another would promise the AS a
-                // proof that never comes.
-                let method = key.proof.method().as_str();
-                if method != "httpsig" {
-                    return Err(ClientError::Usage(format!(
-                        "client.key.proof: this session signs with `httpsig` and cannot \
-                         present a `{method}` proof; the key MUST be used with the proofing \
-                         mechanism it declares (RFC 9635 §2.3, §7.3)"
-                    )));
-                }
             }
             if let Some(display) = &client.display {
                 display
@@ -370,6 +374,17 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             }
         }
 
+        // §2.3-M07 — the key is used with "the proofing mechanism associated
+        // with the key", and a grant keeps it: its continuation and tokens are
+        // bound to the key the first request proved.
+        let proof = crate::signing::session_proof(request, &self.signer)?;
+        if let Some(settled) = self.protocol.proof.filter(|settled| *settled != proof) {
+            return Err(ClientError::Usage(format!(
+                "this session proves its key with {settled:?}, and a grant keeps the proof \
+                 method it started with (RFC 9635 §2.3, §7.3)"
+            )));
+        }
+        self.protocol.proof = Some(proof);
         self.protocol.requested = request.access_token.as_ref().map(|a| a.cardinality);
         self.protocol.requested_labels = requested_labels(request.access_token.as_ref());
         self.prepare_interaction(request.interact.as_ref())?;
@@ -377,6 +392,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         let body = serde_json::to_vec(request)
             .map_err(|e| ClientError::Usage(format!("serializing the request: {e}")))?;
         let http = Self::signed_request(
+            proof,
             "POST",
             &self.endpoint.clone(),
             Some(body),
@@ -459,6 +475,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
 
         // GNAP-9635-§3.1-M03 — the continuation URI is used exactly as given.
         let http = Self::signed_request(
+            self.session_proof(),
             "POST",
             &cont.uri,
             body,
@@ -557,6 +574,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         let body = serde_json::to_vec(changes)
             .map_err(|e| ClientError::Usage(format!("serializing the modification: {e}")))?;
         let http = Self::signed_request(
+            self.session_proof(),
             "PATCH",
             &cont.uri,
             Some(body),
@@ -621,6 +639,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             .apply(Event::Revoke, now)
             .map_err(|e| ClientError::Usage(e.to_string()))?;
         let request = Self::signed_request(
+            self.session_proof(),
             "DELETE",
             &continuation.uri,
             None,
@@ -661,8 +680,14 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         Ok(())
     }
 
-    /// Builds a signed request (§7.2, §7.3.1).
-    fn signed_request(
+    /// The proof method settled by the first request, `httpsig` before it.
+    pub(crate) fn session_proof(&self) -> SessionProof {
+        self.protocol.proof.unwrap_or(SessionProof::Httpsig)
+    }
+
+    /// Builds a request with the proof of `signer`'s key (§7.2, §7.3).
+    pub(crate) fn signed_request(
+        proof: SessionProof,
         method: &str,
         url: &str,
         body: Option<Vec<u8>>,
@@ -670,11 +695,19 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         signer: &dyn Signer,
         now: u64,
     ) -> Result<HttpRequest, ClientError> {
-        let mut http = HttpRequest::new(method, url);
-        if let Some(b) = body {
-            http = http.json_body(b);
+        let http = HttpRequest::new(method, url);
+        match proof {
+            SessionProof::Httpsig => {
+                let http = match body {
+                    Some(body) => http.json_body(body),
+                    None => http,
+                };
+                crate::sign_request(http, signer, token, now)
+            }
+            SessionProof::Jose(jose) => {
+                crate::signing::sign_jose(http, jose, body, signer, token, now)
+            }
         }
-        crate::sign_request(http, signer, token, now)
     }
 
     fn round_trip(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
