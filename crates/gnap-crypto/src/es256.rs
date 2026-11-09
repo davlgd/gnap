@@ -155,8 +155,8 @@ impl Es256Verifier {
     /// Imports a public JWK: `kty` `EC`, `crv` `P-256`, `alg` `ES256`.
     ///
     /// `x` and `y` must each encode exactly 32 bytes, and together a point of
-    /// the curve other than the identity. The private member `d` is refused,
-    /// and `kid`, `use`, and `key_ops` follow the same rules as
+    /// the curve other than the identity. Private and symmetric members are
+    /// refused, and `kid`, `use`, and `key_ops` follow the same rules as
     /// [`crate::jwk::PublicKey::from_jwk`].
     ///
     /// # Errors
@@ -170,7 +170,7 @@ impl Es256Verifier {
         {
             return Err(jwk::error("expected kty EC, crv P-256, and alg ES256"));
         }
-        let key_id = jwk::common(jwk, &["d"])?;
+        let key_id = jwk::common(jwk)?;
         let x = jwk::fixed_bytes(jwk, "x", FIELD_BYTES)?;
         let y = jwk::fixed_bytes(jwk, "y", FIELD_BYTES)?;
         let mut point = Vec::with_capacity(1 + 2 * FIELD_BYTES);

@@ -112,9 +112,9 @@ pub struct Ed25519Verifier {
 impl Ed25519Verifier {
     /// Imports a public JWK: `kty` `OKP`, `crv` `Ed25519`, `alg` `EdDSA`.
     ///
-    /// `x` must encode exactly 32 bytes of a valid, non-weak curve point. The
-    /// private member `d` is refused, and `kid`, `use`, and `key_ops` follow
-    /// the same rules as [`crate::jwk::PublicKey::from_jwk`].
+    /// `x` must encode exactly 32 bytes of a valid, non-weak curve point.
+    /// Private and symmetric members are refused, and `kid`, `use`, and
+    /// `key_ops` follow the same rules as [`crate::jwk::PublicKey::from_jwk`].
     ///
     /// # Errors
     ///
@@ -127,7 +127,7 @@ impl Ed25519Verifier {
         {
             return Err(jwk::error("expected kty OKP, crv Ed25519, and alg EdDSA"));
         }
-        let key_id = jwk::common(jwk, &["d"])?;
+        let key_id = jwk::common(jwk)?;
         let x = jwk::fixed_bytes(jwk, "x", KEY_BYTES)?;
         let inner = public_key(&x)?;
         Ok(Self {

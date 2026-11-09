@@ -128,16 +128,17 @@ pub(crate) fn string<'a>(jwk: &'a Map<String, Value>, field: &str) -> Result<&'a
         .ok_or_else(|| error(&format!("{field} must be a string")))
 }
 
-/// The checks every public key import applies: a bounded `kid`, no member of
-/// `private` or of a certificate, and a usage that permits verification.
+/// The private and symmetric members of every key type (RFC 7518 §6), refused
+/// in a public key whatever its type, even when null.
+const PRIVATE_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
+/// The checks every public key import applies: a bounded `kid`, no private,
+/// symmetric, or certificate member, and a usage that permits verification.
 /// Returns the `kid`.
-pub(crate) fn common<'a>(
-    jwk: &'a Map<String, Value>,
-    private: &[&str],
-) -> Result<&'a str, ProofError> {
+pub(crate) fn common(jwk: &Map<String, Value>) -> Result<&str, ProofError> {
     let key_id = string(jwk, "kid")?;
     validate_key_id(key_id)?;
-    if private.iter().any(|field| jwk.contains_key(*field)) {
+    if PRIVATE_MEMBERS.iter().any(|field| jwk.contains_key(*field)) {
         return Err(error("private key parameters are not accepted"));
     }
     if ["x5c", "x5u", "x5t", "x5t#S256"]

@@ -221,7 +221,7 @@ impl Ps256Verifier {
         if jwk::string(jwk, "kty")? != "RSA" || jwk::string(jwk, "alg")? != "PS256" {
             return Err(jwk::error("expected kty RSA and alg PS256"));
         }
-        let key_id = jwk::common(jwk, &["d", "p", "q", "dp", "dq", "qi", "oth", "k"])?;
+        let key_id = jwk::common(jwk)?;
         let n = jwk_uint(jwk, "n", MAX_MODULUS_BITS / 8)?;
         let e = jwk_uint(jwk, "e", MAX_EXPONENT_BYTES)?;
         let public = PublicKey::new(n, e).map_err(|error| jwk::error(&error.to_string()))?;

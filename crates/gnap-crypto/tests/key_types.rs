@@ -377,3 +377,16 @@ fn neither_ed25519_import_accepts_the_identity_key() {
     jwk.insert("x".into(), json!(URL_SAFE_NO_PAD.encode(identity)));
     assert!(Ed25519Verifier::from_public_jwk(&jwk).is_err());
 }
+
+/// Private and symmetric members of any key type are refused in every public
+/// key, not only those of the key's own type.
+#[test]
+fn every_import_refuses_the_private_members_of_any_key_type() {
+    for member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+        for jwk in [ed25519_jwk(), p256_jwk()] {
+            let mut with = jwk.clone();
+            with.insert(member.into(), json!("AQAB"));
+            assert!(PublicKey::from_jwk(&with).is_err(), "{member} in {jwk:?}");
+        }
+    }
+}
