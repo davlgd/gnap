@@ -47,6 +47,11 @@ def client():
     )
 
 
+def lab_body(action, proof="httpsig"):
+    """What a lab action carries: a start names its proof method, nothing else has a body."""
+    return {"proof": proof} if action.startswith("start") else None
+
+
 def request(opener, base, path, method="GET", data=None, browser_origin=None, *, html=False):
     headers = {"Accept": "text/html" if html else "application/json"}
     if browser_origin is not None:
@@ -121,12 +126,12 @@ def demo(base, outcomes):
     status, _, _, _ = request(browser, base, "/resource/folder")
     expect(status in (401, 403), "Resource did not reject an unauthenticated request")
     outcomes.append({"check": "resource-requires-authorization", "status": "pass"})
-    status, _, _, _ = request(browser, base, "/api/start", "POST", {}, "https://untrusted.invalid")
+    status, _, _, _ = request(browser, base, "/api/start", "POST", lab_body("start"), "https://untrusted.invalid")
     expect(status == 403, "Cross-origin action was not refused")
     outcomes.append({"check": "cross-origin-action-rejected", "status": "pass"})
 
     def action(name):
-        status, _, body, elapsed = request(browser, base, "/api/" + name, "POST", {}, base)
+        status, _, body, elapsed = request(browser, base, "/api/" + name, "POST", lab_body(name), base)
         expect(status == 200 and isinstance(body, dict), "Demo action failed: " + name)
         outcomes.append({"check": "demo-" + name, "status": "pass", "elapsed_ms": elapsed})
         return body
@@ -169,9 +174,9 @@ def demo(base, outcomes):
     # A separate disposable session exercises an explicit refusal, not a local
     # too-early error mislabelled as a server decision.
     denied = client()
-    status, _, _, _ = request(denied, base, "/api/start", "POST", {}, base)
+    status, _, _, _ = request(denied, base, "/api/start", "POST", lab_body("start"), base)
     expect(status == 200, "Could not create denial test session")
-    status, _, body, _ = request(denied, base, "/api/deny", "POST", {}, base)
+    status, _, body, _ = request(denied, base, "/api/deny", "POST", lab_body("deny"), base)
     expect(status == 200, "Explicit denial action failed")
     denied_callback = urllib.parse.urlsplit(body.get("redirect", ""))
     expect(
@@ -182,7 +187,7 @@ def demo(base, outcomes):
     status, _, _, _ = request(denied, base, denied_callback.path + "?" + denied_callback.query)
     expect(status == 303, "Denial callback failed")
     wait_for_continuation(denied, base)
-    status, _, body, _ = request(denied, base, "/api/continue", "POST", {}, base)
+    status, _, body, _ = request(denied, base, "/api/continue", "POST", lab_body("continue"), base)
     expect(status == 200 and body.get("state") == "denied" and not body.get("token_present"), "AS denial was not preserved")
     outcomes.append({"check": "explicit-denial", "status": "pass"})
 
@@ -193,7 +198,7 @@ def push_demo(base, outcomes):
         browser = client()
 
         def action(name):
-            status, _, body, _ = request(browser, base, "/api/" + name, "POST", {}, base)
+            status, _, body, _ = request(browser, base, "/api/" + name, "POST", lab_body(name), base)
             expect(status == 200 and isinstance(body, dict), "Push action failed: " + name)
             expect("redirect" not in body and "push-callback/" not in json.dumps(body),
                    "Push action exposed a callback destination")
@@ -268,7 +273,7 @@ def secondary_device_demo(base, outcomes):
         initiator, owner = client(), client()
 
         def action(name, expected_status=200):
-            status, _, body, _ = request(initiator, base, "/api/" + name, "POST", {}, base)
+            status, _, body, _ = request(initiator, base, "/api/" + name, "POST", lab_body(name), base)
             expect(status == expected_status and isinstance(body, dict),
                    "Code-flow client action failed: " + name)
             return body
@@ -342,7 +347,7 @@ def ongoing_demo(base, outcomes):
     archive = "synthetic-archive:read"
 
     def action(name):
-        status, _, body, elapsed = request(browser, base, "/api/" + name, "POST", {}, base)
+        status, _, body, elapsed = request(browser, base, "/api/" + name, "POST", lab_body(name), base)
         expect(status == 200 and isinstance(body, dict), "Ongoing grant action failed: " + name)
         outcomes.append({"check": "ongoing-" + name, "status": "pass", "elapsed_ms": elapsed})
         return body
@@ -413,7 +418,7 @@ def multiple_demo(base, outcomes):
     reports = {"synthetic-reports:read"}
 
     def action(name, expected_status=200):
-        status, _, body, elapsed = request(browser, base, "/api/" + name, "POST", {}, base)
+        status, _, body, elapsed = request(browser, base, "/api/" + name, "POST", lab_body(name), base)
         expect(status == expected_status and isinstance(body, dict),
                "Multiple-token action returned an unexpected status: " + name)
         outcomes.append({"check": "multiple-" + name, "status": "pass", "elapsed_ms": elapsed})
