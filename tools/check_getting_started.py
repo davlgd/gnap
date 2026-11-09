@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check the published grant walkthrough against the real example output.
 
-The historical command name is retained. The transcript lives in
-docs/getting-started.md, linked from the root README. This checks that one
-walkthrough, not every documentation claim or the support matrix.
+The transcript lives in docs/getting-started.md, linked from the root README.
+This checks that one walkthrough, not every documentation claim or the
+support matrix.
 No private requirements files are consulted.
 """
 import re

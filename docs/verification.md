@@ -42,7 +42,7 @@ This builds the committed dependency graph with the declared minimum version. Th
 ```bash
 python3 -B -m unittest discover -s tools/tests -v
 python3 -B tools/check_quotes.py
-python3 -B tools/check_readme.py
+python3 -B tools/check_getting_started.py
 python3 -B tools/check_package_assets.py
 python3 -B tools/conformance_ledger.py check
 python3 -B tools/conformance_ledger.py run-tests
@@ -53,7 +53,7 @@ These tools need Python 3.11 or newer, and no third-party package.
 
 `check_quotes.py` checks the double-quoted passages of five words or more that sit near an RFC citation in a Rust comment, against the RFC text. It reads the `.rs` files under `crates/*/` and `apps/*/`, in their `src`, `tests`, and `examples` directories, and downloads the RFC texts it misses. It normalizes whitespace, quotation marks, emphasis, and line-break hyphenation, and accepts an explicit `[...]` elision. It verifies these quotations, not paraphrases, section references, or protocol conformance.
 
-`check_readme.py` runs the `flow` example and compares its output with the transcript in [Getting started](getting-started.md). `check_package_assets.py` checks that each crate carries its license and README, that every file it includes with `include_str!` or `include_bytes!` sits inside the crate, and that its test fixtures match their canonical copies.
+`check_getting_started.py` runs the `flow` example and compares its output with the transcript in [Getting started](getting-started.md). `check_package_assets.py` checks that each crate carries its license and README, that every file it includes with `include_str!` or `include_bytes!` sits inside the crate, and that its test fixtures match their canonical copies.
 
 `conformance_ledger.py check` is offline and read-only: it verifies the vendored RFC sources, the evidence receipts, and the generated inventory. Its `run-tests` command tests the ledger tooling itself, not GNAP. Its `discovery-tests` command runs six independent assertions on a discovery response: against the bundled synthetic fixture by default, or against a reviewed capture, which gives a dated observation of one server, not a proof of conformance. The [ledger guide](../conformance/README.md) explains the inventory, the applicability decisions, and the receipts.
 
