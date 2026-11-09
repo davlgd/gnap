@@ -409,6 +409,14 @@ impl NonceStore for IndexedStorage {
     }
 }
 
+impl IndexedStorage {
+    /// Whether a grant was created for one of the lab's own sessions: its
+    /// class at creation, for routing and quotas, never a permission.
+    fn is_lab_grant(&self, id: GrantId) -> bool {
+        self.lock()
+            .is_ok_and(|state| state.lab_grants.contains(&id))
+    }
+}
 impl gnap_as::JwsReplayStore for IndexedStorage {
     // The proofs share the nonce store's bound and retention; a session that
     // ends never takes its reservations with it.
@@ -875,6 +883,25 @@ fn now() -> u64 {
     gnap_types::unix_now()
 }
 
+/// Longest wait for a second later than a JOSE read's last one.
+const FRESH_SECOND_WAIT: Duration = Duration::from_secs(2);
+
+/// The first second of `clock` later than `last`, waited for on the monotonic
+/// clock for at most `budget`: a wall clock set back can't hold the worker.
+fn fresh_second(last: u64, clock: impl Fn() -> u64, budget: Duration) -> Option<u64> {
+    let until = Instant::now() + budget;
+    loop {
+        let second = clock();
+        if second > last {
+            return Some(second);
+        }
+        if Instant::now() >= until {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn browser_view(session: &BrowserSession<'_>, origin: &str) -> Value {
     let push_finish = push_finish::view(session.push.as_ref());
     let tokens = session.client.usable_tokens(now());
@@ -929,6 +956,10 @@ struct Worker {
     references: resource_registration::References,
     /// How long a browser session lives.
     lifetime: Duration,
+    /// Where the tests receive each session key the worker generates, so
+    /// that they can sign as that session's client would.
+    #[cfg(test)]
+    generated: Option<mpsc::Sender<(String, Arc<gnap_crypto::Ed25519Signer>)>>,
 }
 
 fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
@@ -940,6 +971,8 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
         decisions,
         references,
         lifetime,
+        #[cfg(test)]
+        generated,
     } = worker;
     let transport = Network {
         client: reqwest::blocking::Client::builder()
@@ -1021,6 +1054,10 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                         cert_s256: None,
                     }),
                 };
+                #[cfg(test)]
+                if let (Some(observer), lab::LabSigner::Own(own)) = (&generated, &key) {
+                    let _ = observer.send((command.session.clone(), own.clone()));
+                }
                 let thumbprint = presented.as_ref().and_then(lab::key_thumbprint);
                 // The session lives from now, and its registration until the
                 // same instant: one monotonic deadline for both.
@@ -1389,12 +1426,11 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                     let request = match session.proof.jose() {
                         None => sign_request(read, &session.key, Some(&token), now()),
                         Some(method) => {
-                            // At most one second, so that this read's proof is
-                            // not the previous one's.
-                            while now() <= session.last_jose_read {
-                                std::thread::sleep(Duration::from_millis(100));
-                            }
-                            session.last_jose_read = now();
+                            // A later second than the previous read's, so
+                            // that this proof isn't the previous one.
+                            session.last_jose_read =
+                                fresh_second(session.last_jose_read, now, FRESH_SECOND_WAIT)
+                                    .ok_or("The clock went back; retry the read in a moment")?;
                             gnap_client::sign_jose_request(
                                 read,
                                 method,
@@ -2099,6 +2135,8 @@ async fn main() {
                     decisions,
                     references,
                     lifetime: SESSION_LIFETIME,
+                    #[cfg(test)]
+                    generated: None,
                 },
                 receiver,
             ),

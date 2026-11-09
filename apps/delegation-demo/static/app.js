@@ -65,7 +65,7 @@ function render(data) {
   lastStartable = startable;
   lockHttpsigOnly();
   const proof = data.proof && Object.hasOwn(PROOF_NAMES, data.proof.method) ? data.proof : null;
-  document.querySelector('#proof').textContent = proof ? `${PROOF_NAMES[proof.method]}, ${PROOF_ALGS[proof.alg] || 'Unknown'}` : 'None yet';
+  document.querySelector('#proof').textContent = proof ? `${PROOF_NAMES[proof.method]}, ${Object.hasOwn(PROOF_ALGS, proof.alg) ? PROOF_ALGS[proof.alg] : 'Unknown'}` : 'None yet';
   if (push?.expired) for (const action of ['approve', 'deny']) document.querySelector(`[data-action="${action}"]`).disabled = true;
   if (identityLive) identityExpiryTimer = setTimeout(() => { document.querySelector('#identity').textContent = 'The displayed assertion has expired. Refresh the status to verify again.'; }, data.identity.expires_at * 1000 - Date.now());
   // This refreshes only this client's view. It never polls GNAP continuation.
@@ -78,7 +78,10 @@ for (const button of actionButtons) button.addEventListener('click', async () =>
   const before = actionButtons.map(item => item.disabled);
   for (const item of actionButtons) item.disabled = true;
   // The buttons as they were, for an action that renders no new state.
-  const unlock = () => actionButtons.forEach((item, i) => { item.disabled = before[i]; });
+  const unlock = () => {
+    actionButtons.forEach((item, i) => { item.disabled = before[i]; });
+    lockHttpsigOnly();
+  };
   // A new grant starts a new record.
   if (button.dataset.action.startsWith('start')) { shownAttempts = []; document.querySelector('#trace').replaceChildren(); }
   try {
@@ -217,7 +220,9 @@ function chosenProof() {
   if (document.querySelector('#proof-jws').checked === true) return 'jws';
   return 'httpsig';
 }
+// While an action runs, every command stays locked, whatever the choice.
 function lockHttpsigOnly() {
+  if (busy) return;
   for (const action of ['start-identity', 'start-push']) {
     document.querySelector(`[data-action="${action}"]`).disabled = !lastStartable || chosenProof() !== 'httpsig';
   }
