@@ -274,6 +274,8 @@ fn lifecycle(endpoint: &str, options: &Lifecycle, local: bool, json: bool) -> Re
     let clock = SystemClock(interrupted);
     let notify = |message: &str| eprintln!("gnap-conformance: {message}");
     let report = scenario::lifecycle(&transport, &admission, &clock, &notify, &plan, local);
+    // As for the other commands, a late resolution doesn't hold the process.
+    runtime.shutdown_background();
     if json {
         let text = serde_json::to_string_pretty(&report)
             .map_err(|_| "the report could not be serialized".to_owned())?;
