@@ -107,7 +107,11 @@ impl Plan {
                 if entry.len() > MAX_ACCESS_BYTES {
                     return Err("an access entry is too long");
                 }
-                let value = if entry.starts_with('{') {
+                // RFC 8259 §2 — JSON whitespace may come before an object.
+                let value = if entry
+                    .trim_start_matches([' ', '\t', '\n', '\r'])
+                    .starts_with('{')
+                {
                     serde_json::from_str(entry).map_err(|_| "an access object isn't JSON")?
                 } else {
                     json!(entry)

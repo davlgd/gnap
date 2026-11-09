@@ -1349,3 +1349,60 @@ fn a_read_after_revocation_never_repeats_a_proof_second() {
         }
     }
 }
+
+/// JSON whitespace before an access object leaves it an object: the request
+/// keeps the rights the operator asked for.
+#[test]
+fn an_access_object_may_start_with_json_whitespace() {
+    let plan = Plan::new(
+        GRANT,
+        "httpsig",
+        "ES256",
+        &[" \n\t{\"type\":\"files\"}".into()],
+        None,
+        false,
+        30,
+    )
+    .unwrap();
+    let access = serde_json::to_value(&plan.access).unwrap();
+    assert_eq!(access, serde_json::json!([{"type": "files"}]));
+}
+
+/// A rotation refused with a well-formed GNAP error is inconclusive; one
+/// whose error carries another field is malformed, and fails.
+#[test]
+fn a_malformed_rotation_refusal_fails() {
+    for (body, expected) in [
+        (
+            serde_json::json!({"error": "invalid_rotation"}),
+            Outcome::Inconclusive,
+        ),
+        (
+            serde_json::json!({"error": "invalid_rotation", "instance_id": "unexpected"}),
+            Outcome::Failed,
+        ),
+    ] {
+        let tamper = |request: &HttpRequest, forward: &dyn Fn() -> HttpResponse| {
+            if request.method == "POST" && request.url.starts_with("https://as.example/manage") {
+                return json_answer(400, &body);
+            }
+            forward()
+        };
+        let server = server(false, false);
+        let (report, _) = run_with(
+            &server,
+            &plan("httpsig", "ES256", false, true),
+            &|_| {},
+            live_tokens,
+            &tamper,
+        );
+        for id in ["token-rotation", "key-rotation"] {
+            assert_eq!(
+                outcome(&report, id),
+                Some(expected),
+                "{id} {body}: {}",
+                report.text()
+            );
+        }
+    }
+}
