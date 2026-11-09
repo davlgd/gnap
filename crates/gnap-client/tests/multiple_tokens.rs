@@ -557,3 +557,31 @@ fn a_malformed_revocation_error_is_a_protocol_error() {
         );
     }
 }
+
+/// A rotation's GNAP error is the AS's refusal only when it carries nothing
+/// else (§3.6): with another field, even null, it is malformed.
+#[test]
+fn a_rotation_error_is_a_refusal_only_when_well_formed() {
+    for (body, refusal) in [
+        (r#"{"error":"invalid_rotation"}"#, true),
+        (
+            r#"{"error":"invalid_rotation","instance_id":"unexpected"}"#,
+            false,
+        ),
+        (r#"{"error":"invalid_rotation","instance_id":null}"#, false),
+    ] {
+        let sk = signer();
+        let as_ = FakeAs::with(vec![&two_of_three(), body]);
+        as_.replies.borrow_mut()[0].status = 400;
+        let mut s = Session::new(&as_, &sk, ENDPOINT);
+        s.start(&three(), 1_000).unwrap();
+
+        let e = s.rotate_token(Some("documents"), 1_010).unwrap_err();
+        assert_eq!(matches!(e, ClientError::Server(_)), refusal, "{body}: {e}");
+        assert_eq!(
+            matches!(e, ClientError::Protocol(_)),
+            !refusal,
+            "{body}: {e}"
+        );
+    }
+}

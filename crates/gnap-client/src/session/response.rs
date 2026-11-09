@@ -221,3 +221,26 @@ pub(super) fn grant_response(http: &HttpResponse) -> Result<GrantResponse, Clien
     }
     Ok(response)
 }
+
+/// A token management answer (§6): a grant response, and, when it carries a
+/// GNAP error, nothing else. §3.6 says "other fields MUST NOT be included",
+/// and a management error has no continuation to offer. The raw object is
+/// checked, since parsing drops a known field whose value is null.
+pub(super) fn management_response(http: &HttpResponse) -> Result<GrantResponse, ClientError> {
+    let response = grant_response(http)?;
+    if response.error.is_some() {
+        let only_error = serde_json::from_slice::<serde_json::Value>(&http.body)
+            .ok()
+            .and_then(|body| {
+                body.as_object()
+                    .map(|fields| fields.keys().all(|k| k == "error"))
+            })
+            .unwrap_or(false);
+        if !only_error {
+            return Err(ClientError::Protocol(
+                "a management error response carries fields besides `error` (RFC 9635 §3.6)".into(),
+            ));
+        }
+    }
+    Ok(response)
+}
