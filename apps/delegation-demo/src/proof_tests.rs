@@ -65,6 +65,14 @@ async fn each_proof_method_runs_the_whole_lab() {
             let view = act(&app, &id, action).await;
             assert!(view.get("error").is_none(), "{method} {action}: {view}");
             assert_eq!(last_attempt(&view).0, bodiless, "{method} {action}");
+            if action == "read-metadata" {
+                // The documents server derived a token for the metadata one.
+                assert_eq!(
+                    view["folder"]["derived_right"],
+                    derivation::METADATA_READ,
+                    "{method}: {view}"
+                );
+            }
         }
         let view = act(&app, &id, "read").await;
         assert_eq!(view["folder"]["granted_right"], FOLDER_READ, "{method}");
@@ -230,6 +238,13 @@ async fn a_start_body_is_read_strictly() {
     for action in ["start-identity", "start-push"] {
         let response = send(action, r#"{"proof":"jwsd"}"#.into()).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{action}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&body).contains("use HTTP message signatures in this lab"),
+            "{action} is refused for its proof, before anything else"
+        );
     }
     let response = send("status", r#"{"proof":"jwsd"}"#.into()).await;
     assert!(
@@ -310,10 +325,23 @@ async fn only_a_registered_key_with_its_proof_is_resolved() {
 }
 
 async fn approved(app: &App, router: &Router, origin: &str, proof: &str) -> String {
-    let id = start_proving(router, origin, "start", &format!(r#"{{"proof":"{proof}"}}"#)).await;
+    let id = start_proving(
+        router,
+        origin,
+        "start",
+        &format!(r#"{{"proof":"{proof}"}}"#),
+    )
+    .await;
     let finish = act(app, &id, "approve").await;
-    act(app, &id, &format!("callback:{}", finish["redirect"].as_str().unwrap())).await;
-    let wait = act(app, &id, "status").await["continuation_wait_seconds"].as_u64().unwrap();
+    act(
+        app,
+        &id,
+        &format!("callback:{}", finish["redirect"].as_str().unwrap()),
+    )
+    .await;
+    let wait = act(app, &id, "status").await["continuation_wait_seconds"]
+        .as_u64()
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(wait)).await;
     act(app, &id, "continue").await;
     id
@@ -325,16 +353,31 @@ async fn approved(app: &App, router: &Router, origin: &str, proof: &str) -> Stri
 async fn a_jose_session_reduces_then_expands_its_grant() {
     let (app, router, origin) = lab(SESSION_LIFETIME).await;
     let id = approved(&app, &router, &origin, "jwsd").await;
+    // The continuation answers again only after its wait.
+    let wait = act(&app, &id, "status").await["continuation_wait_seconds"]
+        .as_u64()
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(wait)).await;
     let reduced = act(&app, &id, "downscope").await;
     assert_eq!(reduced["rights"], json!([FOLDER_READ]), "{reduced}");
-    assert_eq!(last_attempt(&reduced), ("jwsd".to_owned(), "continue".to_owned()));
+    assert_eq!(
+        last_attempt(&reduced),
+        ("jwsd".to_owned(), "continue".to_owned())
+    );
     let wait = reduced["continuation_wait_seconds"].as_u64().unwrap_or(0);
     tokio::time::sleep(Duration::from_secs(wait)).await;
     let pending = act(&app, &id, "expand").await;
     assert_eq!(pending["state"], "pending", "{pending}");
     let finish = act(&app, &id, "approve").await;
-    act(&app, &id, &format!("callback:{}", finish["redirect"].as_str().unwrap())).await;
-    let wait = act(&app, &id, "status").await["continuation_wait_seconds"].as_u64().unwrap();
+    act(
+        &app,
+        &id,
+        &format!("callback:{}", finish["redirect"].as_str().unwrap()),
+    )
+    .await;
+    let wait = act(&app, &id, "status").await["continuation_wait_seconds"]
+        .as_u64()
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(wait)).await;
     let expanded = act(&app, &id, "continue").await;
     assert_eq!(expanded["token_present"], true);
@@ -350,13 +393,29 @@ async fn two_jose_sessions_of_one_method_keep_apart() {
     let a = start_proving(&router, &origin, "start", r#"{"proof":"jwsd"}"#).await;
     let b = start_proving(&router, &origin, "start", r#"{"proof":"jwsd"}"#).await;
     let finish_a = act(&app, &a, "approve").await;
-    let crossed = dispatch(&app, b.clone(), format!("callback:{}", finish_a["redirect"].as_str().unwrap())).await;
+    let crossed = dispatch(
+        &app,
+        b.clone(),
+        format!("callback:{}", finish_a["redirect"].as_str().unwrap()),
+    )
+    .await;
     assert!(crossed.is_err(), "A's callback is not B's");
     let keys: Vec<_> = {
-        let ids: Vec<_> = app.storage.lock().unwrap().continuation_deadlines.keys().copied().collect();
+        let ids: Vec<_> = app
+            .storage
+            .lock()
+            .unwrap()
+            .continuation_deadlines
+            .keys()
+            .copied()
+            .collect();
         ids.into_iter()
             .map(|grant| {
-                let snapshot = app.storage.lookup(GrantSelector::Id(grant)).unwrap().unwrap();
+                let snapshot = app
+                    .storage
+                    .lookup(GrantSelector::Id(grant))
+                    .unwrap()
+                    .unwrap();
                 lab::presented_thumbprint(&snapshot.aggregate.record.request.client).unwrap()
             })
             .collect()
@@ -364,4 +423,3 @@ async fn two_jose_sessions_of_one_method_keep_apart() {
     assert_eq!(keys.len(), 2);
     assert_ne!(keys[0], keys[1], "each session presents its own key");
 }
-
