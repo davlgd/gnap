@@ -81,6 +81,30 @@ pub(super) fn require_json_content(request: &HttpRequest) -> Result<(), HttpResp
     }
 }
 
+/// Whether the request's content is an attached JWS (RFC 9635 §7.3.4): one
+/// `Content-Type` field whose media type is `application/jose`.
+pub(super) fn is_jose_content(request: &HttpRequest) -> bool {
+    let mut types = request.header_values("content-type");
+    let jose = types.next().is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim_matches([' ', '\t'])
+            .eq_ignore_ascii_case(gnap_crypto::jws::JOSE_MEDIA_TYPE)
+    });
+    jose && types.next().is_none()
+}
+
+/// The refusal of a key whose proof method this server doesn't verify.
+pub(super) fn unsupported_proof() -> HttpResponse {
+    error(
+        ErrorCode::InvalidClient,
+        "the presented key requires a proof method this server does not support \
+         (RFC 9635 §2.3, §7.3)",
+    )
+}
+
 /// 405, naming the methods the endpoint does answer.
 pub(super) fn method_not_allowed(allowed: &str) -> HttpResponse {
     HttpResponse {
@@ -94,7 +118,7 @@ pub(super) fn method_not_allowed(allowed: &str) -> HttpResponse {
 }
 
 /// 415, for content that is not the JSON object §2 requires.
-fn unsupported_media_type() -> HttpResponse {
+pub(super) fn unsupported_media_type() -> HttpResponse {
     HttpResponse {
         status: 415,
         headers: vec![

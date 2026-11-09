@@ -21,23 +21,28 @@ use grant::{check_presented_key, classify, presented_key, supported_finish};
 
 use management::gnap_token;
 use responses::{
-    error, method_not_allowed, misconfigured, no_content, not_found, ok, require_json_content,
-    storage_failure,
+    error, is_jose_content, method_not_allowed, misconfigured, no_content, not_found, ok,
+    require_json_content, storage_failure, unsupported_media_type, unsupported_proof,
 };
 
 use crate::encoding::{EncodedToken, OpaqueTokenEncoder, TokenEncoder};
 use crate::nonce::Nonces;
 use crate::policy::{KeyResolver, Policy, ReleasedSubject, SubjectGround};
 use crate::storage::{
-    GrantAggregate, GrantSnapshot, RotationNonceStore, Storage, StoreError, TokenRecord,
-    UserCodeStore,
+    GrantAggregate, GrantSnapshot, JwsReplayStore, RotationNonceStore, Storage, StoreError,
+    TokenRecord, UserCodeStore,
 };
 use gnap_core::State;
+use gnap_crypto::jws::{verify_jws_request, JwsKey, JwsMethod, ReplayId};
+use gnap_crypto::proof::Verifier;
 use gnap_crypto::verify::{verify_request, Expectations, SignedRequest};
-use gnap_registry::ErrorCode;
+use gnap_crypto::PublicKey;
+use gnap_registry::{ErrorCode, KeyProofingMethod};
 use gnap_types::http::{HttpRequest, HttpResponse};
+use gnap_types::key::KeyObject;
 use gnap_types::message::{AsDiscovery, Continue, GrantRequest, GrantResponse};
 use gnap_types::token::{AccessToken, AccessTokenResponse, BoundToken, TokenManage, TokenValue};
+use std::borrow::Cow;
 use std::fmt;
 
 /// How far a signature's `created` timestamp may sit from the current time.
@@ -181,12 +186,18 @@ pub struct AuthorizationServer<P, K, S, N, E = OpaqueTokenEncoder> {
     /// The store's atomic nonce-pair reservation, captured by
     /// [`Self::with_key_rotation`]; `None` means key rotation is disabled.
     key_rotation: Option<NoncePairReservation<S>>,
+    /// The store's reservation of JOSE proofs, captured by
+    /// [`Self::with_jose_proofs`]; `None` means only `httpsig` is accepted.
+    jose: Option<JwsReservation<S>>,
     user_codes: Option<crate::user_code::Configuration<S>>,
     encoder: E,
 }
 
 /// The [`RotationNonceStore::remember_nonce_pair`] of the server's own store.
 type NoncePairReservation<S> = fn(&S, Option<&str>, Option<&str>, u64) -> bool;
+
+/// The [`JwsReplayStore::reserve_jws_proofs`] of the server's own store.
+type JwsReservation<S> = fn(&S, &[ReplayId], u64) -> bool;
 
 /// All newly generated credentials are chosen before invoking the encoder.
 struct PreparedToken {
@@ -248,6 +259,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces> AuthorizationServer<P, K,
             endpoints,
             development_http_discovery: false,
             key_rotation: None,
+            jose: None,
             user_codes: None,
             encoder: OpaqueTokenEncoder,
         }
@@ -273,6 +285,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             endpoints: self.endpoints,
             development_http_discovery: self.development_http_discovery,
             key_rotation: self.key_rotation,
+            jose: self.jose,
             user_codes: self.user_codes,
             encoder,
         }
@@ -395,6 +408,26 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         self
     }
 
+    /// Accepts the JOSE proofs, `jws` and `jwsd` (RFC 9635 §7.3.3, §7.3.4),
+    /// for grant, continuation, and token management requests, and announces
+    /// them in discovery.
+    ///
+    /// A client presents its key by value, as a JWK whose `proof` names the
+    /// method, and the server verifies the proof with that JWK; a client named
+    /// by reference keeps proving with `httpsig`. The store reserves each
+    /// accepted proof against replay, so servers sharing a store share the
+    /// reservations. Key rotation, derivation, and resource-server requests
+    /// keep `httpsig`.
+    #[must_use]
+    pub const fn with_jose_proofs(mut self, enabled: bool) -> Self
+    where
+        S: JwsReplayStore,
+    {
+        let reserve: JwsReservation<S> = <S as JwsReplayStore>::reserve_jws_proofs;
+        self.jose = if enabled { Some(reserve) } else { None };
+        self
+    }
+
     /// A fresh unguessable value, or the 500 response to send without one.
     fn nonce(&self) -> Result<String, HttpResponse> {
         self.nonces
@@ -431,7 +464,8 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     ///
     /// No grant, key resolution, signature check or nonce consumption occurs.
     /// Engine capabilities include `httpsig`, the key-rotation setting,
-    /// redirect start and, after explicit configuration, both user-code starts.
+    /// redirect start and, after explicit configuration, `jws` and `jwsd` and
+    /// both user-code starts.
     /// Other interaction/subject fields are omitted because their availability
     /// depends on policy and HTTP adapter behavior;
     /// a registry enum is not a deployment's capability catalogue.
@@ -459,7 +493,15 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             grant_request_endpoint: self.endpoints.grant.clone(),
             interaction_start_modes_supported: Some(starts),
             interaction_finish_methods_supported: None,
-            key_proofs_supported: Some(vec![gnap_registry::KeyProofingMethod::Httpsig]),
+            key_proofs_supported: Some(if self.jose.is_some() {
+                vec![
+                    KeyProofingMethod::Httpsig,
+                    KeyProofingMethod::Jws,
+                    KeyProofingMethod::Jwsd,
+                ]
+            } else {
+                vec![KeyProofingMethod::Httpsig]
+            }),
             sub_id_formats_supported: None,
             assertion_formats_supported: None,
             key_rotation_supported: Some(self.key_rotation.is_some()),
@@ -495,6 +537,70 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         }
     }
 
+    /// Verifies the proof of possession of `key`, the client's or the token's,
+    /// and returns the request content it authenticates: the handlers parse
+    /// that content, and only that.
+    ///
+    /// The proof method is the key's, never one the request suggests: `httpsig`
+    /// for a key without a value on file, such as a client named by reference,
+    /// and `jws` or `jwsd` after [`Self::with_jose_proofs`], for a JWK sent by
+    /// value. A JOSE proof is verified with that JWK itself, whose thumbprint
+    /// scopes its replay protection: the resolver's verifier says that the
+    /// client is known, and its algorithm has to agree with the JWK.
+    fn prove<'r>(
+        &self,
+        request: &'r HttpRequest,
+        verifier: &dyn Verifier,
+        key: Option<&KeyObject>,
+        now: u64,
+    ) -> Result<Cow<'r, [u8]>, HttpResponse> {
+        let method = match key.map(|key| key.proof.method()) {
+            None | Some(KeyProofingMethod::Httpsig) => {
+                let presented_kid = match key {
+                    None => None,
+                    Some(key) => check_presented_key(key, verifier)?,
+                };
+                self.verify_signature(request, verifier, presented_kid, now)?;
+                return Ok(Cow::Borrowed(request.body.as_deref().unwrap_or_default()));
+            }
+            Some(KeyProofingMethod::Jws) => JwsMethod::Jws,
+            Some(KeyProofingMethod::Jwsd) => JwsMethod::Jwsd,
+            Some(_) => return Err(unsupported_proof()),
+        };
+        let (Some(reserve), Some(key)) = (self.jose, key) else {
+            return Err(unsupported_proof());
+        };
+        if !crate::policy::parameterless_proof(&key.proof) {
+            return Err(error(
+                ErrorCode::InvalidClient,
+                "the jws and jwsd proofs take no parameters (RFC 9635 §7.3.3, §7.3.4)",
+            ));
+        }
+        let Some(jwk) = key.jwk.as_ref() else {
+            return Err(error(
+                ErrorCode::InvalidClient,
+                "this server verifies the jws and jwsd proofs of a key presented as a JWK",
+            ));
+        };
+        let public =
+            PublicKey::for_jws(jwk).map_err(|e| error(ErrorCode::InvalidClient, &e.to_string()))?;
+        if verifier.algorithm() != public.algorithm() {
+            return Err(error(
+                ErrorCode::InvalidClient,
+                "the key resolver verifies another algorithm than the JWK declares",
+            ));
+        }
+        let reserve = |ids: &[ReplayId], at: u64| reserve(&self.storage, ids, at);
+        verify_jws_request(
+            method,
+            &signed_request(request),
+            &JwsKey::for_public_key(&public, now, MAX_CLOCK_SKEW),
+            &reserve,
+        )
+        .map(|accepted| Cow::Owned(accepted.content))
+        .map_err(|e| error(ErrorCode::InvalidClient, &e.to_string()))
+    }
+
     /// Verifies the request's signature (§7.3.1), with this server's policy.
     ///
     /// The checks themselves live in `gnap_crypto::verify`, once for every
@@ -503,30 +609,34 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     fn verify_signature(
         &self,
         request: &HttpRequest,
-        verifier: &dyn gnap_crypto::proof::Verifier,
+        verifier: &dyn Verifier,
         presented_kid: Option<&str>,
         now: u64,
     ) -> Result<(), HttpResponse> {
-        let signed = SignedRequest {
-            method: &request.method,
-            target_uri: &request.url,
-            headers: &request.headers,
-            body: request.body.as_deref(),
-        };
         let expectations = Expectations {
             now,
             max_clock_skew: MAX_CLOCK_SKEW,
             key_id: presented_kid,
         };
         let remember = |nonce: &str, at: u64| self.storage.remember_nonce(nonce, at);
-        verify_request(&signed, verifier, &expectations, &remember)
+        verify_request(&signed_request(request), verifier, &expectations, &remember)
             .map(|_| ())
             .map_err(|e| error(ErrorCode::InvalidClient, &e.to_string()))
     }
 
-    fn parse<D: serde::de::DeserializeOwned>(request: &HttpRequest) -> Result<D, HttpResponse> {
-        let body = request.body.as_deref().unwrap_or_default();
-        serde_json::from_slice(body).map_err(|e| error(ErrorCode::InvalidRequest, &e.to_string()))
+    fn parse<D: serde::de::DeserializeOwned>(content: &[u8]) -> Result<D, HttpResponse> {
+        serde_json::from_slice(content)
+            .map_err(|e| error(ErrorCode::InvalidRequest, &e.to_string()))
+    }
+}
+
+/// The request as the proof verifiers read it.
+fn signed_request(request: &HttpRequest) -> SignedRequest<'_> {
+    SignedRequest {
+        method: &request.method,
+        target_uri: &request.url,
+        headers: &request.headers,
+        body: request.body.as_deref(),
     }
 }
 

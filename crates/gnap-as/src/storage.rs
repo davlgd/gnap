@@ -388,6 +388,21 @@ pub trait RotationNonceStore: NonceStore {
     ) -> bool;
 }
 
+/// Optional replay-memory capability for the JOSE proofs, `jws` and `jwsd`.
+///
+/// A JOSE proof has no nonce: the verifier reserves the identifier of each
+/// accepted proof instead, with the contract of
+/// [`gnap_crypto::JwsReplayMemory`]. That namespace is not the one of
+/// [`NonceStore`], whose values a client chooses, and its retention follows
+/// each proof's `created` within a window the store owns. A server enables the
+/// JOSE proofs only for a store implementing this trait, captured by
+/// `with_jose_proofs`; servers that share the store share the reservations.
+pub trait JwsReplayStore {
+    /// Reserves every identifier at `now`, or none, as
+    /// [`gnap_crypto::JwsReplayMemory::reserve`] specifies.
+    fn reserve_jws_proofs(&self, ids: &[gnap_crypto::ReplayId], now: u64) -> bool;
+}
+
 /// The state required by an authorization server.
 pub trait Storage: GrantStore + NonceStore {}
 impl<T: GrantStore + NonceStore> Storage for T {}
@@ -438,6 +453,11 @@ macro_rules! forward_storage {
                 (**self).remember_nonce(nonce, now)
             }
         }
+        impl<T: JwsReplayStore + ?Sized> JwsReplayStore for $pointer {
+            fn reserve_jws_proofs(&self, ids: &[gnap_crypto::ReplayId], now: u64) -> bool {
+                (**self).reserve_jws_proofs(ids, now)
+            }
+        }
         impl<T: RotationNonceStore + ?Sized> RotationNonceStore for $pointer {
             fn remember_nonce_pair(
                 &self,
@@ -455,4 +475,4 @@ forward_storage!(&T);
 
 mod memory;
 
-pub use memory::MemoryStorage;
+pub use memory::{MemoryStorage, MAX_JWS_PROOFS};

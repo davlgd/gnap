@@ -1,8 +1,8 @@
 //! Downstream token derivation (RFC 9767 §4): a resource server exchanging a token it received.
 
 use super::{
-    error, misconfigured, ok, require_json_content, storage_failure, ApprovedDerivation,
-    AuthorizationServer, MAX_GRANT_BODY_BYTES,
+    error, is_jose_content, misconfigured, ok, require_json_content, storage_failure,
+    ApprovedDerivation, AuthorizationServer, MAX_GRANT_BODY_BYTES,
 };
 use crate::nonce::Nonces;
 use crate::policy::{KeyResolver, Policy};
@@ -89,7 +89,12 @@ impl<P: Policy, K: KeyResolver, S: Storage + DerivedGrantStore, N: Nonces>
         clock: &dyn Fn() -> u64,
     ) -> HttpResponse {
         let now = clock();
-        if request.url != self.endpoints.grant || !request.method.eq_ignore_ascii_case("POST") {
+        // An attached JWS is an ordinary grant request: this handler derives
+        // only from requests proven with `httpsig`.
+        if request.url != self.endpoints.grant
+            || !request.method.eq_ignore_ascii_case("POST")
+            || is_jose_content(request)
+        {
             return self.handle(request, now);
         }
         let Some(bytes) = request

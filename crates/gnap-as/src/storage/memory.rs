@@ -2,18 +2,24 @@
 
 use super::{
     DerivedGrantStore, GrantAggregate, GrantId, GrantSelector, GrantSnapshot, GrantStore,
-    NonceStore, Revision, RotationNonceStore, StoreError, UserCodeStore,
+    JwsReplayStore, NonceStore, Revision, RotationNonceStore, StoreError, UserCodeStore,
 };
 use crate::derivation::{
     ParentToken, MAX_DERIVED_CHILDREN, MAX_DERIVED_GRANTS, MAX_DERIVED_LIFETIME,
 };
 use crate::server::MAX_CLOCK_SKEW;
+use gnap_crypto::jws::{JwsReplayMemory as _, ReplayCache, ReplayId};
 use gnap_types::token::TokenValue;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Mutex, TryLockError};
 
 const NONCE_MEMORY: u64 = 2 * MAX_CLOCK_SKEW;
+
+/// Most JOSE proof identifiers the memory store holds at once. Past it, the
+/// store refuses new proofs until older ones leave their window, rather than
+/// forget one that could still be replayed.
+pub const MAX_JWS_PROOFS: usize = 64 * 1024;
 
 #[derive(Default)]
 struct Indices {
@@ -250,11 +256,23 @@ impl State {
 /// are never reused. No policy, signature verification or token encoding runs
 /// under this lock; local index hashing and the trusted clock callback do.
 ///
-/// Its `Debug` output shows counts only: the indices are keyed by credentials.
-#[derive(Default)]
+/// It holds at most [`MAX_JWS_PROOFS`] JOSE proof identifiers, within a
+/// window of [`MAX_CLOCK_SKEW`]. Its `Debug` output shows counts only: the
+/// indices are keyed by credentials.
 pub struct MemoryStorage {
     state: Mutex<State>,
     nonces: Mutex<HashMap<String, u64>>,
+    jws_proofs: ReplayCache,
+}
+
+impl Default for MemoryStorage {
+    fn default() -> Self {
+        Self {
+            state: Mutex::default(),
+            nonces: Mutex::default(),
+            jws_proofs: ReplayCache::new(MAX_JWS_PROOFS, MAX_CLOCK_SKEW),
+        }
+    }
 }
 
 impl fmt::Debug for MemoryStorage {
@@ -272,6 +290,7 @@ impl fmt::Debug for MemoryStorage {
             Err(TryLockError::WouldBlock) => shown.field("reserved_nonces", &"<locked>"),
             Err(TryLockError::Poisoned(_)) => shown.field("reserved_nonces", &"<poisoned>"),
         };
+        shown.field("reserved_jws_proofs", &self.jws_proofs.len());
         shown.finish()
     }
 }
@@ -558,6 +577,12 @@ impl NonceStore for MemoryStorage {
         };
         seen.retain(|_, first| now.saturating_sub(*first) <= NONCE_MEMORY);
         seen.insert(nonce.to_owned(), now).is_none()
+    }
+}
+
+impl JwsReplayStore for MemoryStorage {
+    fn reserve_jws_proofs(&self, ids: &[ReplayId], now: u64) -> bool {
+        self.jws_proofs.reserve(ids, now)
     }
 }
 
