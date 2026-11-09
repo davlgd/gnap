@@ -15,4 +15,4 @@ destination, check every resolved address, pin the checked addresses when
 connecting, prevent redirects and enforce time and size bounds. Any local
 development exception belongs to that caller, not to `public_ip`.
 
-Part of [gnap](https://github.com/davlgd/gnap). Rust 1.88 or newer; Apache-2.0.
+Part of [gnap](https://github.com/davlgd/gnap). Rust 1.95 or newer; Apache-2.0.

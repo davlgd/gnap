@@ -34,6 +34,6 @@ they do not establish every possible protocol history.
 See [architecture](https://github.com/davlgd/gnap/blob/main/docs/architecture.md)
 for its place in a complete application.
 
-Part of [gnap](https://github.com/davlgd/gnap). Rust 1.88 or newer; Apache-2.0.
+Part of [gnap](https://github.com/davlgd/gnap). Rust 1.95 or newer; Apache-2.0.
 For source dependencies and the upcoming 0.1.0 publication, see the
 [release guide](https://github.com/davlgd/gnap/blob/main/docs/releasing.md).

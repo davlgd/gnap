@@ -44,7 +44,7 @@ It requests access, simulates resource-owner approval, validates the callback,
 obtains a token, then rotates and revokes it. It uses the real SDK roles with
 an in-memory transport; it starts no HTTP server.
 
-The SDK workspace requires Rust 1.88 or newer. HTTP applications have separate
+The SDK workspace requires Rust 1.95 or newer. HTTP applications have separate
 toolchain requirements in their guides; Biscuit files requires Rust 1.98 and Unix.
 See [Getting started](docs/getting-started.md) for the annotated output,
 additional runnable examples and integration instructions.

@@ -206,7 +206,7 @@ const NONCE_BYTES: usize = 16;
 /// not random is worse than none, so nothing is made up in its place.
 pub fn fresh_nonce() -> Result<String, ProofError> {
     let mut bytes = [0u8; NONCE_BYTES];
-    getrandom::getrandom(&mut bytes).map_err(|e| {
+    getrandom::fill(&mut bytes).map_err(|e| {
         ProofError::Signing(format!("no OS randomness for the signature nonce: {e}"))
     })?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))

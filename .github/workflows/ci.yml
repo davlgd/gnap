@@ -90,12 +90,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Rust 1.88.0
-        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Install Rust 1.95.0
+        run: rustup toolchain install 1.95.0 --profile minimal
       - uses: Swatinem/rust-cache@v2
       - name: Build
         # Verify the minimum version against the committed dependency graph.
-        run: cargo +1.88.0 build --workspace --locked
+        run: cargo +1.95.0 build --workspace --locked
 
   ecosystem:
     name: Real application consumers

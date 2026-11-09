@@ -20,7 +20,7 @@ write notes.
 ## Run locally
 
 This standalone application requires Unix and Rust 1.98; its key-file setup
-relies on Unix permission modes. It does not change the SDK's Rust 1.88 contract.
+relies on Unix permission modes. It does not change the SDK's Rust 1.95 contract.
 Run these commands from the repository root:
 
 ```console

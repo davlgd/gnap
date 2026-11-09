@@ -12,7 +12,7 @@ fn materials() -> &'static BTreeMap<String, String> {
             ("root.pub".into(), root.public().to_bytes_hex()),
         ]);
         for role in ["client", "rs"] {
-            let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+            let key = rsa::PrivateKey::new(&mut getrandom::SysRng, 2048).unwrap();
             let pem = key.to_pkcs8_pem(LineEnding::LF).unwrap().to_string();
             let signer =
                 gnap_crypto::Ps256Signer::from_pkcs8_pem(&pem, format!("files-{role}")).unwrap();

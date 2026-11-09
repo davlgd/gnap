@@ -14,17 +14,17 @@ use crate::proof::{ProofError, Signer, Verifier};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
-use rsa::pss::{BlindedSigningKey, Signature, VerifyingKey};
+use rsa::pss::{Signature, SigningKey, VerifyingKey};
 use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier as _};
 use rsa::traits::PublicKeyParts;
-use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
+use rsa::{BoxedUint, PrivateKey, PublicKey};
 use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 
 /// An RSA private key used with `PS256`.
 pub struct Ps256Signer {
-    inner: BlindedSigningKey<Sha256>,
-    public: RsaPublicKey,
+    inner: SigningKey<Sha256>,
+    public: PublicKey,
     key_id: String,
 }
 
@@ -38,7 +38,7 @@ impl Ps256Signer {
     /// Size of the RSA modulus, for profiles that constrain key strength.
     #[must_use]
     pub fn modulus_bits(&self) -> usize {
-        self.public.n().bits()
+        self.public.n().bit_width() as usize
     }
 
     /// Loads a PKCS#8 private key, `BEGIN PRIVATE KEY` format.
@@ -51,7 +51,7 @@ impl Ps256Signer {
     /// Fails when the PEM cannot be read as a PKCS#8 RSA private key — which
     /// includes a key carrying the RSASSA-PSS OID.
     pub fn from_pkcs8_pem(pem: &str, key_id: impl Into<String>) -> Result<Self, ProofError> {
-        let sk = RsaPrivateKey::from_pkcs8_pem(pem).map_err(|e| ProofError::Key(e.to_string()))?;
+        let sk = PrivateKey::from_pkcs8_pem(pem).map_err(|e| ProofError::Key(e.to_string()))?;
         Ok(Self::from_key(sk, key_id))
     }
 
@@ -60,7 +60,7 @@ impl Ps256Signer {
     ///
     /// Fails when the PEM cannot be read as a PKCS#1 RSA private key.
     pub fn from_pkcs1_pem(pem: &str, key_id: impl Into<String>) -> Result<Self, ProofError> {
-        let sk = RsaPrivateKey::from_pkcs1_pem(pem).map_err(|e| ProofError::Key(e.to_string()))?;
+        let sk = PrivateKey::from_pkcs1_pem(pem).map_err(|e| ProofError::Key(e.to_string()))?;
         Ok(Self::from_key(sk, key_id))
     }
 
@@ -73,16 +73,16 @@ impl Ps256Signer {
     /// Fails when key generation does, which in practice means the random
     /// source is unavailable or `bits` is too small.
     pub fn generate(bits: usize, key_id: impl Into<String>) -> Result<Self, ProofError> {
-        let mut rng = OsRng;
-        let sk = RsaPrivateKey::new(&mut rng, bits)
+        let mut rng = getrandom::SysRng;
+        let sk = PrivateKey::new(&mut rng, bits)
             .map_err(|e| ProofError::Key(format!("generation: {e}")))?;
         Ok(Self::from_key(sk, key_id))
     }
 
-    fn from_key(sk: RsaPrivateKey, key_id: impl Into<String>) -> Self {
+    fn from_key(sk: PrivateKey, key_id: impl Into<String>) -> Self {
         let public = sk.to_public_key();
         Self {
-            inner: BlindedSigningKey::<Sha256>::new(sk),
+            inner: SigningKey::<Sha256>::new(sk),
             public,
             key_id: key_id.into(),
         }
@@ -115,11 +115,15 @@ impl Ps256Signer {
             ("kty".into(), Value::String("RSA".into())),
             (
                 "n".into(),
-                Value::String(URL_SAFE_NO_PAD.encode(self.public.n().to_bytes_be())),
+                Value::String(
+                    URL_SAFE_NO_PAD.encode(self.public.n().to_be_bytes_trimmed_vartime()),
+                ),
             ),
             (
                 "e".into(),
-                Value::String(URL_SAFE_NO_PAD.encode(self.public.e().to_bytes_be())),
+                Value::String(
+                    URL_SAFE_NO_PAD.encode(self.public.e().to_be_bytes_trimmed_vartime()),
+                ),
             ),
             ("alg".into(), Value::String("PS256".into())),
             ("kid".into(), Value::String(self.key_id.clone())),
@@ -130,8 +134,14 @@ impl Ps256Signer {
 
 impl Signer for Ps256Signer {
     fn sign(&self, data: &[u8]) -> Result<Vec<u8>, ProofError> {
-        let mut rng = OsRng;
-        Ok(self.inner.sign_with_rng(&mut rng, data).to_vec())
+        // `RSASSA-PSS` needs fresh randomness for both the salt and the RSA
+        // base blinding, so a missing entropy source is an error rather than a
+        // weaker signature.
+        let mut rng = getrandom::SysRng;
+        self.inner
+            .try_sign_with_rng(&mut rng, data)
+            .map(|s| s.to_vec())
+            .map_err(|e| ProofError::Signing(format!("PS256 signature: {e}")))
     }
 
     fn key_id(&self) -> &str {
@@ -159,7 +169,7 @@ impl Ps256Verifier {
     /// Size of the RSA modulus, for profiles that constrain key strength.
     #[must_use]
     pub fn modulus_bits(&self) -> usize {
-        self.inner.as_ref().n().bits()
+        self.inner.as_ref().n().bit_width() as usize
     }
 
     /// Imports a public RSA JWK for GNAP's PS256 HTTP signatures.
@@ -214,10 +224,10 @@ impl Ps256Verifier {
             }
         }
         validate_jwk_usage(jwk)?;
-        let n = jwk_uint(jwk, "n", RsaPublicKey::MAX_SIZE / 8)?;
+        let n = jwk_uint(jwk, "n", MAX_MODULUS_BITS / 8)?;
         let e = jwk_uint(jwk, "e", 5)?;
         let public =
-            RsaPublicKey::new(n, e).map_err(|error| ProofError::Key(format!("JWK: {error}")))?;
+            PublicKey::new(n, e).map_err(|error| ProofError::Key(format!("JWK: {error}")))?;
         validate_public_size(&public)?;
         Ok(Self {
             inner: VerifyingKey::<Sha256>::from(public),
@@ -234,8 +244,7 @@ impl Ps256Verifier {
     ///
     /// Fails when the PEM cannot be read as an RSA public key.
     pub fn from_public_key_pem(pem: &str) -> Result<Self, ProofError> {
-        let pk =
-            RsaPublicKey::from_public_key_pem(pem).map_err(|e| ProofError::Key(e.to_string()))?;
+        let pk = PublicKey::from_public_key_pem(pem).map_err(|e| ProofError::Key(e.to_string()))?;
         Ok(Self {
             inner: VerifyingKey::<Sha256>::from(pk),
             key_id: None,
@@ -288,8 +297,15 @@ fn validate_key_id(key_id: &str) -> Result<(), ProofError> {
     Ok(())
 }
 
-fn validate_public_size(public: &RsaPublicKey) -> Result<(), ProofError> {
-    if !(2048..=RsaPublicKey::MAX_SIZE).contains(&public.n().bits()) {
+/// Upper bound on the modulus this profile accepts.
+///
+/// This is the project's own bound, not the `rsa` crate's `MAX_SIZE`: that
+/// constant moved from 4096 to 8192 in rsa 0.10, so borrowing it would have
+/// silently widened what this verifier accepts.
+const MAX_MODULUS_BITS: usize = 4096;
+
+fn validate_public_size(public: &PublicKey) -> Result<(), ProofError> {
+    if !(2048..=MAX_MODULUS_BITS).contains(&(public.n().bit_width() as usize)) {
         return Err(jwk_error("RSA modulus must contain 2048–4096 bits"));
     }
     Ok(())
@@ -299,7 +315,7 @@ fn jwk_uint(
     jwk: &Map<String, Value>,
     field: &str,
     max_bytes: usize,
-) -> Result<BigUint, ProofError> {
+) -> Result<BoxedUint, ProofError> {
     let encoded = jwk_string(jwk, field)?;
     if encoded.is_empty() || encoded.len() > (max_bytes * 8).div_ceil(6) {
         return Err(jwk_error(&format!(
@@ -314,7 +330,7 @@ fn jwk_uint(
             "{field} must be a minimal positive integer"
         )));
     }
-    Ok(BigUint::from_bytes_be(&bytes))
+    Ok(BoxedUint::from_be_slice_vartime(&bytes))
 }
 
 fn validate_jwk_usage(jwk: &Map<String, Value>) -> Result<(), ProofError> {
@@ -352,41 +368,11 @@ fn validate_jwk_usage(jwk: &Map<String, Value>) -> Result<(), ProofError> {
     }
     Ok(())
 }
-
-/// The OS randomness source, adapted to the interface the `rsa` crate expects.
-///
-/// `RSASSA-PSS` needs a fresh random salt on every signature.
-struct OsRng;
-
-impl rsa::rand_core::RngCore for OsRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut b = [0u8; 4];
-        self.fill_bytes(&mut b);
-        u32::from_le_bytes(b)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut b = [0u8; 8];
-        self.fill_bytes(&mut b);
-        u64::from_le_bytes(b)
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        getrandom::getrandom(dest).expect("OS randomness source unavailable");
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rsa::rand_core::Error> {
-        getrandom::getrandom(dest).map_err(|e| rsa::rand_core::Error::new(e.to_string()))
-    }
-}
-
-impl rsa::rand_core::CryptoRng for OsRng {}
-
-fn thumbprint(key: &RsaPublicKey) -> String {
+fn thumbprint(key: &PublicKey) -> String {
     // Base64url integers contain no JSON escapes; this fixes member order even
     // when a consumer enables serde_json's preserve_order feature.
-    let e = URL_SAFE_NO_PAD.encode(key.e().to_bytes_be());
-    let n = URL_SAFE_NO_PAD.encode(key.n().to_bytes_be());
+    let e = URL_SAFE_NO_PAD.encode(key.e().to_be_bytes_trimmed_vartime());
+    let n = URL_SAFE_NO_PAD.encode(key.n().to_be_bytes_trimmed_vartime());
     let canonical = format!(r#"{{"e":"{e}","kty":"RSA","n":"{n}"}}"#);
     URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()))
 }
@@ -407,9 +393,9 @@ mod thumbprint_tests {
             "1CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINH",
             "aQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw"
         );
-        let key = RsaPublicKey::new(
-            BigUint::from_bytes_be(&URL_SAFE_NO_PAD.decode(n).unwrap()),
-            BigUint::from(65537_u32),
+        let key = PublicKey::new(
+            BoxedUint::from_be_slice_vartime(&URL_SAFE_NO_PAD.decode(n).unwrap()),
+            BoxedUint::from(65537_u32),
         )
         .unwrap();
         assert_eq!(
