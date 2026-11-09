@@ -416,8 +416,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     /// method, and the server verifies the proof with that JWK; a client named
     /// by reference keeps proving with `httpsig`. The store reserves each
     /// accepted proof against replay, so servers sharing a store share the
-    /// reservations. Key rotation, derivation, and resource-server requests
-    /// keep `httpsig`.
+    /// reservations. With [`Self::with_key_rotation`], a token bound to a JOSE
+    /// key changes it with the nested proofs of §7.3.3.1 and §7.3.4.1.
+    /// Derivation and resource-server requests keep `httpsig`.
     #[must_use]
     pub const fn with_jose_proofs(mut self, enabled: bool) -> Self
     where

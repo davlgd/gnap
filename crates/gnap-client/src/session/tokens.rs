@@ -76,15 +76,20 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
 
     /// Binds a new key to a held token (§6.1.1), keeping its value's lifecycle.
     ///
-    /// The request carries `presented`, the new public key, in its body, and
-    /// two signatures: the token's current key signs as usual, then
-    /// `replacement` signs with the `gnap-rotate` tag over that first
-    /// signature (§7.3.1.1). `presented` must be a public JWK by value that
-    /// `httpsig` accepts, whose `kid` is the `keyid` of `replacement`; the
-    /// new key may use another algorithm than the old one. A reference, another
-    /// format, another proofing method or any proofing parameter, a private
-    /// or symmetric member, a certificate or a mismatched `kid` is refused
-    /// before anything is sent; these are the limits of this session.
+    /// The request carries `presented`, the new public key, in its content,
+    /// and two proofs, with the session's proof method. With `httpsig`, the
+    /// token's current key signs as usual, then `replacement` signs with the
+    /// `gnap-rotate` tag over that first signature (§7.3.1.1). With `jws` or
+    /// `jwsd`, the current key signs the request with the rotation `typ`, and
+    /// `replacement` signs that JWS (§7.3.3.1, §7.3.4.1); both are checked
+    /// under their public JWKs before anything leaves. `presented` must be a
+    /// public JWK by value of the session's method and an algorithm it takes,
+    /// whose `kid` is the one of `replacement`, and for `jws` and `jwsd` whose
+    /// `alg` is too; the new key may use another algorithm than the old one. A
+    /// reference, another format, another proofing method or any proofing
+    /// parameter, a private or symmetric member, a certificate or a mismatched
+    /// `kid` is refused before anything is sent; these are the limits of this
+    /// session.
     ///
     /// The answer is checked like a value rotation (one token in the form of
     /// §3.2.1, new value, same rights, kept label, same flags, a management
