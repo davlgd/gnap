@@ -391,3 +391,43 @@ fn every_import_refuses_the_private_members_of_any_key_type() {
         }
     }
 }
+
+/// A signature whose `R` is the identity point, a point of small order, with
+/// `s = k·a`: the permissive Ed25519 check accepts it under the valid RFC 9421
+/// key, and the strict one this crate uses refuses it.
+#[test]
+fn ed25519_verification_is_strict_even_for_a_valid_key() {
+    use curve25519_dalek::scalar::{clamp_integer, Scalar};
+    use ed25519_dalek::Verifier as _;
+    use sha2::{Digest as _, Sha512};
+
+    let message = b"a request signed against the strict check";
+    let seed = URL_SAFE_NO_PAD
+        .decode("n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU")
+        .unwrap();
+    let public = URL_SAFE_NO_PAD
+        .decode("JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs")
+        .unwrap();
+    let expanded = Sha512::digest(&seed);
+    let secret = Scalar::from_bytes_mod_order(clamp_integer(expanded[..32].try_into().unwrap()));
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    let challenge: [u8; 64] = Sha512::new()
+        .chain_update(identity)
+        .chain_update(&public)
+        .chain_update(message)
+        .finalize()
+        .into();
+    let scalar = Scalar::from_bytes_mod_order_wide(&challenge) * secret;
+    let mut forged = identity.to_vec();
+    forged.extend_from_slice(&scalar.to_bytes());
+
+    let permissive = ed25519_dalek::VerifyingKey::from_bytes(&public.try_into().unwrap()).unwrap();
+    let signature = ed25519_dalek::Signature::from_slice(&forged).unwrap();
+    assert!(
+        permissive.verify(message, &signature).is_ok(),
+        "the vector must pass the permissive check, or it proves nothing"
+    );
+    let strict = Ed25519Verifier::from_public_jwk(&ed25519_jwk()).unwrap();
+    assert!(strict.verify(message, &forged).is_err());
+}

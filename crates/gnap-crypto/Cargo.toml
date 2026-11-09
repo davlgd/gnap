@@ -28,6 +28,8 @@ zeroize = { workspace = true }
 [dev-dependencies]
 # Only the tests build GNAP messages; the crate itself signs bytes.
 gnap-types = { workspace = true }
+# The strict-verification test builds a signature from the curve's scalars.
+curve25519-dalek = { workspace = true }
 
 [lints]
 workspace = true
