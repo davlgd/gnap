@@ -783,9 +783,14 @@ fn a_session_keeps_its_jose_method() {
     approved.interact = None;
     let step = client.start(&approved, NOW).unwrap();
     assert!(matches!(step, gnap_client::Step::Approved(_)), "{step:?}");
-    let refused = client.start(&session_request(signer.as_ref(), JwsMethod::Jwsd), NOW + 1);
-    assert!(matches!(refused, Err(ClientError::Usage(_))), "{refused:?}");
+    // Another start is refused, with another method as with the same one: it
+    // would replace the local state of a grant the AS still holds.
+    for method in [JwsMethod::Jwsd, JwsMethod::Jws] {
+        let refused = client.start(&session_request(signer.as_ref(), method), NOW + 1);
+        assert!(matches!(refused, Err(ClientError::Usage(_))), "{refused:?}");
+    }
     assert_eq!(wire.sent.borrow().len(), 1);
+    assert_eq!(server.storage().len().unwrap(), 1);
 
     let first = wire.sent.borrow()[0].clone();
     assert!(first

@@ -12,9 +12,9 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** a response must carry exactly one `Content-Type` field naming `application/json`, as RFC 9635 §3 requires: the session refuses a missing field.
 
-**Breaking:** a second `Session::start` that declares another proof method than the first is refused before anything is sent: a grant keeps the method it started with.
+**Breaking:** a session drives one grant: once a start has reached the AS, another `Session::start` is refused before anything is sent, since it would replace the local state of a grant the AS may still hold. A start lost at the transport leaves no grant, and can be tried again. Start another grant in a new session.
 
-A session proves its requests with the method its `client.key` declares: `httpsig` as before, or `jws` and `jwsd`, for which the JWK's `alg` and `kid` must be the signer's and the proof takes no parameters. A key named by reference keeps `httpsig`. `rotate_key` refuses to change a key that a session proves with `jws` or `jwsd`, and `sign_request` keeps proving with `httpsig`.
+A session proves its requests with the method its `client.key` declares: `httpsig` as before, or `jws` and `jwsd`, for which the proof takes no parameters, the JWK has to import as a public key with the signer's `alg` and `kid`, and the first request's proof has to verify under it before it leaves. A key named by reference keeps `httpsig`. `rotate_key` refuses to change a key that a session proves with `jws` or `jwsd`, and `sign_request` keeps proving with `httpsig`.
 
 `HttpTransport` is implemented for `&T`, `Box<T>`, and `Arc<T>`. `Session::verify_subject` takes a signer of any supported algorithm, requiring `S: JwkSigner` instead of `Borrow<Ps256Signer>`, and a key change accepts a public PS256, ES256, or Ed25519 JWK.
 

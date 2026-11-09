@@ -357,6 +357,14 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
     }
 
     fn start_inner(&mut self, request: &GrantRequest, now: u64) -> Result<Step, ClientError> {
+        // A session drives one grant: starting another would replace the
+        // local state of one the AS may still hold. A start lost before any
+        // GNAP answer leaves no grant, so it can be tried again.
+        if self.protocol.proof.is_some() {
+            return Err(ClientError::Usage(
+                "this session already started a grant; start another grant in a new session".into(),
+            ));
+        }
         // §2.3 — what the client says about itself is checked before it leaves.
         // §2.3-MN09 binds the client, not the AS: "The client instance MUST NOT
         // send a symmetric key by value in the key field of the request". A
@@ -377,13 +385,7 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         // §2.3-M07 — the key is used with "the proofing mechanism associated
         // with the key", and a grant keeps it: its continuation and tokens are
         // bound to the key the first request proved.
-        let proof = crate::signing::session_proof(request, &self.signer)?;
-        if let Some(settled) = self.protocol.proof.filter(|settled| *settled != proof) {
-            return Err(ClientError::Usage(format!(
-                "this session proves its key with {settled:?}, and a grant keeps the proof \
-                 method it started with (RFC 9635 §2.3, §7.3)"
-            )));
-        }
+        let (proof, presented) = crate::signing::session_proof(request, &self.signer)?;
         self.protocol.proof = Some(proof);
         self.protocol.requested = request.access_token.as_ref().map(|a| a.cardinality);
         self.protocol.requested_labels = requested_labels(request.access_token.as_ref());
@@ -400,6 +402,9 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             &self.signer,
             now,
         )?;
+        if let (SessionProof::Jose(method), Some(presented)) = (proof, presented.as_ref()) {
+            crate::signing::check_jose_proof(&http, method, presented, now)?;
+        }
         let response = self.round_trip(http)?;
         self.absorb(&response, now)
     }
