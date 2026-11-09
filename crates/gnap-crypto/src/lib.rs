@@ -24,7 +24,9 @@ pub mod rs256;
 mod rsa_key;
 pub mod verify;
 
-pub use digest::{content_digest, verify_content_digest, DigestAlgorithm};
+pub use digest::{
+    content_digest, content_digest_algorithms, verify_content_digest, DigestAlgorithm,
+};
 pub use ed25519::{Ed25519Signer, Ed25519Verifier};
 pub use es256::{Es256Signer, Es256Verifier};
 pub use hash::{
