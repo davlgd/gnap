@@ -5,6 +5,7 @@ use super::{Session, SessionProof, SharedSigner};
 use crate::error::ClientError;
 use crate::rotation;
 use crate::transport::{HttpRequest, HttpResponse, HttpTransport};
+use gnap_core::{check_response, State};
 use gnap_crypto::proof::Signer;
 use gnap_registry::AccessTokenFlag;
 use gnap_types::key::Key;
@@ -336,13 +337,15 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         let response = self.call_management("DELETE", &manage, None, signer, now)?;
 
         if response.status != 204 {
-            // §3.6 — a GNAP error is the AS's refusal, not a malformed answer;
-            // the token's state is unchanged.
-            if let Ok(GrantResponse {
-                error: Some(error), ..
-            }) = grant_response(&response)
-            {
-                return Err(ClientError::Server(error));
+            // §3.6 — a well-formed GNAP error is the AS's refusal, not a
+            // malformed answer, and the token's state is unchanged. An error
+            // carrying other fields is malformed.
+            if let Ok(parsed) = grant_response(&response) {
+                if let Some(error) = parsed.error.clone() {
+                    if check_response(State::Approved, &parsed).is_empty() {
+                        return Err(ClientError::Server(error));
+                    }
+                }
             }
             return Err(ClientError::Protocol(format!(
                 "revoking answered {} where §6.2 says 204 No Content",

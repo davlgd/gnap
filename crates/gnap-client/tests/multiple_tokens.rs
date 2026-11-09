@@ -531,3 +531,24 @@ fn a_refused_revocation_returns_the_gnap_error_and_keeps_the_token() {
         vec![Some("documents".to_owned()), Some("reports".to_owned())]
     );
 }
+
+/// A GNAP error carrying another field is malformed (§3.6): it is not
+/// returned as the AS's refusal, and the token is kept.
+#[test]
+fn a_malformed_revocation_error_is_a_protocol_error() {
+    let sk = signer();
+    let as_ = FakeAs::with(vec![
+        &two_of_three(),
+        r#"{"error":"invalid_client","instance_id":"unexpected"}"#,
+    ]);
+    as_.replies.borrow_mut()[0].status = 400;
+    let mut s = Session::new(&as_, &sk, ENDPOINT);
+    s.start(&three(), 1_000).unwrap();
+
+    let e = s.revoke_token(Some("documents"), 1_010).unwrap_err();
+    assert!(matches!(e, ClientError::Protocol(_)), "{e}");
+    assert_eq!(
+        labels(&s, 1_010),
+        vec![Some("documents".to_owned()), Some("reports".to_owned())]
+    );
+}
