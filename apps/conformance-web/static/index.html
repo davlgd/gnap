@@ -7,12 +7,12 @@
 </header>
 <main class="wide">
 <h1>Check what a GNAP server does, clause by clause</h1>
-<p class="lede">Each check names the RFC 9635 or RFC 9767 clause it tests. Passing them is not a certification: it shows that those clauses hold, not that a server conforms to GNAP as a whole.</p>
+<p class="lede">Each check names the RFC 9635 or RFC 9767 clause it tests. Passing them is not a certification: each check covers only what its detail states, not GNAP conformance as a whole.</p>
 
 <table class="tasks">
 <thead><tr><th scope="col">Task</th><th scope="col">What it sends</th></tr></thead>
 <tbody>
-<tr><td><a href="#inspect">Inspect a captured message</a><p>A grant request or response, a discovery document, or an RFC 9767 message you paste here.</p></td><td><span class="sends" data-sends="nothing">Nothing: checked on this server</span></td></tr>
+<tr><td><a href="#inspect">Inspect a captured message</a><p>A grant request or response, a discovery document, or an RFC 9767 message you paste here.</p></td><td><span class="sends" data-sends="nothing">Only your paste, to this workbench</span></td></tr>
 <tr><td><a href="#probe-endpoint">Probe an approved endpoint</a><p>One malformed grant request, or one discovery request, to a target the operator approved.</p></td><td><span class="sends" data-sends="unsigned">One unsigned request</span></td></tr>
 <tr><td><a href="/lifecycle">Run a signed lifecycle</a><p>A grant from its request to its revocation, with your decision at the authorization server.</p></td><td><span class="sends" data-sends="signed">Signed requests</span></td></tr>
 <tr><td><a href="#cli">Use the command line</a><p>The same checks against a server you choose, from your terminal or CI.</p></td><td><span class="sends" data-sends="signed">Depends on the command</span></td></tr>
@@ -48,7 +48,7 @@
 <div id="digest-context"><label for="digest">Content-Digest value (optional, checked against the exact body bytes)</label><input id="digest" class="code" autocomplete="off" spellcheck="false"></div>
 <details id="context-section" hidden><summary>Optional caller-declared comparison context</summary><p class="hint">This is your declaration, not verified network or token evidence. No URL is fetched. Leave it blank when unknown: context can't override a contradiction in the message.</p><label for="rs-context">Context JSON object</label><textarea id="rs-context" rows="3" spellcheck="false" autocomplete="off" aria-describedby="context-help"></textarea><p id="context-help" class="hint"></p></details>
 <p class="hint">Derivation imports inspect selected grant-message fields only: they don't prove the parent token's validity, RS1's authentication, downstream rights, audience, or revocation. Continuation, interaction and error responses aren't observations of a successful issuance. The token-label pair is a local <code>{"request":{...},"response":{...}}</code> object, not a GNAP wire message.</p>
-<div class="actions"><button id="analyze" type="button" class="primary">Analyze the message</button><button id="fixture" type="button">Load an invalid continuation</button><button id="token-fixture" type="button">Load a partial token approval</button><button id="discovery-fixture" type="button">Load an AS discovery document</button><button id="clear" type="button">Clear inputs and report</button></div>
+<div class="actions"><button id="analyze" type="button" class="primary">Analyze the message</button><button id="fixture" type="button">Load an invalid continuation</button><button id="token-fixture" type="button">Load a partial token approval</button><button id="discovery-fixture" type="button">Load an AS discovery document</button><button id="clear" type="button">Clear inputs and report</button><a class="to-report" href="#results">Go to the report</a></div>
 </section>
 
 <section id="probe-endpoint" class="panel" aria-labelledby="probe-title">
@@ -57,7 +57,7 @@
 <label for="target">Operator-approved target</label><select id="target" disabled><option>No targets loaded</option></select>
 <label for="operation">Request to send</label><select id="operation"><option value="rejection">Reject an unauthenticated or malformed request</option><option value="as_discovery">AS discovery with OPTIONS (AS targets only)</option></select>
 <label class="inline"><input id="consent" type="checkbox"> I authorize this single request to the selected test endpoint.</label>
-<div class="actions"><button id="probe" type="button" class="primary" disabled>Send the request</button></div>
+<div class="actions"><button id="probe" type="button" class="primary" disabled>Send the request</button><a class="to-report" href="#results">Go to the report</a></div>
 <p class="hint">One request every 60 seconds across all visitors and operations of this server.</p>
 </section>
 
@@ -68,6 +68,7 @@
 <div class="report-head"><ul id="tally" class="tally" aria-label="Checks in report order"></ul><div id="filters" class="filters" role="group" aria-label="Show checks" hidden><button id="filter-all" type="button" aria-pressed="true">All</button><button id="filter-pass" type="button" aria-pressed="false">Passed</button><button id="filter-fail" type="button" aria-pressed="false">Failed</button><button id="filter-not_tested" type="button" aria-pressed="false">Not tested</button></div></div>
 <p id="report-empty" class="empty">Analyze a message or send a probe: its checks appear here.</p>
 <section id="report" class="checks" aria-label="Check results"></section>
+<p id="filter-empty" class="empty" hidden>No check in this report has that status.</p>
 <div class="actions"><button id="download" type="button" disabled>Download the report as JSON</button></div>
 </section>
 </div>

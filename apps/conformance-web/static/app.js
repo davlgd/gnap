@@ -42,6 +42,7 @@ let rows = [];
 function showOnly(status) {
   for (const name of FILTERS) byId(`filter-${name}`).ariaPressed = String(name === status);
   GNAP.filterRows(rows, status);
+  byId('filter-empty').hidden = !rows.length || rows.some(row => !row.hidden);
 }
 for (const name of FILTERS) byId(`filter-${name}`).addEventListener('click', () => showOnly(name));
 const clearReport = () => {

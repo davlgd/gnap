@@ -300,3 +300,24 @@ test('discovery and token-pair fixtures keep their controls and request contexts
   assert.equal(el('consent').checked, false);
   assertPanelCleared(el, 'analyze');
 });
+
+test('the status filter shows one status, says when none matches, and resets with the report', async () => {
+  const { el, take } = await loadApp();
+  const inFlight = el('analyze').emit('click');
+  take('/api/analyze').resolve(response(200, report));
+  await inFlight;
+  assert.equal(el('filters').hidden, false);
+  assert.equal(el('filter-all').ariaPressed, 'true');
+  await el('filter-fail').emit('click');
+  assert.equal(el('filter-fail').ariaPressed, 'true');
+  assert.equal(el('filter-all').ariaPressed, 'false');
+  assert.equal(el('report').children[0].hidden, true, 'the passing check is hidden');
+  assert.equal(el('filter-empty').hidden, false, 'no failed check: the page says so');
+  await el('filter-pass').emit('click');
+  assert.equal(el('report').children[0].hidden, false);
+  assert.equal(el('filter-empty').hidden, true);
+  await el('clear').emit('click');
+  assert.equal(el('filters').hidden, true);
+  assert.equal(el('filter-all').ariaPressed, 'true');
+  assert.equal(el('filter-empty').hidden, true);
+});

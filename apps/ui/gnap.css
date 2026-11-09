@@ -8,6 +8,8 @@
   --ink: #121c25;
   --muted: #52616e;
   --rule: #cbd4dc;
+  /* A form control's edge, at least 3:1 against the surface and the ground. */
+  --control: #7b8794;
   --accent: #3d3aa8;
   --accent-soft: #e6e5f7;
   --pass: #17663c;
@@ -43,6 +45,7 @@
     --ink: #e2e8ed;
     --muted: #94a3b0;
     --rule: #2b3742;
+    --control: #6b7c8b;
     --accent: #aaa7ff;
     --accent-soft: #24233f;
     --pass: #63d394;
@@ -58,6 +61,8 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+/* `hidden` hides, whatever display a class gives the element. */
+[hidden] { display: none !important; }
 
 html { background: var(--ground); color: var(--ink); font: 400 var(--step-0)/1.55 var(--sans); }
 body { margin: 0; min-height: 100vh; background: var(--ground); color: var(--ink); }
@@ -83,7 +88,10 @@ main.wide { max-width: 82rem; }
    command must not widen the page. */
 .bench { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; align-items: start; }
 .bench-tools { display: grid; gap: 1.5rem; min-width: 0; }
+/* Below the two columns, the report sits after the tools: a link leads to it. */
+.to-report { font-size: var(--step--1); }
 @media (min-width: 64rem) {
+  .to-report { display: none; }
   .bench { grid-template-columns: minmax(0, 1fr) minmax(22rem, 30rem); }
   .bench-report { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
 }
@@ -116,7 +124,7 @@ label { display: block; font-weight: 600; margin: 1.1rem 0 0.35rem; }
 label.inline { display: flex; gap: 0.6rem; align-items: flex-start; font-weight: 400; }
 input, select, textarea, button { font: inherit; color: inherit; max-width: 100%; }
 input:not([type="checkbox"]), select, textarea {
-  width: 100%; padding: 0.55rem 0.7rem; border: 1px solid var(--rule); border-radius: var(--radius);
+  width: 100%; padding: 0.55rem 0.7rem; border: 1px solid var(--control); border-radius: var(--radius);
   background: var(--ground); color: var(--ink);
 }
 textarea { font-family: var(--mono); font-size: 0.9rem; line-height: 1.45; resize: vertical; }
@@ -157,7 +165,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .tally li[data-status="not_tested"], .tally li[data-status="inconclusive"] { background: var(--unsure); }
 
 .filters { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.filters[hidden] { display: none; }
 .filters button { padding: 0.3rem 0.75rem; font-size: var(--step--1); border-radius: 999px; }
 .filters button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 
