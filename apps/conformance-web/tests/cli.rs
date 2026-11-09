@@ -51,6 +51,7 @@ fn usage_errors_exit_with_two_before_any_network() {
         }
     }
     // An argument that isn't Unicode is refused without a panic or an echo.
+    #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
         let mut raw = b"https://as.example/gnap?SYNTHETIC_SECRET=".to_vec();

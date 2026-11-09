@@ -99,6 +99,9 @@ fn run(arguments: Vec<String>) -> Result<u8, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
     let report = check(&transport, endpoint, started);
+    // A resolution that outlived its deadline still holds a blocking thread:
+    // leave it behind rather than wait for it.
+    runtime.shutdown_background();
     if json {
         let text = serde_json::to_string_pretty(&report)
             .map_err(|_| "the report could not be serialized".to_owned())?;
