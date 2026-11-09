@@ -2156,7 +2156,7 @@ async fn main() {
 fn application_router(app: App, canonical: CanonicalOrigin) -> Router {
     Router::new()
         .route("/", get(|| async { Html(include_str!("../static/index.html")) }))
-        .route("/health", get(|State(app):State<App>| async move { Json(json!({"status":"ok", "bootstrap":resource_registration::state(&app.bootstrap), "profile":"GNAP HTTPSig client/AS demonstrator; not certification"})) }))
+        .route("/health", get(|State(app):State<App>| async move { Json(json!({"status":"ok", "bootstrap":resource_registration::state(&app.bootstrap), "profile":"GNAP client/AS demonstrator with HTTPSig and JWS proofs; not certification"})) }))
         .route("/api/status", get(status))
         .route("/code", get(secondary_device::entry))
         .route("/code/lookup", post(secondary_device::submit).layer(DefaultBodyLimit::max(1024)))
