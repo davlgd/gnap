@@ -16,6 +16,15 @@ Use a clean, reviewed revision with passing CI. The packaging workflow below
 has been exercised with Cargo 1.98; this release-tooling version is separate from
 the SDK's declared Rust 1.95 minimum. The asset check requires Python 3.11 or newer.
 
+`cargo publish --workspace` needs a recent Cargo: the flag is unstable on older
+toolchains, so the whole-workspace dry run cannot be reproduced under the
+declared minimum. Verified on Cargo 1.88, `--workspace` is refused outright, and
+publishing one crate at a time fails for any crate with an unpublished sibling
+because Cargo then resolves that sibling from the registry instead of the
+temporary one it builds for `--workspace`. Only the two leaf crates,
+`gnap-registry` and `gnap-net`, pass that way. Run the packaging checks with the
+release tooling's Cargo, not the minimum one.
+
 ```sh
 python3 -B tools/check_package_assets.py
 cargo package --workspace --list --locked
