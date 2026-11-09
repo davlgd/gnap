@@ -1071,14 +1071,26 @@ fn a_retried_revocation_is_signed_at_a_later_second() {
     );
 }
 
-/// A clock whose wall time goes back by twenty seconds after its first wait,
-/// within the AS's tolerance of clock skew, while elapsed time keeps going.
-struct SetBack {
+/// A clock whose wall time jumps by `jump` seconds after its first wait,
+/// while elapsed time keeps going.
+struct Jumping {
     now: Cell<u64>,
     elapsed: Cell<u64>,
-    set_back: Cell<bool>,
+    jumped: Cell<bool>,
+    jump: i64,
 }
-impl Clock for SetBack {
+
+impl Jumping {
+    fn by(jump: i64) -> Self {
+        Self {
+            now: Cell::new(1_700_000_000),
+            elapsed: Cell::new(0),
+            jumped: Cell::new(false),
+            jump,
+        }
+    }
+}
+impl Clock for Jumping {
     fn now(&self) -> u64 {
         self.now.get()
     }
@@ -1093,8 +1105,9 @@ impl Clock for SetBack {
         let step = at.saturating_sub(self.now.get());
         self.now.set(self.now.get() + step);
         self.elapsed.set(self.elapsed.get() + step);
-        if !self.set_back.replace(true) {
-            self.now.set(self.now.get() - 20);
+        if !self.jumped.replace(true) {
+            self.now
+                .set(self.now.get().saturating_add_signed(self.jump));
         }
     }
     fn elapsed(&self) -> u64 {
@@ -1109,11 +1122,8 @@ impl Clock for SetBack {
 /// deadline.
 #[test]
 fn the_interaction_wait_ignores_a_wall_clock_set_back() {
-    let clock = SetBack {
-        now: Cell::new(1_700_000_000),
-        elapsed: Cell::new(0),
-        set_back: Cell::new(false),
-    };
+    // Twenty seconds back, within the AS's tolerance of clock skew.
+    let clock = Jumping::by(-20);
     let server = server(true, false);
     let (report, _) = run_on(
         &clock,
@@ -1133,4 +1143,30 @@ fn the_interaction_wait_ignores_a_wall_clock_set_back() {
         "{} seconds",
         clock.elapsed.get()
     );
+}
+
+/// The interaction's wait is measured on elapsed time: a wall clock that
+/// jumps forward doesn't cut it short, and the scenario keeps polling.
+#[test]
+fn the_interaction_wait_ignores_a_wall_clock_jump() {
+    let clock = Jumping::by(100);
+    let server = server(true, false);
+    let (report, sent) = run_on(
+        &clock,
+        &server,
+        &plan("httpsig", "ES256", false, false),
+        &|_| {},
+        live_tokens,
+        untouched,
+    );
+    assert_eq!(
+        outcome(&report, "interaction-outcome"),
+        Some(Outcome::Inconclusive)
+    );
+    let polls = sent
+        .iter()
+        .filter(|(m, u, _)| m == "POST" && u.starts_with("https://as.example/continue"))
+        .count();
+    assert!(polls >= 3, "{polls} polls: {sent:?}");
+    assert!(clock.elapsed.get() <= 30 + gnap_conformance_web::scenario::CLEANUP_WAIT);
 }
