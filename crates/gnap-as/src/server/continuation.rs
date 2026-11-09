@@ -1,20 +1,20 @@
 //! Grant continuation (§5): polling, modification, and revocation of a grant.
 
 use super::{
-    check_presented_key, classify, error, gnap_token, method_not_allowed, misconfigured,
-    no_content, presented_key, require_json_content, storage_failure, supported_finish,
-    AuthorizationServer,
+    classify, error, gnap_token, method_not_allowed, misconfigured, no_content, presented_key,
+    require_json_content, storage_failure, supported_finish, AuthorizationServer,
 };
 use crate::encoding::TokenEncoder;
 use crate::nonce::Nonces;
 use crate::policy::{Decision, EvaluationContext, KeyResolver, Policy};
 use crate::storage::{GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot, Storage};
 use gnap_core::{Event, State};
-use gnap_registry::ErrorCode;
+use gnap_registry::{ErrorCode, KeyProofingMethod};
 use gnap_types::http::{HttpRequest, HttpResponse};
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{BoundToken, TokenValue};
 use gnap_types::GnapError;
+use std::borrow::Cow;
 
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     AuthorizationServer<P, K, S, N, E>
@@ -29,23 +29,18 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // modifies the request (§5.3), and DELETE revokes it (§5.4).
         let modifying = request.method.eq_ignore_ascii_case("PATCH");
         let revoking = request.method.eq_ignore_ascii_case("DELETE");
-        if !revoking {
-            if !modifying && !request.method.eq_ignore_ascii_case("POST") {
-                return method_not_allowed("POST, PATCH, DELETE");
-            }
-            if let Err(r) = require_json_content(request) {
-                return r;
-            }
+        if !revoking && !modifying && !request.method.eq_ignore_ascii_case("POST") {
+            return method_not_allowed("POST, PATCH, DELETE");
         }
 
-        let snapshot = match self.authenticate_continuation(request, now) {
-            Ok(snapshot) => snapshot,
+        let (snapshot, content) = match self.authenticate_continuation(request, revoking, now) {
+            Ok(authenticated) => authenticated,
             Err(r) => return r,
         };
 
         let mut aggregate = snapshot.aggregate.clone();
         let response = self.continue_authenticated(
-            request,
+            &content,
             now,
             modifying,
             revoking,
@@ -84,7 +79,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     // Only prepares a replacement. No intermediate state is externally visible.
     fn continue_authenticated(
         &self,
-        request: &HttpRequest,
+        content: &[u8],
         now: u64,
         modifying: bool,
         revoking: bool,
@@ -93,11 +88,11 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     ) -> HttpResponse {
         let record = &mut aggregate.record;
         record.continuation_token = None;
-        let has_content = request.body.as_ref().is_some_and(|b| !b.is_empty());
+        let has_content = !content.is_empty();
         let continuation: ContinueRequest = if revoking || !has_content {
             ContinueRequest::default()
         } else {
-            match Self::parse(request) {
+            match Self::parse(content) {
                 Ok(c) => c,
                 Err(_) => {
                     return self.recover(
@@ -285,11 +280,12 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     /// exactly as it was. Consuming here would let anyone holding a leaked
     /// continuation token destroy the grant with a signature that does not
     /// verify, and the legitimate client would never learn why.
-    fn authenticate_continuation(
+    fn authenticate_continuation<'r>(
         &self,
-        request: &HttpRequest,
+        request: &'r HttpRequest,
+        revoking: bool,
         now: u64,
-    ) -> Result<GrantSnapshot, HttpResponse> {
+    ) -> Result<(GrantSnapshot, Cow<'r, [u8]>), HttpResponse> {
         let token = Self::continuation_token(request)?;
         let snapshot = self
             .storage
@@ -304,12 +300,14 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 "the client instance is not recognised",
             )
         })?;
-        let presented_kid = match presented_key(&record.request.client) {
-            None => None,
-            Some(key) => check_presented_key(key, verifier.as_ref())?,
-        };
-        self.verify_signature(request, verifier.as_ref(), presented_kid, now)?;
-        Ok(snapshot)
+        // §2 — JSON content, unless the key's proof method attaches it to a
+        // JWS, whose envelope the proof itself checks (§7.3.4).
+        let key = presented_key(&record.request.client);
+        if !revoking && key.is_none_or(|key| key.proof.method() != &KeyProofingMethod::Jws) {
+            require_json_content(request)?;
+        }
+        let content = self.prove(request, verifier.as_ref(), key, now)?;
+        Ok((snapshot, content))
     }
 
     /// Answers an error the grant can survive, and hands the client the way

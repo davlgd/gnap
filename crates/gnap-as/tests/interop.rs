@@ -2617,6 +2617,19 @@ fn a_user_reference_is_answered_for_but_never_believed() {
         body_of(&response)
     );
 
+    // The answer follows the proof: an unproven request learns nothing about
+    // which references the AS knows.
+    let mut unproven = signed_grant(&signer, &with_user("SOMEONE-ELSE"), 1_000);
+    unproven
+        .headers
+        .retain(|(name, _)| !name.eq_ignore_ascii_case("signature"));
+    let response = as_.handle(&unproven, 1_000);
+    assert!(
+        body_of(&response).contains("invalid_client"),
+        "{}",
+        body_of(&response)
+    );
+
     // The one it knows gets through — and still ends up pending, because the
     // reference is a hint and the RO has said nothing yet.
     let response = as_.handle(

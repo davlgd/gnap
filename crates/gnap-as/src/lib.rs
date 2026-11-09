@@ -305,7 +305,7 @@ pub use server::{
 };
 pub use storage::{
     DerivedGrantStore, GrantAggregate, GrantId, GrantRecord, GrantSelector, GrantSnapshot,
-    GrantStore, MemoryStorage, NonceStore, Revision, RotationNonceStore, Storage, StoreError,
-    TokenRecord, UserCodeStore,
+    GrantStore, JwsReplayStore, MemoryStorage, NonceStore, Revision, RotationNonceStore, Storage,
+    StoreError, TokenRecord, UserCodeStore, MAX_JWS_PROOFS,
 };
 pub use user_code::normalize_user_code;

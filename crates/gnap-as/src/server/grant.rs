@@ -1,8 +1,9 @@
 //! Grant requests: classification, policy evaluation, issuance, and interaction offers.
 
 use super::{
-    error, method_not_allowed, misconfigured, modifies, not_found, ok, require_json_content,
-    storage_failure, AuthorizationServer, INTERACTION_LIFETIME,
+    error, is_jose_content, method_not_allowed, misconfigured, modifies, not_found, ok,
+    require_json_content, signed_request, storage_failure, unsupported_media_type,
+    unsupported_proof, AuthorizationServer, INTERACTION_LIFETIME,
 };
 use crate::encoding::TokenEncoder;
 use crate::nonce::Nonces;
@@ -35,14 +36,29 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         if request.url != self.endpoints.grant {
             return not_found();
         }
-        if let Err(r) = require_json_content(request) {
-            return r;
-        }
-
-        let body = match Self::parse::<GrantRequest>(request) {
+        // §7.3.4 — an attached JWS replaces the JSON content. Until its proof
+        // is verified, its payload serves to find the key it claims, and no
+        // policy, nonce, or store sees it.
+        let attached = is_jose_content(request);
+        let claimed: std::borrow::Cow<'_, [u8]> = if attached {
+            if self.jose.is_none() {
+                return unsupported_media_type();
+            }
+            match gnap_crypto::jws::unverified_attached_payload(&signed_request(request)) {
+                Ok(payload) => payload.into(),
+                Err(e) => return error(ErrorCode::InvalidRequest, &e.to_string()),
+            }
+        } else {
+            if let Err(r) = require_json_content(request) {
+                return r;
+            }
+            request.body.as_deref().unwrap_or_default().into()
+        };
+        let claimed = match Self::parse::<GrantRequest>(&claimed) {
             Ok(b) => b,
             Err(r) => return r,
         };
+        let body = claimed;
         if body.existing_access_token.is_some() {
             return error(
                 ErrorCode::InvalidRequest,
@@ -56,21 +72,6 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         if let Some(key) = presented_key(&body.client) {
             if let Err(e) = key.validate() {
                 return error(ErrorCode::InvalidClient, &e.to_string());
-            }
-        }
-
-        // §2.4.1 — a user reference is one the AS itself handed out. One it
-        // does not know is not a hint to ignore; the RFC names the answer.
-        if let Some(reference) = body
-            .user
-            .as_ref()
-            .and_then(gnap_types::user::User::as_reference)
-        {
-            if !self.policy.recognises_user(reference) {
-                return error(
-                    ErrorCode::UnknownUser,
-                    "the user reference is not one this AS recognises (RFC 9635 §2.4.1)",
-                );
             }
         }
 
@@ -98,18 +99,36 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             );
         };
 
-        // §7.3.1-M15 — when the key is a JWK, the signature names it by its
-        // `kid` and uses the algorithm its `alg` declares.
-        let presented_kid = match presented_key(&body.client) {
-            None => None,
-            Some(key) => match check_presented_key(key, verifier.as_ref()) {
-                Ok(kid) => kid,
+        // §7.3 — the key's proof method decides how the request proves it.
+        let content = match self.prove(request, verifier.as_ref(), presented_key(&body.client), now)
+        {
+            Ok(content) => content,
+            Err(r) => return r,
+        };
+        // The attached payload was read unverified: what follows reads the
+        // authenticated one, which carries the same bytes.
+        let body = if attached {
+            match Self::parse::<GrantRequest>(&content) {
+                Ok(b) => b,
                 Err(r) => return r,
-            },
+            }
+        } else {
+            body
         };
 
-        if let Err(r) = self.verify_signature(request, verifier.as_ref(), presented_kid, now) {
-            return r;
+        // §2.4.1 — a user reference is one the AS itself handed out. One it
+        // does not know is not a hint to ignore; the RFC names the answer.
+        if let Some(reference) = body
+            .user
+            .as_ref()
+            .and_then(gnap_types::user::User::as_reference)
+        {
+            if !self.policy.recognises_user(reference) {
+                return error(
+                    ErrorCode::UnknownUser,
+                    "the user reference is not one this AS recognises (RFC 9635 §2.4.1)",
+                );
+            }
         }
 
         let decision = self
@@ -362,11 +381,7 @@ pub(super) fn check_presented_key<'a>(
     verifier: &dyn gnap_crypto::proof::Verifier,
 ) -> Result<Option<&'a str>, HttpResponse> {
     if key.proof.method().as_str() != "httpsig" {
-        return Err(error(
-            ErrorCode::InvalidClient,
-            "the presented key requires a proof method this server does not support \
-             (RFC 9635 §2.3, §7.3)",
-        ));
+        return Err(unsupported_proof());
     }
     if let Some(declared) = key.jwk_algorithm() {
         // The JWS algorithm names are registered strings, so `ps256` is not
