@@ -1,76 +1,35 @@
 # GNAP scope and support matrix
 
-Decision recorded on **5 September 2026**. The initial code inventory used
-[e84e47c](https://github.com/davlgd/gnap/commit/e84e47caedf66f5a472e076f9b3489d5517ef346),
-the code snapshot audited before this matrix was added. That reference records
-the initial audit, not the current branch head. The rows below track subsequent
-implementation changes and their evidence. Documentation changes do not turn a
-planned feature into an implemented one. Update the relevant rows with each
-implementation change and link its tests and application evidence.
+Decision recorded on **5 September 2026**. The initial code inventory used [e84e47c](https://github.com/davlgd/gnap/commit/e84e47caedf66f5a472e076f9b3489d5517ef346), the code snapshot audited before this matrix was added. That reference records the initial audit, not the current branch head. The rows below track subsequent implementation changes and their evidence. Documentation changes do not turn a planned feature into an implemented one. Update the relevant rows with each implementation change and link its tests and application evidence.
 
 ## Product decisions
 
-- **Biscuit is a required project target.** Support means issuance, validation
-  and an application exercising attenuation, not merely recognizing its name.
-- **Signed and encrypted JWTs are acceptable alternatives.** They may be added
-  for a concrete integration; neither is implemented today, and they do not
-  replace the Biscuit objective.
-- **Macaroon and ZCAP implementations are outside the current scope.** Their
-  registry names remain available as reference data. Do not remove or silently
-  reinterpret unknown extension values to enforce a product roadmap.
-- **HTTP Message Signatures (`httpsig`) are the preferred proof method.** The
-  existing PS256 implementation remains the starting point.
-- **mTLS is an allowed additional proof method**, not a prerequisite for the
-  next application. It needs a real TLS client-certificate trust boundary;
-  accepting an untrusted forwarded certificate header is not mTLS support.
-- Other proof methods are deferred. This is a delivery
-  priority, not a claim that GNAP forbids them.
+- **Biscuit is a required project target.** Support means issuance, validation and an application exercising attenuation, not merely recognizing its name.
+- **Signed and encrypted JWTs are acceptable alternatives.** They may be added for a concrete integration; neither is implemented today, and they do not replace the Biscuit objective.
+- **Macaroon and ZCAP implementations are outside the current scope.** Their registry names remain available as reference data. Do not remove or silently reinterpret unknown extension values to enforce a product roadmap.
+- **HTTP Message Signatures (`httpsig`) are the preferred proof method.** The existing PS256 implementation remains the starting point.
+- **mTLS is an allowed additional proof method**, not a prerequisite for the next application. It needs a real TLS client-certificate trust boundary; accepting an untrusted forwarded certificate header is not mTLS support.
+- Other proof methods are deferred. This is a delivery priority, not a claim that GNAP forbids them.
 
-Opaque reference tokens remain the existing test baseline. Their presence does
-not add another structured-token implementation to the selected target list.
+Opaque reference tokens remain the existing test baseline. Their presence does not add another structured-token implementation to the selected target list.
 
-The first distributed application must not force every token through a shared
-AS/RS store or assume introspection is the only validation path. Biscuit needs
-an explicit mapping of GNAP rights, audience, expiry and key binding to its
-authorization policy. Attenuating a token does not automatically rebind it to a
-different client's or resource server's key. Local validation also needs an
-explicit revocation policy; it cannot learn about revocation without receiving
-updated information. These are integration requirements to design and test,
-not an already standardized Biscuit/GNAP profile implemented by this project.
+The first distributed application must not force every token through a shared AS/RS store or assume introspection is the only validation path. Biscuit needs an explicit mapping of GNAP rights, audience, expiry and key binding to its authorization policy. Attenuating a token does not automatically rebind it to a different client's or resource server's key. Local validation also needs an explicit revocation policy; it cannot learn about revocation without receiving updated information. These are integration requirements to design and test, not an already standardized Biscuit/GNAP profile implemented by this project.
 
 ## Reading the matrix
 
-The **RFC condition** and **project decision** columns answer different questions.
-An optional mechanism still has mandatory rules when it is selected. A feature
-required by this project is not necessarily required by GNAP.
+The **RFC condition** and **project decision** columns answer different questions. An optional mechanism still has mandatory rules when it is selected. A feature required by this project is not necessarily required by GNAP.
 
-- **C1/C2 required**: a capability required by the Web-Based Redirection or
-  Secondary Device interoperability profile in RFC 9635 Appendix C. Appendix C
-  permits a functioning subset for clients in the circumstances it describes;
-  AS profile claims require the profile's full capability set. Required support
-  for a capability does not mean it appears in every grant response.
-- **Conditional**: the cited section's requirements apply when that message,
-  endpoint, format or behavior is used. This is not a blanket obligation to
-  implement every GNAP option.
-- **Deployment responsibility**: the protocol leaves the identified choice or
-  integration to the deployment; this does not exempt it from security checks.
+- **C1/C2 required**: a capability required by the Web-Based Redirection or Secondary Device interoperability profile in RFC 9635 Appendix C. Appendix C permits a functioning subset for clients in the circumstances it describes; AS profile claims require the profile's full capability set. Required support for a capability does not mean it appears in every grant response.
+- **Conditional**: the cited section's requirements apply when that message, endpoint, format or behavior is used. This is not a blanket obligation to implement every GNAP option.
+- **Deployment responsibility**: the protocol leaves the identified choice or integration to the deployment; this does not exempt it from security checks.
 
-Implementation states are **implemented and tested**, **partial**, **model only**,
-or **missing**. A source link supports a description of an API or a gap; only a
-test or recorded execution supports a claim that a behavior was exercised.
-There is no overall conformance score. This is a capability-level inventory, not
-yet an exhaustive ledger of every MUST, SHOULD and MAY in both RFCs.
+Implementation states are **implemented and tested**, **partial**, **model only**, or **missing**. A source link supports a description of an API or a gap; only a test or recorded execution supports a claim that a behavior was exercised. There is no overall conformance score. This is a capability-level inventory, not yet an exhaustive ledger of every MUST, SHOULD and MAY in both RFCs.
 
-The [public normative ledger](../conformance/README.md) supplies a reproducible
-source inventory for that next level of review. It preserves each BCP14 marker,
-its context and the profile capability lists, without treating an extracted
-block or a passing test of the ledger itself as a completed protocol obligation.
+The [public normative ledger](../conformance/README.md) supplies a reproducible source inventory for that next level of review. It preserves each BCP14 marker, its context and the profile capability lists, without treating an extracted block or a passing test of the ledger itself as a completed protocol obligation.
 
 ## Token formats and behavior
 
-Formats are agreed between the AS and RS. The registered names and announcement
-points are defined by [RFC 9767 §2.2 and §5.3](https://www.rfc-editor.org/rfc/rfc9767.html#section-2.2).
-GNAP does not require every implementation to support every registered format.
+Formats are agreed between the AS and RS. The registered names and announcement points are defined by [RFC 9767 §2.2 and §5.3](https://www.rfc-editor.org/rfc/rfc9767.html#section-2.2). GNAP does not require every implementation to support every registered format.
 
 | Capability | RFC condition | Project decision | Current state and evidence |
 | --- | --- | --- | --- |
@@ -86,15 +45,11 @@ GNAP does not require every implementation to support every registered format.
 | Token value rotation and revocation | Conditional on offering the management API; [RFC 9635 §6](https://www.rfc-editor.org/rfc/rfc9635.html#section-6) | Required target | **Implemented and tested** for the current token path in [AS interop tests](../crates/gnap-as/tests/interop.rs) and the HTTP acceptance script. Repeated revocation is not idempotent after authentication metadata is removed. |
 | Changing a token's bound key | Conditional on supporting key rotation; [RFC 9635 §6.1.1](https://www.rfc-editor.org/rfc/rfc9635.html#section-6.1.1) | Required target, distinct from changing the token value | **Implemented and tested for public PS256 JWKs with linked HTTP signatures**: the opt-in AS checks permissions and reserves both proof nonces atomically. [AS tests](../crates/gnap-as/tests/key_rotation.rs) cover replay, refusal, introspection, sibling isolation and concurrent revocation; [client–AS tests](../crates/gnap-as/tests/key_rotation/session.rs) preserve grant continuation. [Biscuit process tests](../apps/biscuit-files/tests/processes.rs) change keys twice, accept current-key access and reject previous-key and retired-authority probes. This is local HTTP evidence, not hosted deployment or independent-vendor interoperability. The client presents keys by value and does not resolve initially explicit token bindings; the AS supports references through a custom resolver. Derived-token rebinding remains refused. |
 
-A JWT carried as an access token is not the same feature as the `jws` or `jwsd`
-request proof methods. Likewise, an `id_token` assertion is not automatically a
-JWT access token. Signature primitives alone implement neither token format.
+A JWT carried as an access token is not the same feature as the `jws` or `jwsd` request proof methods. Likewise, an `id_token` assertion is not automatically a JWT access token. Signature primitives alone implement neither token format.
 
 ## Proofs, keys and interaction profiles
 
-Profile requirements below come from [RFC 9635 Appendix C](https://www.rfc-editor.org/rfc/rfc9635.html#appendix-C).
-Neither complete profile conformance nor independent implementation
-interoperability is currently claimed.
+Profile requirements below come from [RFC 9635 Appendix C](https://www.rfc-editor.org/rfc/rfc9635.html#appendix-C). Neither complete profile conformance nor independent implementation interoperability is currently claimed.
 
 | Capability | RFC condition | Project decision | Current state and evidence |
 | --- | --- | --- | --- |
@@ -118,17 +73,7 @@ interoperability is currently claimed.
 
 ## Protocol lifecycle, RS connections and public diagnostics
 
-Multiple-token issuance is now implemented in the SDK through explicit policy
-selection. The [AS tests](../crates/gnap-as/tests/multiple_tokens.rs) cover partial
-approval, independent rights, collisions, encoder failure, atomic reapproval and
-targeted management. The [client tests](../crates/gnap-client/tests/multiple_tokens.rs)
-cover label correspondence, cardinality and per-token management. Derivation
-tests also cover sibling independence and exact-parent cascades. The
-[implementation guide](multiple-access-tokens.md) records its common-key,
-common-lifetime and 64-selection bounds. The [web consumer tests](../apps/delegation-demo/src/multiple_tests.rs)
-exercise distinct document/report RS roles, consent, partial approval and
-management over local HTTP. The roles remain co-located and synthetic; no
-independent interoperability is claimed. The [dated hosted validation](validation-2026-09-06.md) records separate HTTPS observations of this co-located consumer.
+Multiple-token issuance is now implemented in the SDK through explicit policy selection. The [AS tests](../crates/gnap-as/tests/multiple_tokens.rs) cover partial approval, independent rights, collisions, encoder failure, atomic reapproval and targeted management. The [client tests](../crates/gnap-client/tests/multiple_tokens.rs) cover label correspondence, cardinality and per-token management. Derivation tests also cover sibling independence and exact-parent cascades. The [implementation guide](multiple-access-tokens.md) records its common-key, common-lifetime and 64-selection bounds. The [web consumer tests](../apps/delegation-demo/src/multiple_tests.rs) exercise distinct document/report RS roles, consent, partial approval and management over local HTTP. The roles remain co-located and synthetic; no independent interoperability is claimed. The [dated hosted validation](validation-2026-09-06.md) records separate HTTPS observations of this co-located consumer.
 
 | Capability | RFC condition | Project decision | Current state and evidence |
 | --- | --- | --- | --- |
@@ -151,26 +96,10 @@ independent interoperability is claimed. The [dated hosted validation](validatio
 
 ## Remaining work and acceptance
 
-The separate Biscuit application and authenticated workbench are delivered;
-their dated observations are indexed in the [documentation](README.md#support-and-evidence).
-The rows above remain the capability inventory, including model-only and missing
-features. Do not read the completed application scenarios as completion of entire
-RFC sections.
+The separate Biscuit application and authenticated workbench are delivered; their dated observations are indexed in the [documentation](README.md#support-and-evidence). The rows above remain the capability inventory, including model-only and missing features. Do not read the completed application scenarios as completion of entire RFC sections.
 
-Further protocol work should start from an identified consumer need or an
-unresolved requirement: review applicability in the normative ledger, add the
-needed API or profile, and exercise both accepted and refused requests.
-Deferred proof methods and token formats remain deferred until explicitly
-selected; this page does not schedule a new implementation milestone.
+Further protocol work should start from an identified consumer need or an unresolved requirement: review applicability in the normative ledger, add the needed API or profile, and exercise both accepted and refused requests. Deferred proof methods and token formats remain deferred until explicitly selected; this page does not schedule a new implementation milestone.
 
-The [0.1.0 release guide](releasing.md) covers package preparation separately
-from protocol expansion. A first crate release requires its own reviewed
-packaging, dependency and consumer checks, not a claim that every GNAP feature
-has been implemented.
+The [0.1.0 release guide](releasing.md) covers package preparation separately from protocol expansion. A first crate release requires its own reviewed packaging, dependency and consumer checks, not a claim that every GNAP feature has been implemented.
 
-A change is ready after relevant tests pass, its application scenario works where
-applicable, its documentation describes the actual support, and its reviews and
-CI satisfy the [merge gate](../CONTRIBUTING.md#review-and-merge).
-Coordinated consumer feedback is not independent-vendor interoperability.
-This matrix alone does not establish complete GNAP, either interoperability
-profile, or production readiness.
+A change is ready after relevant tests pass, its application scenario works where applicable, its documentation describes the actual support, and its reviews and CI satisfy the [merge gate](../CONTRIBUTING.md#review-and-merge). Coordinated consumer feedback is not independent-vendor interoperability. This matrix alone does not establish complete GNAP, either interoperability profile, or production readiness.

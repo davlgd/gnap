@@ -1,16 +1,10 @@
 # Getting started
 
-Run commands from the repository root unless a section says otherwise.
-The SDK workspace requires Rust 1.95 or newer. The HTTP applications are separate
-Cargo workspaces with their own lockfiles and tested toolchains documented in
-their guides. Biscuit files requires Rust 1.98 and Unix.
+Run commands from the repository root unless a section says otherwise. The SDK workspace requires Rust 1.95 or newer. The HTTP applications are separate Cargo workspaces with their own lockfiles and tested toolchains documented in their guides. Biscuit files requires Rust 1.98 and Unix.
 
 ## Follow a grant
 
-After cloning the repository, run the example below. Its output follows a grant
-through request, owner approval, callback validation, continuation, token-value
-rotation and revocation. Both SDK roles are real; the transport, policy and
-resource owner are simulated, and no resource server is contacted.
+After cloning the repository, run the example below. Its output follows a grant through request, owner approval, callback validation, continuation, token-value rotation and revocation. Both SDK roles are real; the transport, policy and resource owner are simulated, and no resource server is contacted.
 
 ```console
 $ cargo run -p gnap-as --example flow
@@ -57,10 +51,7 @@ Before revoking it, the client could have called a resource server with
 that token (§7.2). This in-memory example does not call a resource server.
 ```
 
-A client and an authorization server using the real protocol implementations,
-an in-memory transport, and demonstration policies and keys. Reading
-[that example](../crates/gnap-as/examples/flow.rs) top to bottom is the fastest way
-to see what the protocol looks like.
+A client and an authorization server using the real protocol implementations, an in-memory transport, and demonstration policies and keys. Reading [that example](../crates/gnap-as/examples/flow.rs) top to bottom is the fastest way to see what the protocol looks like.
 
 ## Explore smaller examples
 
@@ -72,14 +63,9 @@ cargo run -p gnap-crypto --example sign --locked
 cargo run -p gnap-biscuit --example file_access --locked
 ```
 
-- [Public JWK client](../crates/gnap-as/examples/jwk_client.rs): supply a public
-  key by value, prove possession, obtain a token, rotate it and revoke it.
-  The synthetic AS policy approves a fixed right; possession is not identity.
-- [HTTP signature](../crates/gnap-crypto/examples/sign.rs): construct a signed
-  request and verify it.
-- [Biscuit file access](../crates/gnap-biscuit/examples/file_access.rs): issue a
-  token, add restrictive checks, authorize its request and reject it after
-  parent revocation. This example does not run a GNAP grant session.
+- [Public JWK client](../crates/gnap-as/examples/jwk_client.rs): supply a public key by value, prove possession, obtain a token, rotate it and revoke it. The synthetic AS policy approves a fixed right; possession is not identity.
+- [HTTP signature](../crates/gnap-crypto/examples/sign.rs): construct a signed request and verify it.
+- [Biscuit file access](../crates/gnap-biscuit/examples/file_access.rs): issue a token, add restrictive checks, authorize its request and reject it after parent revocation. This example does not run a GNAP grant session.
 
 To inspect a message's shape, pipe JSON to the linter:
 
@@ -88,14 +74,11 @@ echo '{"client":"c","access_token":[{"access":["a"]},{"access":["b"]}]}' \
   | cargo run -q -p gnap-types --example lint --locked -- request
 ```
 
-This input is deliberately rejected because multiple requested tokens need
-labels. Shape validation does not verify request signatures or authorization.
+This input is deliberately rejected because multiple requested tokens need labels. Shape validation does not verify request signatures or authorization.
 
 ## Integrate a protocol role
 
-The examples consume workspace crates through path dependencies. You can use the
-same arrangement with a checkout named `gnap` beside your application directory.
-For a client, add these entries to your application's `Cargo.toml`:
+The examples consume workspace crates through path dependencies. You can use the same arrangement with a checkout named `gnap` beside your application directory. For a client, add these entries to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -105,54 +88,30 @@ gnap-types = { path = "../gnap/crates/gnap-types" }
 serde_json = "1"
 ```
 
-Adjust paths to your checkout. These instructions use source dependencies, not
-an assumed crates.io release.
+Adjust paths to your checkout. These instructions use source dependencies, not an assumed crates.io release.
 
 ### Client
 
-Implement `HttpTransport::send`, provide a signer, and create a `Session` for
-the AS grant endpoint. The [client API introduction](../crates/gnap-client/src/lib.rs)
-contains a compiled documentation example; the
-[JWK client](../crates/gnap-as/examples/jwk_client.rs) connects it to a real AS
-engine without a network.
+Implement `HttpTransport::send`, provide a signer, and create a `Session` for the AS grant endpoint. The [client API introduction](../crates/gnap-client/src/lib.rs) contains a compiled documentation example; the [JWK client](../crates/gnap-as/examples/jwk_client.rs) connects it to a real AS engine without a network.
 
-Handle the returned step: approval, interaction or continuation. Use the session's
-callback validation before continuing a grant; do not forward an unvalidated
-interaction reference. Pass consistent current timestamps to operations and
-configure a finish timeout. After a transport failure, do not assume the server
-rolled back the operation or blindly retry a mutation.
+Handle the returned step: approval, interaction or continuation. Use the session's callback validation before continuing a grant; do not forward an unvalidated interaction reference. Pass consistent current timestamps to operations and configure a finish timeout. After a transport failure, do not assume the server rolled back the operation or blindly retry a mutation.
 
-For HTTP integration, start from the [delegation application](../apps/delegation-demo/README.md).
-Its adapter supplies TLS, canonical origins, request bounds and browser-session
-handling that an in-memory example does not provide.
+For HTTP integration, start from the [delegation application](../apps/delegation-demo/README.md). Its adapter supplies TLS, canonical origins, request bounds and browser-session handling that an in-memory example does not provide.
 
 ### Authorization server
 
-Assemble `AuthorizationServer` with deployment policy, key resolution, storage,
-nonce generation and endpoint URIs. Route incoming requests to its handlers
-without changing the signed method, URI, headers or body bytes. The
-[AS API introduction](../crates/gnap-as/src/lib.rs) shows the constructor and
-explains the transactional storage contract.
+Assemble `AuthorizationServer` with deployment policy, key resolution, storage, nonce generation and endpoint URIs. Route incoming requests to its handlers without changing the signed method, URI, headers or body bytes. The [AS API introduction](../crates/gnap-as/src/lib.rs) shows the constructor and explains the transactional storage contract.
 
-Your policy authenticates the resource owner, determines approved rights and
-chooses lifetimes. Proving a client's key alone does not authorize its request.
-The default token encoder produces opaque references; a trusted
-[`TokenEncoder`](../crates/gnap-as/src/encoding.rs) can supply another format.
-Biscuit files demonstrates that extension with a matching RS verifier.
+Your policy authenticates the resource owner, determines approved rights and chooses lifetimes. Proving a client's key alone does not authorize its request. The default token encoder produces opaque references; a trusted [`TokenEncoder`](../crates/gnap-as/src/encoding.rs) can supply another format. Biscuit files demonstrates that extension with a matching RS verifier.
 
 ### Resource server
 
 Choose a validation path appropriate to the AS/RS agreement:
 
-- For opaque tokens, use [`gnap-rs::Authorizer`](resource-server-sdk.md) with an
-  authenticated introspection transport, replay memory and resource policy.
-- For Biscuit, use the [file-profile verifier](../crates/gnap-biscuit/README.md)
-  and the [three-process application](../apps/biscuit-files/README.md) to see
-  local rights checks combined with a signed live authority decision.
+- For opaque tokens, use [`gnap-rs::Authorizer`](resource-server-sdk.md) with an authenticated introspection transport, replay memory and resource policy.
+- For Biscuit, use the [file-profile verifier](../crates/gnap-biscuit/README.md) and the [three-process application](../apps/biscuit-files/README.md) to see local rights checks combined with a signed live authority decision.
 
-A token's format does not replace request-proof, rights, lifetime or revocation
-checks. See [architecture](architecture.md) for the boundaries between these
-responsibilities and [the support matrix](support-matrix.md) for precise profiles.
+A token's format does not replace request-proof, rights, lifetime or revocation checks. See [architecture](architecture.md) for the boundaries between these responsibilities and [the support matrix](support-matrix.md) for precise profiles.
 
 ## Run an HTTP application
 
@@ -162,11 +121,6 @@ Use an application's own manifest rather than the root workspace command:
 cargo run --manifest-path apps/delegation-demo/Cargo.toml --locked
 ```
 
-Open the address printed by the application. The
-[delegation guide](../apps/delegation-demo/README.md#run) explains its scenarios;
-[workbench setup](../apps/conformance-web/README.md#run-and-test) and
-[Biscuit setup](../apps/biscuit-files/README.md#run-locally) have separate
-configuration instructions. Use only synthetic data in these examples.
+Open the address printed by the application. The [delegation guide](../apps/delegation-demo/README.md#run) explains its scenarios; [workbench setup](../apps/conformance-web/README.md#run-and-test) and [Biscuit setup](../apps/biscuit-files/README.md#run-locally) have separate configuration instructions. Use only synthetic data in these examples.
 
-Return to the [documentation index](README.md) to choose an interaction,
-token-management or resource-server guide.
+Return to the [documentation index](README.md) to choose an interaction, token-management or resource-server guide.

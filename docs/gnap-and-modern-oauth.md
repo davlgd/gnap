@@ -1,28 +1,14 @@
 # GNAP and modern OAuth: what this ecosystem should demonstrate
 
-Comparison checked on **2026-09-06**. This is a design and evaluation guide, not
-a claim that this workspace already implements every feature described below.
-AS means authorization server; RS means resource server.
+Comparison checked on **2026-09-06**. This is a design and evaluation guide, not a claim that this workspace already implements every feature described below. AS means authorization server; RS means resource server.
 
 ## Use a contemporary baseline
 
-Compare against OAuth deployments following the [OAuth Security BCP,
-RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html), with authorization code
-and PKCE where applicable, and the extensions needed for the scenario. Do not
-use the implicit flow, password grant, or unrestricted bearer tokens as a
-stand-in for everything OAuth can do.
+Compare against OAuth deployments following the [OAuth Security BCP, RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html), with authorization code and PKCE where applicable, and the extensions needed for the scenario. Do not use the implicit flow, password grant, or unrestricted bearer tokens as a stand-in for everything OAuth can do.
 
-**OAuth 2.1 is still work in progress**, not a published RFC: the IETF
-Datatracker currently lists
-[draft-ietf-oauth-v2-1-16](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/16/)
-as an active Internet-Draft. Its consolidation of the framework is not the
-entire OAuth extension ecosystem. Record the draft version when comparing it;
-do not silently treat future revisions as the same baseline.
+**OAuth 2.1 is still work in progress**, not a published RFC: the IETF Datatracker currently lists [draft-ietf-oauth-v2-1-16](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/16/) as an active Internet-Draft. Its consolidation of the framework is not the entire OAuth extension ecosystem. Record the draft version when comparing it; do not silently treat future revisions as the same baseline.
 
-Our working hypothesis is that GNAP's integrated grant lifecycle can make some
-applications easier to build and reason about. That is an engineering hypothesis
-to test with independent implementers, not a measured result or a security
-guarantee. GNAP is a separate protocol, not a wire-compatible OAuth upgrade.
+Our working hypothesis is that GNAP's integrated grant lifecycle can make some applications easier to build and reason about. That is an engineering hypothesis to test with independent implementers, not a measured result or a security guarantee. GNAP is a separate protocol, not a wire-compatible OAuth upgrade.
 
 ## Eight comparisons worth testing
 
@@ -37,46 +23,20 @@ guarantee. GNAP is a separate protocol, not a wire-compatible OAuth upgrade.
 | Discovery and RS relationships | RS-facing discovery, introspection, resource-set registration and downstream token derivation have defined interfaces. [RFC 9767 §§3–4](https://www.rfc-editor.org/rfc/rfc9767.html#section-3) | OAuth has [introspection](https://www.rfc-editor.org/rfc/rfc7662.html), [AS metadata](https://www.rfc-editor.org/rfc/rfc8414.html), [protected resource metadata](https://www.rfc-editor.org/rfc/rfc9728.html), and [token exchange](https://www.rfc-editor.org/rfc/rfc8693.html). This is not an exhaustive comparison of other profiles. | Discoverability and cross-vendor RS integration. Do not present introspection, resource-first discovery or delegation as GNAP inventions. |
 | Lifecycle management | Per-token management and grant continuation are separate protocol interfaces. [RFC 9635 §§5–6](https://www.rfc-editor.org/rfc/rfc9635.html#section-6) | OAuth has [token revocation](https://www.rfc-editor.org/rfc/rfc7009.html) and refresh-token security guidance in [RFC 9700 §4.14](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14). Access-token replacement, refresh-token rotation and changing signing keys are different operations. | Whether the distinction is clear to developers and survives storage, concurrency and retry failures. |
 
-[UMA 2.0 federated authorization](https://docs.kantarainitiative.org/uma/wg/rec-oauth-uma-federated-authz-2.0.html)
-also defines resource registration, permissions and introspection interfaces in
-the OAuth ecosystem, and describes authorizations that can grow or shrink by
-resource and scope. It is a Kantara recommendation, not an IETF RFC or the same
-contract as GNAP. Evolving delegation and standardized AS/RS relationships are
-therefore not exclusive to GNAP.
+[UMA 2.0 federated authorization](https://docs.kantarainitiative.org/uma/wg/rec-oauth-uma-federated-authz-2.0.html) also defines resource registration, permissions and introspection interfaces in the OAuth ecosystem, and describes authorizations that can grow or shrink by resource and scope. It is a Kantara recommendation, not an IETF RFC or the same contract as GNAP. Evolving delegation and standardized AS/RS relationships are therefore not exclusive to GNAP.
 
 ## What is actually available here
 
-This snapshot describes public revision
-[07b0e2f](https://github.com/davlgd/gnap/commit/07b0e2f87614ea3c914ca011977cba46f50891ac).
-The [support matrix at that revision](https://github.com/davlgd/gnap/blob/07b0e2f87614ea3c914ca011977cba46f50891ac/docs/support-matrix.md)
-links the implementation and test evidence; the [current matrix](support-matrix.md)
-tracks later changes. This is a source snapshot, not a deployment inventory or
-a claim that work on other branches has been merged.
+This snapshot describes public revision [07b0e2f](https://github.com/davlgd/gnap/commit/07b0e2f87614ea3c914ca011977cba46f50891ac). The [support matrix at that revision](https://github.com/davlgd/gnap/blob/07b0e2f87614ea3c914ca011977cba46f50891ac/docs/support-matrix.md) links the implementation and test evidence; the [current matrix](support-matrix.md) tracks later changes. This is a source snapshot, not a deployment inventory or a claim that work on other branches has been merged.
 
-- The HTTP delegation demo exercises HTTPSig/PS256, redirect consent, opaque
-  key-bound tokens with a 1,200-second lifetime, token-value rotation and
-  revocation, and approved grants that remain continuable. Its policy permits
-  downscope and requires new consent for expansion; that consent policy is not
-  a universal GNAP rule.
-- The same demo exercises RS discovery, authenticated introspection and signed
-  registration of immutable resource sets used by reference in grants. It
-  combines the roles in one process; protected reads use HTTP introspection,
-  not the AS token store. This does not demonstrate independent-vendor operation.
-- The Biscuit crate supplies a restricted file profile and an in-process
-  attenuation example, not an integrated AS grant flow. At that revision,
-  AS-mediated downstream derivation was absent. The AS issued one token per approval; multiple-token
-  issuance, changing its bound key, mTLS adapters and JWT token implementations
-  remained missing, as did complete secondary-device interaction flows.
-- The web workbench provides selected diagnostics, not complete conformance
-  certification. The examples remain synthetic and volatile; durable storage,
-  real user authentication and production readiness are not supplied.
+- The HTTP delegation demo exercises HTTPSig/PS256, redirect consent, opaque key-bound tokens with a 1,200-second lifetime, token-value rotation and revocation, and approved grants that remain continuable. Its policy permits downscope and requires new consent for expansion; that consent policy is not a universal GNAP rule.
+- The same demo exercises RS discovery, authenticated introspection and signed registration of immutable resource sets used by reference in grants. It combines the roles in one process; protected reads use HTTP introspection, not the AS token store. This does not demonstrate independent-vendor operation.
+- The Biscuit crate supplies a restricted file profile and an in-process attenuation example, not an integrated AS grant flow. At that revision, AS-mediated downstream derivation was absent. The AS issued one token per approval; multiple-token issuance, changing its bound key, mTLS adapters and JWT token implementations remained missing, as did complete secondary-device interaction flows.
+- The web workbench provides selected diagnostics, not complete conformance certification. The examples remain synthetic and volatile; durable storage, real user authentication and production readiness are not supplied.
 
 ## Application experiments, not marketing demos
 
-These experiments record the proposals at the source snapshot above, not the
-current delivery status. Consult the [support matrix](support-matrix.md) for
-subsequent implementations, including multi-token issuance and downstream
-derivation. Use synthetic data and isolated test credentials throughout.
+These experiments record the proposals at the source snapshot above, not the current delivery status. Consult the [support matrix](support-matrix.md) for subsequent implementations, including multi-token issuance and downstream derivation. Use synthetic data and isolated test credentials throughout.
 
 | Experiment | Observable success and negative cases | Further work and checks |
 | --- | --- | --- |
@@ -87,30 +47,12 @@ derivation. Use synthetic data and isolated test credentials throughout.
 | Two-service dashboard | Obtain separately labeled document and calendar tokens. Handle partial approval, reject cross-service use, and revoke one without disabling the other. | Actual multi-token issuance, two RSs and lifecycle enforcement. |
 | Registered resource and downstream worker | Register a resource set, discover the AS, introspect a token, then obtain a narrower downstream token for a worker. Reject an unauthorized RS and a broader downstream request. | Add AS-mediated derivation and a worker to the existing registration/introspection path, with explicit trust and policy. |
 
-For each experiment, ask an implementer who did not write the library to start
-from a clean checkout and its public documentation. Record commands attempted,
-documentation gaps, confusing types/errors, required workarounds, and whether
-the SDK exposed every required operation. A coordinated sub-agent is a useful
-first consumer, but not independent third-party interoperability evidence.
+For each experiment, ask an implementer who did not write the library to start from a clean checkout and its public documentation. Record commands attempted, documentation gaps, confusing types/errors, required workarounds, and whether the SDK exposed every required operation. A coordinated sub-agent is a useful first consumer, but not independent third-party interoperability evidence.
 
-Measure integration time, code outside the SDK, failed attempts, HTTP round
-trips, latency percentiles and throughput only in an identified environment.
-Publish workload, concurrency, key/proof choices, warm-up, build configuration,
-storage and network topology. Do not attribute Clever Cloud deployment size or
-one favorable measurement to a protocol-level performance advantage. An OAuth
-comparison needs the same task and comparable security properties; absent that
-implementation, report GNAP measurements alone.
+Measure integration time, code outside the SDK, failed attempts, HTTP round trips, latency percentiles and throughput only in an identified environment. Publish workload, concurrency, key/proof choices, warm-up, build configuration, storage and network topology. Do not attribute Clever Cloud deployment size or one favorable measurement to a protocol-level performance advantage. An OAuth comparison needs the same task and comparable security properties; absent that implementation, report GNAP measurements alone.
 
 ## What a public conformance result may claim
 
-Reports should identify the tested role, endpoint, declared profile, proof
-method, specification/version, harness version, timestamp and individual test
-outcomes. Separate normative failures, unsupported optional features, harness
-limitations and deployment-policy failures. Provide reproducible, redacted
-traces; never publish tokens, private keys, personal data or consent secrets.
+Reports should identify the tested role, endpoint, declared profile, proof method, specification/version, harness version, timestamp and individual test outcomes. Separate normative failures, unsupported optional features, harness limitations and deployment-policy failures. Provide reproducible, redacted traces; never publish tokens, private keys, personal data or consent secrets.
 
-A successful scenario means that scenario passed. It is not complete GNAP
-certification, a production security audit, or proof that every untested
-combination works. Test endpoints only with their operator's authorization;
-isolate outbound requests so a public test UI cannot become an SSRF or scanning
-service. Keep destructive lifecycle tests on disposable grants and resources.
+A successful scenario means that scenario passed. It is not complete GNAP certification, a production security audit, or proof that every untested combination works. Test endpoints only with their operator's authorization; isolate outbound requests so a public test UI cannot become an SSRF or scanning service. Keep destructive lifecycle tests on disposable grants and resources.
