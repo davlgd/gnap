@@ -61,6 +61,9 @@ for (const button of document.querySelectorAll('[data-action]')) button.addEvent
     if (['start', 'start-identity', 'start-push', 'start-multiple', 'expand', 'downscope'].includes(button.dataset.action) && data.state === 'pending' && data.interaction_uri) { const target = new URL(data.interaction_uri); if (target.origin !== location.origin) throw new Error('Unexpected interaction origin'); location.assign(target.href); return; }
     if (data.redirect) { const target = new URL(data.redirect); if (target.origin !== location.origin) throw new Error('Unexpected callback origin'); location.assign(target.href); return; }
     render(data);
+    // A refused action answers with its error only: read the record again, so
+    // the attempt it made shows, without sending the action twice.
+    if (data.error) fetch('/api/status', {credentials: 'same-origin'}).then(r => r.json()).then(view => renderTrace(view.trace)).catch(() => {});
   } catch (e) { error.textContent = e.message; }
   finally { if (error.textContent) button.disabled = false; }
 });
@@ -81,6 +84,7 @@ const LABELS = {
   digest: { 'sha-256': 'sha-256', 'sha-512': 'sha-512' },
   media: { json: 'JSON', jose: 'JOSE', other: 'other type', ambiguous: 'several types' },
   kind: { empty: 'no body', object: 'JSON object', array: 'JSON array', scalar: 'JSON value', jose: 'JOSE, not decoded', not_json: 'not JSON', too_large: 'too large to read', too_deep: 'nested too deeply to read' },
+  json: { object: 'object', array: 'array', string: 'string', number: 'number', bool: 'boolean', null: 'null' },
   field: { access_token: 'access_token', client: 'client', continue: 'continue', error: 'error', instance_id: 'instance_id', interact: 'interact', interact_ref: 'interact_ref', subject: 'subject', user: 'user' },
   label: { documents: 'documents', reports: 'reports' },
   right: { 'synthetic-folder:read': 'synthetic-folder:read', 'synthetic-archive:read': 'synthetic-archive:read', 'synthetic-reports:read': 'synthetic-reports:read', 'archive-metadata:read': 'archive-metadata:read' },
@@ -98,7 +102,7 @@ function textNode(tag, className, text) {
 function describeBody(body) {
   if (!body || typeof body !== 'object') return 'Unknown';
   const parts = [label('kind', body.kind)];
-  const fields = (Array.isArray(body.fields) ? body.fields : []).map(field => label('field', field.name));
+  const fields = (Array.isArray(body.fields) ? body.fields : []).map(field => `${label('field', field.name)} (${label('json', field.kind)})`);
   if (fields.length) parts.push(`fields: ${fields.join(', ')}`);
   if (count(body.other_fields)) parts.push(`${count(body.other_fields)} other field(s)`);
   for (const token of Array.isArray(body.tokens) ? body.tokens : []) {
@@ -118,7 +122,6 @@ function exchangeRow(attempt) {
   const known = Object.hasOwn(LABELS.party, request.to);
   const row = document.createElement('li');
   row.className = `exchange ${known ? LABELS.lane[request.to] : 'to-unknown'}`;
-  if (Number.isInteger(attempt.seq)) row.dataset.seq = String(attempt.seq);
   const summary = document.createElement('details');
   const head = document.createElement('summary');
   head.append(
@@ -147,20 +150,19 @@ function exchangeRow(attempt) {
   return row;
 }
 
-// The status refreshes while a grant waits: an unchanged trace keeps its rows,
-// so an open row stays open and keeps the focus; a changed one reopens the
-// rows that were open.
-let renderedTrace = '';
+// The status refreshes while a grant waits. Attempts already shown keep their
+// rows, so an open row stays open and keeps the focus, and new attempts are
+// appended; a trace that doesn't extend the one shown, as after a new start,
+// replaces it.
+let shownAttempts = [];
 function renderTrace(trace) {
-  const key = JSON.stringify(trace ?? null);
-  if (key === renderedTrace) return;
-  renderedTrace = key;
   const list = document.querySelector('#trace');
-  const open = new Set([...list.children].filter(item => item.children[0]?.open).map(item => item.dataset.seq));
   const attempts = trace && Array.isArray(trace.attempts) ? trace.attempts : [];
-  const rows = attempts.map(exchangeRow);
-  for (const row of rows) if (open.has(row.dataset.seq)) row.children[0].open = true;
-  list.replaceChildren(...rows);
+  const keys = attempts.map(attempt => JSON.stringify(attempt));
+  const extending = shownAttempts.length <= keys.length && shownAttempts.every((key, i) => key === keys[i]);
+  if (extending) list.append(...attempts.slice(shownAttempts.length).map(exchangeRow));
+  else list.replaceChildren(...attempts.map(exchangeRow));
+  shownAttempts = keys;
   const dropped = document.querySelector('#trace-dropped');
   dropped.hidden = !(trace && count(trace.dropped));
   dropped.textContent = dropped.hidden ? '' : `${count(trace.dropped)} later exchange(s) not kept: the record keeps the first 64.`;

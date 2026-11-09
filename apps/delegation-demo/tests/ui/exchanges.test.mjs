@@ -58,7 +58,7 @@ test('known values render with the page labels, arrow to their server', () => {
   assert.match(row.className, /\bto-as\b/);
   const shown = text(row);
   for (const expected of ['POST /gnap', '400 JSON', 'HTTP message signature, not verified here', '@method, @target-uri, content-digest, and 1 other(s)',
-    'ed25519', 'sha-256', 'token documents: synthetic-folder:read and 1 other right(s)', 'error invalid_request']) {
+    'ed25519', 'sha-256', 'fields: access_token (array)', 'token documents: synthetic-folder:read and 1 other right(s)', 'error invalid_request']) {
     assert.ok(shown.includes(expected), `${expected} in ${shown}`);
   }
   assert.equal(nodes.get('#trace-dropped').hidden, true);
@@ -101,7 +101,7 @@ test('an absent or malformed trace renders an empty list', () => {
   }
 });
 
-test('a refresh with the same trace keeps the rows, and a new attempt keeps the open one open', () => {
+test('a refresh keeps the rows shown, appends new attempts, and a new trace replaces them', () => {
   const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [`#${id}`, element('')]));
   const context = {
     document: { querySelector: selector => nodes.get(selector), querySelectorAll: () => [], createElement: element },
@@ -117,7 +117,13 @@ test('a refresh with the same trace keeps the rows, and a new attempt keeps the 
   context.renderTrace({ attempts: [known, { ...known, seq: 1 }], dropped: 0 });
   const rows = nodes.get('#trace').children;
   assert.equal(rows.length, 2);
-  assert.equal(rows[0].children[0].open, true, 'the row that was open stays open');
-  assert.notEqual(rows[1].children[0].open, true);
+  assert.equal(rows[0], first, 'a longer trace keeps the rows already shown');
+  assert.equal(rows[0].children[0].open, true);
+  context.renderTrace({ attempts: [{ ...known, request: { ...known.request, route: 'continue' } }], dropped: 0 });
+  assert.equal(nodes.get('#trace').children.length, 1);
+  assert.notEqual(nodes.get('#trace').children[0], first, 'another trace replaces the rows');
+  const replaced = nodes.get('#trace').children[0];
+  context.renderTrace({ attempts: [known, { ...known, seq: 1 }], dropped: 0 });
+  assert.notEqual(nodes.get('#trace').children[0], replaced, 'a longer trace that differs from the shown one replaces it');
+  assert.equal(nodes.get('#trace').children.length, 2);
 });
-

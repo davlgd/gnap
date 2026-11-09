@@ -10,7 +10,10 @@ use std::cell::Cell;
 const MAX_TRACE_BYTES: usize = 128 * 1024;
 
 const ORIGIN: &str = "https://demo.example";
-const CANARY: &str = "canary7XQ";
+/// A canary that is a valid structured-field key, so that it can stand as a
+/// signature label or a component name; and its base64, for byte sequences.
+const CANARY: &str = "canary7xq";
+const CANARY_BYTES: &str = "Y2FuYXJ5N3hx";
 
 fn request(method: &str, path: &str) -> HttpRequest {
     HttpRequest::new(method, format!("{ORIGIN}{path}"))
@@ -94,13 +97,21 @@ fn the_gnap_scheme_is_matched_exactly() {
 
 /// A request and a response in which every value the record could see holds
 /// the canary, with the lab's real paths and GNAP field names kept, so that
-/// every branch that reads them runs.
+/// every branch that reads them runs. The signature fields stay well formed,
+/// so that the canaries inside them go through the signature parser.
 fn loaded(slot: Option<usize>) -> (HttpRequest, HttpResponse) {
     let canary = |n: usize| {
         if slot.is_none_or(|s| s == n) {
             CANARY
         } else {
             "plain"
+        }
+    };
+    let bytes = |n: usize| {
+        if slot.is_none_or(|s| s == n) {
+            CANARY_BYTES
+        } else {
+            "AAAA"
         }
     };
     let body = serde_json::json!({
@@ -120,7 +131,7 @@ fn loaded(slot: Option<usize>) -> (HttpRequest, HttpResponse) {
         (
             "signature-input".into(),
             format!(
-                "{}=(\"@method\" \"{}\");keyid=\"{}\";nonce=\"{}\";alg=\"{}\"",
+                "{}=(\"@method\" \"{}\");created=1;keyid=\"{}\";nonce=\"{}\";alg=\"{}\"",
                 canary(18),
                 canary(19),
                 canary(20),
@@ -130,11 +141,11 @@ fn loaded(slot: Option<usize>) -> (HttpRequest, HttpResponse) {
         ),
         (
             "signature".into(),
-            format!("{}=:{}:", canary(18), canary(23)),
+            format!("{}=:{}:", canary(18), bytes(23)),
         ),
         (
             "content-digest".into(),
-            format!("{}=:{}:", canary(24), canary(25)),
+            format!("{}=:{}:", canary(24), bytes(25)),
         ),
         (canary(26).into(), canary(27).into()),
         (
@@ -156,17 +167,30 @@ fn loaded(slot: Option<usize>) -> (HttpRequest, HttpResponse) {
 }
 
 /// The canary in each value in turn, then in all of them, never reaches the
-/// record: neither in a request summary nor in a response's.
+/// record: neither in a request summary nor in a response's. For the values
+/// inside the signature fields, the signature parser read them first.
 #[test]
 fn no_value_from_an_exchange_reaches_the_record() {
     for slot in (0..=31).map(Some).chain([None]) {
         let (request, answer) = loaded(slot);
-        let summaries = format!(
-            "{}{}",
-            json(&summarize_request(&request, ORIGIN)),
-            json(&summarize_response(&answer))
-        );
-        assert!(!summaries.contains(CANARY), "slot {slot:?}: {summaries}");
+        let summary = summarize_request(&request, ORIGIN);
+        if slot.is_some_and(|s| (18..=23).contains(&s)) {
+            assert_eq!(
+                summary.proof,
+                AnnouncedProof::Httpsig,
+                "slot {slot:?} took the signature branch"
+            );
+        }
+        if slot.is_some_and(|s| (24..=25).contains(&s)) {
+            assert!(
+                !summary.digest_unparsable,
+                "slot {slot:?} took the digest branch"
+            );
+        }
+        let summaries = format!("{}{}", json(&summary), json(&summarize_response(&answer)));
+        for canary in [CANARY, CANARY_BYTES] {
+            assert!(!summaries.contains(canary), "slot {slot:?}: {summaries}");
+        }
     }
 }
 
@@ -633,6 +657,14 @@ fn the_pages_tables_match_the_records_names() {
             FieldName::User,
         ]),
         json(&[Label::Documents, Label::Reports]),
+        json(&[
+            JsonKind::Object,
+            JsonKind::Array,
+            JsonKind::String,
+            JsonKind::Number,
+            JsonKind::Bool,
+            JsonKind::Null,
+        ]),
         json(&[
             Right::Folder,
             Right::Archive,

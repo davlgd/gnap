@@ -263,5 +263,6 @@ details > summary { cursor: pointer; color: var(--accent); margin-top: 1rem; }
   .lanes { display: none; }
   .exchanges { background: none; }
   .exchange summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; border-bottom: 1px solid var(--rule); }
-  .exchange .call, .exchange .reply { margin: 0; border: 0; padding: 0; text-align: left; }
+  /* As specific as the lane rules above, and later, so it wins over them. */
+  .exchanges .exchange .call, .exchanges .exchange .reply { margin: 0; border: 0; padding: 0; text-align: left; }
 }
