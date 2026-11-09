@@ -285,28 +285,11 @@ async fn response_checks(
     operation: Operation,
 ) -> Result<Vec<Check>, ()> {
     let status = response.status();
-    let media = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| {
-            v.split(';')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .eq_ignore_ascii_case("application/json")
-        });
     let headers: Vec<(String, String)> = response
         .headers()
         .iter()
         .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
         .collect();
-    let no_store = gnap_types::http::HttpResponse {
-        status: status.as_u16(),
-        headers: headers.clone(),
-        body: vec![],
-    }
-    .has_no_store();
     if response
         .content_length()
         .is_some_and(|len| len > RESPONSE_LIMIT as u64)
@@ -334,29 +317,20 @@ async fn response_checks(
             check("rs-proof-rights-and-introspection", None, "Not tested: valid token acceptance, cryptographic key binding, rights/audience, replay rejection, rotation, revocation and introspection. No token or signature was presented.", "https://www.rfc-editor.org/rfc/rfc9767.html"),
         ]);
     }
-    Ok(as_response_checks(status, media, no_store, &body))
+    Ok(rejection_checks(status.as_u16(), &headers, &body))
 }
 
 /// The checks of an AS's answer to the fixed malformed grant request, from
 /// the captured status, headers, and body.
 pub fn rejection_checks(status: u16, headers: &[(String, String)], body: &[u8]) -> Vec<Check> {
-    let media = headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-        .is_some_and(|(_, value)| {
-            value
-                .split(';')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .eq_ignore_ascii_case("application/json")
-        });
-    let no_store = gnap_types::http::HttpResponse {
+    // One `Content-Type`, naming JSON: a repeated one is ambiguous.
+    let response = gnap_types::http::HttpResponse {
         status,
         headers: headers.to_vec(),
         body: vec![],
-    }
-    .has_no_store();
+    };
+    let media = response.has_json_content_type();
+    let no_store = response.has_no_store();
     let status = reqwest::StatusCode::from_u16(status).unwrap_or(reqwest::StatusCode::OK);
     as_response_checks(status, media, no_store, body)
 }

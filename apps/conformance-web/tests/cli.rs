@@ -50,6 +50,19 @@ fn usage_errors_exit_with_two_before_any_network() {
             );
         }
     }
+    // An argument that isn't Unicode is refused without a panic or an echo.
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let mut raw = b"https://as.example/gnap?SYNTHETIC_SECRET=".to_vec();
+        raw.push(0xff);
+        let output = cli()
+            .arg("discover")
+            .arg(std::ffi::OsStr::from_bytes(&raw))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("SYNTHETIC_SECRET"));
+    }
     let help = cli().arg("--help").output().unwrap();
     assert_eq!(help.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&help.stdout).contains("discover"));

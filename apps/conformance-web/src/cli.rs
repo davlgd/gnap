@@ -348,6 +348,28 @@ mod tests {
         );
     }
 
+    /// A repeated `Content-Type` makes the refusal's media type ambiguous.
+    #[test]
+    fn a_repeated_content_type_fails_the_refusal() {
+        let mut response = json(
+            400,
+            &serde_json::json!({"error": {"code": "invalid_request"}}),
+        );
+        if let Some(response) = response.0.as_mut() {
+            response
+                .headers
+                .push(("Content-Type".into(), "text/plain".into()));
+        }
+        let report = probe(&response, ENDPOINT, 1);
+        let media = report
+            .findings
+            .iter()
+            .find(|f| f.id == "error-response-json")
+            .unwrap();
+        assert_eq!(media.outcome, Outcome::Failed);
+        assert_eq!(report.exit_code(), 1);
+    }
+
     #[test]
     fn no_passing_check_is_never_a_success() {
         let report = Report::new(

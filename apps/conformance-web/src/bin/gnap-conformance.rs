@@ -30,7 +30,17 @@ fragment. Exit codes: 0 when every selected check that applied passed, 1 when on
 type Command = fn(&Bounded<Exact>, &str, u64) -> cli::Report;
 
 fn main() -> ExitCode {
-    match run(std::env::args().skip(1).collect()) {
+    // `args_os`: an argument that isn't Unicode is refused without being
+    // shown, where `args` would panic and print it.
+    let arguments: Option<Vec<String>> = std::env::args_os()
+        .skip(1)
+        .map(|argument| argument.into_string().ok())
+        .collect();
+    let Some(arguments) = arguments else {
+        eprintln!("gnap-conformance: an argument isn't valid Unicode\n\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    match run(arguments) {
         Ok(code) => ExitCode::from(code),
         Err(message) => {
             eprintln!("gnap-conformance: {message}\n\n{USAGE}");
