@@ -214,7 +214,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 pub fn initialize(path: &Path) -> Result<(), Error> {
     fs::DirBuilder::new().mode(0o700).create(path)?;
     for role in ["client", "rs"] {
-        let private = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)?;
+        let private = rsa::PrivateKey::new(&mut getrandom::SysRng, 2048)?;
         let pem = private.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)?;
         let signer = Ps256Signer::from_pkcs8_pem(&pem, format!("files-{role}"))?;
         write_new(&path.join(format!("{role}.pem")), pem.as_bytes())?;

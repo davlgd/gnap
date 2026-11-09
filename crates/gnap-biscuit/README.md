@@ -154,7 +154,7 @@ when that feature is disabled. The upstream `regex-full` feature is enabled
 explicitly; this profile still rejects regex checks. `prost 0.10` matches the release's
 generated schema and permits inspection before evaluation. No unpublished git
 revision is used. The workspace lock keeps dependencies compatible with Rust
-1.88. Upstream's `proc-macro-error2 2.0.1` emits a future-compatibility warning;
+1.95. Upstream's `proc-macro-error2 2.0.1` emits a future-compatibility warning;
 it is not suppressed or described as a demonstrated runtime vulnerability.
 
 The tests exercise native chains and real RSA signatures. They cover tampering,

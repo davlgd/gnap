@@ -32,4 +32,4 @@ nonce from the actual session under the documented project convention.
 See the [profile and integration guide](https://github.com/davlgd/gnap/blob/main/docs/subject-assertions.md) for
 the release policy, context binding, limits and demonstration boundaries.
 
-Part of [gnap](https://github.com/davlgd/gnap). Rust 1.88 or newer; Apache-2.0.
+Part of [gnap](https://github.com/davlgd/gnap). Rust 1.95 or newer; Apache-2.0.

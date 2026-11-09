@@ -41,6 +41,6 @@ demonstrates it with a separate RS and matching verifier.
 See the [support matrix](https://github.com/davlgd/gnap/blob/main/docs/support-matrix.md)
 for the exact RS-facing and token-management profiles.
 
-Part of [gnap](https://github.com/davlgd/gnap). Rust 1.88 or newer; Apache-2.0.
+Part of [gnap](https://github.com/davlgd/gnap). Rust 1.95 or newer; Apache-2.0.
 For source dependencies and the upcoming 0.1.0 publication, see the
 [release guide](https://github.com/davlgd/gnap/blob/main/docs/releasing.md).

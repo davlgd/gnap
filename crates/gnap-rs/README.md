@@ -102,7 +102,7 @@ The crate's signed-request tests use scripted AS responses without `gnap-as`.
 They cover trust substitution, proof/key separation, replay, clocks, audiences,
 policy refusal and unusable HTTP responses. The delegation demo consumes this
 API over real HTTP; those consumer tests are separate evidence, not independent
-implementation certification. Rust 1.88 is the minimum supported version.
+implementation certification. Rust 1.95 is the minimum supported version.
 
 ```console
 cargo test -p gnap-rs --locked

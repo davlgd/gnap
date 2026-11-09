@@ -31,6 +31,6 @@ Generated Rust is included in the package; consumers do not need to download
 IANA data or run the generator. Maintainers can reproduce it using the
 [registry workflow](https://github.com/davlgd/gnap/blob/main/docs/verification.md#protocol-tests-and-registries).
 
-Part of [gnap](https://github.com/davlgd/gnap). Rust 1.88 or newer; Apache-2.0.
+Part of [gnap](https://github.com/davlgd/gnap). Rust 1.95 or newer; Apache-2.0.
 For source dependencies and the upcoming 0.1.0 publication, see the
 [release guide](https://github.com/davlgd/gnap/blob/main/docs/releasing.md).

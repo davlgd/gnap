@@ -128,6 +128,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// A nonce for the `nonce` parameter, recommended by §7.3.1.
 fn random_nonce() -> String {
     let mut b = [0u8; 16];
-    getrandom::getrandom(&mut b).expect("randomness source unavailable");
+    getrandom::fill(&mut b).expect("randomness source unavailable");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
 }

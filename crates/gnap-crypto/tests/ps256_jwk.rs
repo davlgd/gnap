@@ -115,9 +115,11 @@ fn ps256_rejects_a_pss_signature_with_a_non_sha256_length_salt() {
     use rsa::pkcs1::DecodeRsaPrivateKey;
     use rsa::signature::{RandomizedSigner, SignatureEncoding};
 
-    let private = rsa::RsaPrivateKey::from_pkcs1_pem(PRIVATE).unwrap();
-    let wrong_salt = rsa::pss::BlindedSigningKey::<sha2::Sha256>::new_with_salt_len(private, 20);
-    let signature = wrong_salt.sign_with_rng(&mut rsa::rand_core::OsRng, b"salt length matters");
+    let private = rsa::PrivateKey::from_pkcs1_pem(PRIVATE).unwrap();
+    let wrong_salt = rsa::pss::SigningKey::<sha2::Sha256>::new_with_salt_len(private, 20);
+    let signature = wrong_salt
+        .try_sign_with_rng(&mut getrandom::SysRng, b"salt length matters")
+        .unwrap();
     assert!(Ps256Verifier::from_public_jwk(&jwk())
         .unwrap()
         .verify(b"salt length matters", &signature.to_vec())

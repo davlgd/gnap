@@ -40,7 +40,7 @@ impl Nonces for OsNonces {
     /// worse than stopping.
     fn next(&self) -> String {
         let mut bytes = [0u8; 24];
-        getrandom::getrandom(&mut bytes).expect("OS randomness source unavailable");
+        getrandom::fill(&mut bytes).expect("OS randomness source unavailable");
         bytes
             .iter()
             .map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char)
