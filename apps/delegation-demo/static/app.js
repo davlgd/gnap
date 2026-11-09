@@ -15,6 +15,7 @@ function render(data) {
     : push.delivery === 'waiting_for_consent' ? 'Waiting for consent. The AS will send the callback directly to the client.'
     : `Waiting for a valid callback. Sender delivery status: ${push.delivery}. An uncertain delivery does not undo consent or prove that the callback was lost.`;
   document.querySelector('#state').textContent = data.state || 'unknown';
+  document.querySelector('#state').dataset.state = data.state || 'unknown';
   document.querySelector('#identity-consent').hidden = !data.identity_requested;
   const identityLive = data.identity?.status === 'verified' && data.identity.expires_at * 1000 > Date.now();
   document.querySelector('#identity').textContent = identityLive
