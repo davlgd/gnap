@@ -1241,3 +1241,94 @@ fn a_recoverable_first_answer_is_inconclusive() {
         .any(|(m, url, _)| m == "POST" && url.starts_with("https://as.example/continue")));
     assert_eq!(report.exit_code(), 2);
 }
+
+/// A pending poll can bring the interaction, as after a recoverable first
+/// answer: the scenario shows its link, and the operator can approve.
+#[test]
+fn an_interaction_a_poll_brings_is_shown() {
+    let interaction: RefCell<serde_json::Value> = RefCell::new(serde_json::Value::Null);
+    let first_poll = Cell::new(true);
+    let tamper = |request: &HttpRequest, forward: &dyn Fn() -> HttpResponse| {
+        let response = forward();
+        let mut body: serde_json::Value =
+            serde_json::from_slice(&response.body).unwrap_or_default();
+        if request.method == "POST" && request.url == GRANT {
+            *interaction.borrow_mut() = body["interact"].clone();
+            return json_answer(
+                400,
+                &serde_json::json!({"error": "too_fast", "continue": body["continue"]}),
+            );
+        }
+        if request.method == "POST"
+            && request.url.starts_with("https://as.example/continue")
+            && first_poll.replace(false)
+        {
+            body["interact"] = interaction.borrow().clone();
+            return json_answer(200, &body);
+        }
+        response
+    };
+    let server = server(true, false);
+    let shown = Cell::new(0);
+    let notify = |message: &str| {
+        shown.set(shown.get() + 1);
+        let handle = message.rsplit('/').next().unwrap();
+        server.complete_interaction(handle, 1_700_000_000).unwrap();
+    };
+    let (report, _) = run_with(
+        &server,
+        &plan("httpsig", "ES256", false, false),
+        &notify,
+        live_tokens,
+        &tamper,
+    );
+    assert_eq!(shown.get(), 1, "{}", report.text());
+    assert_eq!(
+        outcome(&report, "token-issued"),
+        Some(Outcome::Passed),
+        "{}",
+        report.text()
+    );
+}
+
+/// A wall clock set back during revocation can't make the last read repeat
+/// the second of the read before it: the scenario waits past it.
+#[test]
+fn a_read_after_revocation_never_repeats_a_proof_second() {
+    let clock = Jumping::by(0);
+    let reads = Cell::new(0);
+    let signed: RefCell<Vec<u64>> = RefCell::new(Vec::new());
+    let tamper = |request: &HttpRequest, forward: &dyn Fn() -> HttpResponse| {
+        let response = forward();
+        if request.method == "GET" && request.url == RESOURCE {
+            signed.borrow_mut().push(clock.now.get());
+            reads.set(reads.get() + 1);
+            // Right after the read before revocation, the wall clock goes
+            // back one second.
+            if reads.get() == 2 {
+                clock.now.set(clock.now.get() - 1);
+            }
+        }
+        response
+    };
+    let server = server(false, false);
+    let (report, _) = run_on(
+        &clock,
+        &server,
+        &plan("jws", "ES256", true, false),
+        &|_| {},
+        live_tokens,
+        &tamper,
+    );
+    let signed = signed.into_inner();
+    assert!(
+        signed.windows(2).all(|pair| pair[1] > pair[0]),
+        "{signed:?}"
+    );
+    assert_eq!(
+        outcome(&report, "revoked-token-refused"),
+        Some(Outcome::Passed),
+        "{}",
+        report.text()
+    );
+}

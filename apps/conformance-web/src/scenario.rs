@@ -258,6 +258,31 @@ fn showable(link: &str, local: bool) -> bool {
 /// A token the scenario holds: its value, its key, and when it expires.
 type Held = (TokenValue, Key, Option<u64>);
 
+/// Shows the operator the interaction a pending answer asks for, unless it
+/// is the one already shown; returns the link now shown.
+fn show_interaction(
+    response: &gnap_types::message::GrantResponse,
+    shown: Option<String>,
+    local: bool,
+    notify: &dyn Fn(&str),
+) -> Option<String> {
+    let Some(interact) = response.interact.as_ref() else {
+        return shown;
+    };
+    let link = interact
+        .redirect
+        .as_deref()
+        .filter(|link| showable(link, local));
+    match link {
+        Some(link) if shown.as_deref() == Some(link) => {}
+        Some(link) => notify(&format!(
+            "Open this link to approve the scenario's request, then wait: {link}"
+        )),
+        None => notify("The AS asked for an interaction this scenario can't show; it polls."),
+    }
+    link.map(str::to_owned).or(shown)
+}
+
 /// What a resource read observed.
 enum Read {
     NotRequested,
@@ -280,6 +305,9 @@ struct Run<'a, T: HttpTransport> {
     /// the scenario has to clean up.
     obtained: bool,
     current: Key,
+    /// The second the last resource proof was signed at: the next one has
+    /// to be later, so that it never repeats a proof's replay identity.
+    last_read: std::cell::Cell<u64>,
 }
 
 impl<T: HttpTransport> Run<'_, T> {
@@ -349,6 +377,7 @@ impl<T: HttpTransport> Run<'_, T> {
         let Some(resource) = self.plan.resource.as_ref() else {
             return Read::NotRequested;
         };
+        let after = after.max(self.last_read.get());
         if !self.clock.sleep_until(after.saturating_add(1)) {
             return Read::Unavailable;
         }
@@ -358,6 +387,7 @@ impl<T: HttpTransport> Run<'_, T> {
         if now <= after || expires_at.is_some_and(|at| now >= at) {
             return Read::Unavailable;
         }
+        self.last_read.set(now);
         let request = HttpRequest::new("GET", resource.as_str());
         let signed = match self.plan.proof {
             Proof::Httpsig => sign_request(request, key.as_ref(), Some(token), now),
@@ -438,6 +468,7 @@ pub fn lifecycle<T: HttpTransport>(
         continued_at: started,
         obtained: false,
         current: Arc::clone(&key),
+        last_read: std::cell::Cell::new(0),
     };
 
     if run.clock.interrupted() {
@@ -479,27 +510,14 @@ pub fn lifecycle<T: HttpTransport>(
     run.admit_held();
     let mut approved_at = clock.now();
     let mut issued = false;
+    let mut shown = None;
     let mut approved = match &result {
         Ok(Step::Approved(response)) => {
             issued = response.access_token.is_some();
             true
         }
         Ok(Step::Pending(response)) => {
-            let link = response
-                .interact
-                .as_ref()
-                .and_then(|interact| interact.redirect.as_deref())
-                .filter(|link| showable(link, local));
-            match link {
-                Some(link) => {
-                    notify(&format!(
-                        "Open this link to approve the scenario's request, then wait: {link}"
-                    ));
-                }
-                None => {
-                    notify("The AS asked for an interaction this scenario can't show; it polls.")
-                }
-            }
+            shown = show_interaction(response, None, local, notify);
             false
         }
         _ => false,
@@ -560,7 +578,11 @@ pub fn lifecycle<T: HttpTransport>(
                 approved = true;
                 approved_at = clock.now();
             }
-            Ok(Step::Pending(_)) => {}
+            // A poll can bring the interaction, as after a recoverable first
+            // answer: its link is shown once.
+            Ok(Step::Pending(response)) => {
+                shown = show_interaction(&response, shown, local, notify);
+            }
             Ok(Step::Recoverable(_)) => {
                 // §3.6 — such as too_fast, though the scenario waited as
                 // asked: the scenario follows the new continuation, and the
