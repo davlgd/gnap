@@ -831,3 +831,51 @@ fn a_jose_retry_is_fresh_from_the_next_second() {
         .start(&request, NOW + 1)
         .expect("the next second is a new proof");
 }
+
+/// An inconclusive start restores the session's local state, not the AS's:
+/// when the AS created the grant and its answer was lost, a retry creates a
+/// second one.
+#[test]
+fn a_retry_after_a_lost_answer_can_create_a_second_grant() {
+    use gnap_client::{ClientError, HttpTransport, Session};
+    struct LosesFirstAnswer<'a> {
+        server: &'a Server<MemoryStorage>,
+        calls: std::cell::Cell<u32>,
+    }
+    impl HttpTransport for LosesFirstAnswer<'_> {
+        type Error = String;
+        fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
+            let call = self.calls.get();
+            self.calls.set(call + 1);
+            let response = self.server.handle(&request, NOW + u64::from(call));
+            if call == 0 {
+                return Err("the answer was lost".into());
+            }
+            Ok(response)
+        }
+    }
+    for method in [JwsMethod::Jws, JwsMethod::Jwsd] {
+        let signer = &signers()[2];
+        let server = server(true);
+        let wire = LosesFirstAnswer {
+            server: &server,
+            calls: std::cell::Cell::new(0),
+        };
+        let mut approved = session_request(signer.as_ref(), method);
+        approved.interact = None;
+        let mut client = Session::new(&wire, Arc::clone(signer), GRANT);
+        assert!(matches!(
+            client.start(&approved, NOW),
+            Err(ClientError::Transport(_))
+        ));
+        assert_eq!(
+            server.storage().len().unwrap(),
+            1,
+            "the AS created the grant"
+        );
+        client
+            .start(&approved, NOW + 1)
+            .expect("the session can try again");
+        assert_eq!(server.storage().len().unwrap(), 2, "{}", method.name());
+    }
+}
