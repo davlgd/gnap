@@ -79,8 +79,9 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
     /// The request carries `presented`, the new public key, in its body, and
     /// two signatures: the token's current key signs as usual, then
     /// `replacement` signs with the `gnap-rotate` tag over that first
-    /// signature (§7.3.1.1). `presented` must be a public PS256 JWK by value
-    /// whose `kid` is the `keyid` of `replacement`. A reference, another
+    /// signature (§7.3.1.1). `presented` must be a public JWK by value that
+    /// `httpsig` accepts, whose `kid` is the `keyid` of `replacement`; the
+    /// new key may use another algorithm than the old one. A reference, another
     /// format, another proofing method or any proofing parameter, a private
     /// or symmetric member, a certificate or a mismatched `kid` is refused
     /// before anything is sent; these are the limits of this session.

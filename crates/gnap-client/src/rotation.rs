@@ -10,7 +10,7 @@ use gnap_crypto::httpsig::{
     fresh_nonce, parse_signatures, sign, signature_base, Component, Message, SignatureInput, Tag,
 };
 use gnap_crypto::proof::{Signer, Verifier};
-use gnap_crypto::ps256::Ps256Verifier;
+use gnap_crypto::PublicKey;
 use gnap_registry::KeyProofingMethod;
 use gnap_types::key::{Key, KeyObject};
 use gnap_types::token::TokenValue;
@@ -26,9 +26,9 @@ pub(crate) const REPLACEMENT_LABEL: &str = "replacement";
 ///
 /// §6.1.1: "keys passed by value are always public keys", and "The proofing
 /// method and parameters for the new key MUST be the same as those
-/// established for the previous key." This session signs with `httpsig` and
-/// RSA PS256 keys, so it presents only a public PS256 JWK, by value, with the
-/// `kid` its new signer uses. A reference, another format, another proofing
+/// established for the previous key." This session signs with `httpsig`, so it
+/// presents only a public JWK that `httpsig` accepts (`PS256`, `ES256`, or
+/// `EdDSA`), by value, with the `kid` its new signer uses. A reference, another format, another proofing
 /// method, proofing parameters, a private member or a mismatched `kid` are
 /// refused before anything leaves. These are the limits of this session, not
 /// rules GNAP places on every client.
@@ -39,7 +39,7 @@ pub(crate) const REPLACEMENT_LABEL: &str = "replacement";
 pub(crate) fn presentable<'k>(
     key: &'k Key,
     replacement: &dyn Signer,
-) -> Result<(&'k KeyObject, Ps256Verifier), ClientError> {
+) -> Result<(&'k KeyObject, PublicKey), ClientError> {
     let usage = |m: &str| ClientError::Usage(format!("rotate_key: {m}"));
     let Some(object) = key.as_value() else {
         return Err(usage(
@@ -69,10 +69,10 @@ pub(crate) fn presentable<'k>(
              certificate-aware adapter (RFC 9635 §7.1)",
         ));
     };
-    // §6.1.1 — "keys passed by value are always public keys". The PS256 parser
-    // refuses private members, certificate members and unusable sizes, and
-    // checks that the JWK actually describes a key.
-    let verifier = Ps256Verifier::from_public_jwk(jwk).map_err(|e| usage(&e.to_string()))?;
+    // §6.1.1 — "keys passed by value are always public keys". The JWK import
+    // refuses private members, certificate members and unusable keys, and
+    // checks that the JWK actually describes a key `httpsig` accepts.
+    let verifier = PublicKey::for_httpsig(jwk).map_err(|e| usage(&e.to_string()))?;
     if object.jwk_key_id() != Some(replacement.key_id()) {
         return Err(usage(
             "the presented JWK `kid` must be the `keyid` the new signer uses; when the key \

@@ -14,7 +14,7 @@ use gnap_as::{
     AuthorizationServer, Decision, Endpoints, KeyResolver, MemoryStorage, OsNonces, Policy,
 };
 use gnap_client::{HttpRequest, HttpResponse, HttpTransport, Session, Step};
-use gnap_crypto::{Ps256Signer, Ps256Verifier, Verifier};
+use gnap_crypto::{Ps256Signer, PublicKey, Verifier};
 use gnap_types::{access::AccessItem, client::Client, message::GrantRequest};
 use std::cell::Cell;
 
@@ -29,7 +29,7 @@ impl KeyResolver for PresentedKey {
         key.validate().ok()?;
         // The AS separately enforces the declared proof method and verifies
         // the request before consulting its authorization policy.
-        let verifier = Ps256Verifier::from_public_jwk(key.jwk.as_ref()?).ok()?;
+        let verifier = PublicKey::for_httpsig(key.jwk.as_ref()?).ok()?;
         Some(Box::new(verifier))
     }
 }

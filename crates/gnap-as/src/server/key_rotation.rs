@@ -163,13 +163,10 @@ fn requested_key(request: &HttpRequest) -> Result<Key, HttpResponse> {
                 "the requested key must contain only public key material",
             ));
         }
-        if let Some(jwk) = object.jwk.as_ref().filter(|jwk| {
-            jwk.get("kty").and_then(serde_json::Value::as_str) == Some("RSA")
-                && jwk.get("alg").and_then(serde_json::Value::as_str) == Some("PS256")
-        }) {
-            if gnap_crypto::Ps256Verifier::from_public_jwk(jwk).is_err() {
+        if let Some(jwk) = object.jwk.as_ref() {
+            if gnap_crypto::PublicKey::for_httpsig(jwk).is_err() {
                 return Err(invalid_rotation(
-                    "the requested public PS256 key cannot be used",
+                    "the requested public key cannot be used with httpsig",
                 ));
             }
         }
@@ -198,7 +195,7 @@ fn public_key(key: &KeyObject) -> bool {
     if let Some(jwk) = &key.jwk {
         // KeyObject's shape validator is not a complete JWK parser. Explicitly
         // refuse private members even when null; actual key parsing belongs to
-        // the resolver (the default uses the bounded public PS256 parser).
+        // the resolver (the default uses the bounded `httpsig` key import).
         if ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]
             .iter()
             .any(|field| jwk.contains_key(*field))

@@ -60,7 +60,7 @@ use gnap_client::{sign_request, HttpTransport};
 use gnap_crypto::{
     proof::Signer,
     verify::{verify_request_with_policy, Expectations, NonceMemory, SignedRequest},
-    Ps256Verifier,
+    PublicKey,
 };
 use gnap_registry::KeyProofingMethod;
 use gnap_types::{
@@ -202,10 +202,9 @@ impl<'a, T: HttpTransport + ?Sized> Authorizer<'a, T> {
         {
             return Err(AuthorizationError::Unavailable);
         }
-        let verifier = Ps256Verifier::from_public_jwk(
-            key.jwk.as_ref().ok_or(AuthorizationError::Unavailable)?,
-        )
-        .map_err(|_| AuthorizationError::Unavailable)?;
+        let verifier =
+            PublicKey::for_httpsig(key.jwk.as_ref().ok_or(AuthorizationError::Unavailable)?)
+                .map_err(|_| AuthorizationError::Unavailable)?;
         policy.validate(&info)?;
         if !required_access
             .iter()
