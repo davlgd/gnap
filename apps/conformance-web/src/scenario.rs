@@ -27,6 +27,9 @@ pub const MAX_ACCESS: usize = 8;
 pub const MAX_ACCESS_BYTES: usize = 512;
 /// Longest wait for an operator's interaction, in seconds.
 pub const MAX_WAIT: u64 = 600;
+/// Longest wait for a second at which a resource read signs a fresh proof:
+/// a wall clock set back further leaves the read inconclusive.
+pub const FRESH_PROOF_WAIT: u64 = 5;
 /// Longest wait before cleanup's first request, in seconds: cleanup takes
 /// at most this wait, then the network budget of `Limits::CLEANUP`.
 pub const CLEANUP_WAIT: u64 = 10;
@@ -378,7 +381,10 @@ impl<T: HttpTransport> Run<'_, T> {
             return Read::NotRequested;
         };
         let after = after.max(self.last_read.get());
-        if !self.clock.sleep_until(after.saturating_add(1)) {
+        let fresh = after.saturating_add(1);
+        if fresh.saturating_sub(self.clock.now()) > FRESH_PROOF_WAIT
+            || !self.clock.sleep_until(fresh)
+        {
             return Read::Unavailable;
         }
         let now = self.clock.now();

@@ -1295,40 +1295,57 @@ fn an_interaction_a_poll_brings_is_shown() {
 /// the second of the read before it: the scenario waits past it.
 #[test]
 fn a_read_after_revocation_never_repeats_a_proof_second() {
-    let clock = Jumping::by(0);
-    let reads = Cell::new(0);
-    let signed: RefCell<Vec<u64>> = RefCell::new(Vec::new());
-    let tamper = |request: &HttpRequest, forward: &dyn Fn() -> HttpResponse| {
-        let response = forward();
-        if request.method == "GET" && request.url == RESOURCE {
-            signed.borrow_mut().push(clock.now.get());
-            reads.set(reads.get() + 1);
-            // Right after the read before revocation, the wall clock goes
-            // back one second.
-            if reads.get() == 2 {
-                clock.now.set(clock.now.get() - 1);
+    for (set_back, fresh) in [(1, true), (60, false)] {
+        let clock = Jumping::by(0);
+        let reads = Cell::new(0);
+        let created: RefCell<Vec<u64>> = RefCell::new(Vec::new());
+        let tamper = |request: &HttpRequest, forward: &dyn Fn() -> HttpResponse| {
+            let response = forward();
+            if request.method == "GET" && request.url == RESOURCE {
+                // The second the proof was signed at, as it went on the wire.
+                let signed = request
+                    .headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("signature-input"))
+                    .and_then(|(_, value)| value.split("created=").nth(1))
+                    .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+                    .and_then(|digits| digits.parse().ok())
+                    .unwrap();
+                created.borrow_mut().push(signed);
+                reads.set(reads.get() + 1);
+                // Right after the read before revocation, the wall clock
+                // goes back.
+                if reads.get() == 2 {
+                    clock.now.set(clock.now.get() - set_back);
+                }
             }
+            response
+        };
+        let server = server(false, false);
+        let (report, _) = run_on(
+            &clock,
+            &server,
+            &plan("httpsig", "ES256", true, false),
+            &|_| {},
+            live_tokens,
+            &tamper,
+        );
+        let created = created.into_inner();
+        assert!(
+            created.windows(2).all(|pair| pair[1] > pair[0]),
+            "{created:?}"
+        );
+        let refused = outcome(&report, "revoked-token-refused");
+        if fresh {
+            // The scenario waited past the second of the read before.
+            assert_eq!(created.len(), 3, "{created:?}");
+            assert_eq!(refused, Some(Outcome::Passed), "{}", report.text());
+        } else {
+            // Too far back to wait for: the read isn't sent, and decides
+            // nothing.
+            assert_eq!(created.len(), 2, "{created:?}");
+            assert_eq!(refused, Some(Outcome::Inconclusive), "{}", report.text());
+            assert!(clock.elapsed.get() < 60, "{} seconds", clock.elapsed.get());
         }
-        response
-    };
-    let server = server(false, false);
-    let (report, _) = run_on(
-        &clock,
-        &server,
-        &plan("jws", "ES256", true, false),
-        &|_| {},
-        live_tokens,
-        &tamper,
-    );
-    let signed = signed.into_inner();
-    assert!(
-        signed.windows(2).all(|pair| pair[1] > pair[0]),
-        "{signed:?}"
-    );
-    assert_eq!(
-        outcome(&report, "revoked-token-refused"),
-        Some(Outcome::Passed),
-        "{}",
-        report.text()
-    );
+    }
 }
