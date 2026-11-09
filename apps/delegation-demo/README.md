@@ -26,9 +26,11 @@ The two-token button starts a request for several access tokens ([RFC 9635 §2.1
 
 The separate token controls demonstrate rotation and token-only revocation. "Revoke the entire grant" instead sends DELETE to continuation and invalidates every token belonging to it. It can also cancel a pending request before consent or the callback: approval isn't required for cancellation. Both cases require an open continuation and respect the AS wait period. Changing rights, unlike cancelling the request, requires an approved grant. Retired-token checks use fresh valid signatures.
 
+The page shows, beside the steps, the grant's state and the events the application recorded. Below them, **Exchanges the client made** draws each request the client attempted on lifelines, with what came back. Open a row to see what the request announced: its proof method, the components its HTTP signature covers, its content digest algorithm, and the GNAP fields and named rights of each body. These are declarations, not a verified proof. The record holds only closed values, such as routes, methods, status codes, registered error codes and the lab's own rights and labels, and no string from an exchange: no token, signature, nonce, handle or error description reaches it. It keeps a session's first 64 attempts and counts the others. The calls a resource server makes on its own, to introspect a token or to reach the metadata server, and the authorization server's push to the client aren't the client's exchanges, so they aren't shown.
+
 ```bash
 cargo test --manifest-path apps/delegation-demo/Cargo.toml --locked
-node --test apps/delegation-demo/tests/ui/requested_rights.test.mjs
+node --test apps/ui/tests/*.test.mjs apps/delegation-demo/tests/ui/*.test.mjs
 python3 tools/smoke_ecosystem.py --demo http://127.0.0.1:8080
 ```
 

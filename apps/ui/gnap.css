@@ -235,3 +235,34 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .error:empty { display: none; }
 
 details > summary { cursor: pointer; color: var(--accent); margin-top: 1rem; }
+
+/* Exchanges on lifelines: the client on the left, an arrow to the server the
+   request reached, and a dashed one back when a response was observed. */
+.lanes, .exchange summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.lanes { margin-top: 1rem; font-size: var(--step--1); color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--rule); padding-bottom: 0.4rem; }
+.lanes span { text-align: center; }
+.exchanges { list-style: none; margin: 0; padding: 0; background-image: linear-gradient(var(--rule), var(--rule)), linear-gradient(var(--rule), var(--rule)), linear-gradient(var(--rule), var(--rule)), linear-gradient(var(--rule), var(--rule)); background-size: 1px 100%; background-repeat: no-repeat; background-position: 12.5% 0, 37.5% 0, 62.5% 0, 87.5% 0; }
+.exchanges:empty { background: none; }
+.exchanges:empty::before { content: "No exchange yet: start a scenario."; color: var(--muted); display: block; padding: 1rem 0; }
+.exchange { max-width: none; }
+.exchange summary { cursor: pointer; list-style: none; row-gap: 0.15rem; padding: 0.55rem 0; font-size: var(--step--1); }
+.exchange summary::-webkit-details-marker { display: none; }
+.exchange .call, .exchange .reply { grid-column: 1 / span 2; text-align: center; padding: 0.15rem 0.5rem; font-family: var(--mono); }
+.exchange .call { border-bottom: 2px solid var(--accent); position: relative; }
+.exchange .reply { border-top: 2px dashed var(--muted); color: var(--muted); }
+.exchange summary[data-outcome="none"] .reply { border-top-color: transparent; font-style: italic; }
+.exchange.to-documents .call, .exchange.to-documents .reply { grid-column: 1 / span 3; }
+.exchange.to-reports .call, .exchange.to-reports .reply { grid-column: 1 / span 4; }
+.exchange.to-unknown .call, .exchange.to-unknown .reply { grid-column: 1 / span 4; margin: 0 12.5%; border-style: dotted; }
+.exchange.to-as .call, .exchange.to-as .reply { margin: 0 25% 0 25%; }
+.exchange.to-documents .call, .exchange.to-documents .reply { margin: 0 16.66% 0 16.66%; }
+.exchange.to-reports .call, .exchange.to-reports .reply { margin: 0 12.5% 0 12.5%; }
+.exchange details[open] { background: var(--ground); border-radius: var(--radius); }
+.exchange .facts { padding: 0.25rem 1rem 0.75rem; margin: 0; font-size: var(--step--1); }
+@media (max-width: 48rem) {
+  .lanes { display: none; }
+  .exchanges { background: none; }
+  .exchange summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; border-bottom: 1px solid var(--rule); }
+  /* As specific as the lane rules above, and later, so it wins over them. */
+  .exchanges .exchange .call, .exchanges .exchange .reply { margin: 0; border: 0; padding: 0; text-align: left; }
+}

@@ -119,30 +119,36 @@ impl fmt::Display for DigestError {
 
 impl std::error::Error for DigestError {}
 
-/// Validates a received `Content-Digest` against the message content.
+/// The supported algorithms a `Content-Digest` field names, in field order,
+/// without checking any digest.
 ///
-/// RFC 9635 §7.3.1 requires it of the verifier: "If the HTTP message includes content,
-/// the verifier MUST calculate and verify the value of the Content-Digest
-/// header".
+/// The field is read as `verify_content_digest` reads it, a Dictionary of
+/// Byte Sequences (RFC 9530 §2), so a key inside a string member is not a key.
 ///
-/// RFC 9530 §2 defines the field as a Structured Fields Dictionary whose keys
-/// name the algorithm and whose values are Byte Sequences. It is read as one
-/// (RFC 9651 §4.2.2), not split on commas: a trailing comma or a space before
-/// the `=` is not a field, a repeated key denotes its last member, a member may
-/// carry parameters, and the base64 may come without padding (§4.2.7).
+/// ```
+/// use gnap_crypto::digest::{content_digest_algorithms, DigestAlgorithm};
 ///
-/// A value carrying several digests is accepted when at least one known digest
-/// matches; a known digest that does not match is a failure.
+/// let field = "sha-512=:AAAA:, unknown=:AAAA:";
+/// assert_eq!(content_digest_algorithms(field).unwrap(), [DigestAlgorithm::Sha512]);
+/// assert!(content_digest_algorithms(r#"other="x,sha-256=:AAAA:""#).is_err());
+/// ```
 /// # Errors
 ///
-/// Fails when the value is not a Dictionary of Byte Sequences, when it carries
-/// no algorithm this library supports, or when a supported digest does not
-/// match the content.
-pub fn verify_content_digest(content: &[u8], header_value: &str) -> Result<(), DigestError> {
-    // Every member is parsed, whether or not its algorithm is known and whether
-    // or not a later member repeats its key: the Dictionary grammar parses each
-    // value, so a field with one unreadable member is not a field. Only then
-    // does a repeated key fold to its last member (§4.2.2).
+/// Fails when the value is not a Dictionary of Byte Sequences.
+pub fn content_digest_algorithms(header_value: &str) -> Result<Vec<DigestAlgorithm>, DigestError> {
+    Ok(members(header_value)?
+        .iter()
+        .filter_map(|(name, _)| DigestAlgorithm::from_name(name))
+        .collect())
+}
+
+/// The members of a `Content-Digest` field, a key to its decoded bytes.
+///
+/// Every member is parsed, whether or not its algorithm is known and whether
+/// or not a later member repeats its key: the Dictionary grammar parses each
+/// value, so a field with one unreadable member is not a field. Only then does
+/// a repeated key fold to its last member (RFC 9651 §4.2.2).
+fn members(header_value: &str) -> Result<Vec<(String, Vec<u8>)>, DigestError> {
     let mut digests: Vec<(String, Vec<u8>)> = Vec::new();
     for (key, item) in dictionary_members(header_value)
         .map_err(|e| DigestError::Malformed(format!("{header_value} — {e}")))?
@@ -164,9 +170,31 @@ pub fn verify_content_digest(content: &[u8], header_value: &str) -> Result<(), D
             digests.push((key, received));
         }
     }
+    Ok(digests)
+}
 
+/// Validates a received `Content-Digest` against the message content.
+///
+/// RFC 9635 §7.3.1 requires it of the verifier: "If the HTTP message includes content,
+/// the verifier MUST calculate and verify the value of the Content-Digest
+/// header".
+///
+/// RFC 9530 §2 defines the field as a Structured Fields Dictionary whose keys
+/// name the algorithm and whose values are Byte Sequences. It is read as one
+/// (RFC 9651 §4.2.2), not split on commas: a trailing comma or a space before
+/// the `=` is not a field, a repeated key denotes its last member, a member may
+/// carry parameters, and the base64 may come without padding (§4.2.7).
+///
+/// A value carrying several digests is accepted when at least one known digest
+/// matches; a known digest that does not match is a failure.
+/// # Errors
+///
+/// Fails when the value is not a Dictionary of Byte Sequences, when it carries
+/// no algorithm this library supports, or when a supported digest does not
+/// match the content.
+pub fn verify_content_digest(content: &[u8], header_value: &str) -> Result<(), DigestError> {
     let mut seen = false;
-    for (algorithm, received) in digests {
+    for (algorithm, received) in members(header_value)? {
         let Some(algorithm) = DigestAlgorithm::from_name(&algorithm) else {
             continue; // unknown algorithm: skip it, another one may match
         };

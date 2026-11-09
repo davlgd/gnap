@@ -260,13 +260,16 @@ fn local_http_worker_refuses_identity_before_creating_client_or_grant() {
     let (sender, receiver) = mpsc::sync_channel(1);
     let worker = std::thread::spawn(move || {
         client_worker(
-            app.origin,
-            app.signer,
-            app.server,
-            app.storage,
-            app.decisions,
+            Worker {
+                origin: app.origin,
+                signer: app.signer,
+                server: app.server,
+                storage: app.storage,
+                decisions: app.decisions,
+                references,
+                lifetime: SESSION_LIFETIME,
+            },
             receiver,
-            references,
         )
     });
     let (reply, received) = tokio::sync::oneshot::channel();

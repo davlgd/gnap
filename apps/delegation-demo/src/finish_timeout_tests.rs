@@ -28,7 +28,15 @@ fn scenario(app: App, origin: String) {
     let references = app.bootstrap.get().unwrap().as_ref().unwrap();
     for offset in [FINISH_TIMEOUT.get() - 1, FINISH_TIMEOUT.get()] {
         // Use exactly the constructor used by the browser's command worker.
-        let mut client = client_session(&network, app.signer.as_ref(), &origin);
+        let mut client = client_session(
+            crate::trace::Recording::new(
+                &network,
+                origin.clone(),
+                crate::trace::SharedTrace::default(),
+            ),
+            app.signer.as_ref(),
+            &origin,
+        );
         let request: GrantRequest = serde_json::from_value(json!({
             "client":"test-client", "access_token":{"access":[references.both]},
             "interact":{"start":["redirect"],"finish":{"method":"redirect","uri":format!("{origin}/callback"),"nonce":fresh_nonce().unwrap()}}
