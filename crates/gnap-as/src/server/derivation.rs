@@ -89,12 +89,7 @@ impl<P: Policy, K: KeyResolver, S: Storage + DerivedGrantStore, N: Nonces>
         clock: &dyn Fn() -> u64,
     ) -> HttpResponse {
         let now = clock();
-        // An attached JWS is an ordinary grant request: this handler derives
-        // only from requests proven with `httpsig`.
-        if request.url != self.endpoints.grant
-            || !request.method.eq_ignore_ascii_case("POST")
-            || is_jose_content(request)
-        {
+        if request.url != self.endpoints.grant || !request.method.eq_ignore_ascii_case("POST") {
             return self.handle(request, now);
         }
         let Some(bytes) = request
@@ -104,6 +99,11 @@ impl<P: Policy, K: KeyResolver, S: Storage + DerivedGrantStore, N: Nonces>
         else {
             return error(ErrorCode::InvalidRequest, "invalid grant request");
         };
+        // An attached JWS is an ordinary grant request, within the same bound:
+        // this handler derives only from requests proven with `httpsig`.
+        if is_jose_content(request) {
+            return self.handle(request, now);
+        }
         let Ok(raw) = serde_json::from_slice::<serde_json::Value>(bytes) else {
             return error(ErrorCode::InvalidRequest, "invalid grant request");
         };

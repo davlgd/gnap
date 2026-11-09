@@ -537,4 +537,13 @@ fn the_derivation_handler_serves_an_ordinary_attached_jws() {
     let response =
         server.handle_grant_with_derivation(&request, &NoServers, &NoDerivation, &nonces, &|| NOW);
     granted(&response);
+
+    // It bounds the body as it does any grant request's, before routing.
+    let mut padded: Value = serde_json::from_slice(&body).unwrap();
+    padded["padding"] = json!("x".repeat(gnap_as::MAX_GRANT_BODY_BYTES));
+    let padded = serde_json::to_vec(&padded).unwrap();
+    let request = grant_call(&padded).signed(JwsMethod::Jws, signer.as_ref());
+    let response =
+        server.handle_grant_with_derivation(&request, &NoServers, &NoDerivation, &nonces, &|| NOW);
+    assert_eq!(error_code(&response), "invalid_request");
 }
