@@ -114,6 +114,12 @@ impl Report {
         }
     }
 
+    /// The report of the `lifecycle` scenario.
+    #[must_use]
+    pub fn scenario(target: &str, started: u64, findings: Vec<Finding>) -> Self {
+        Self::new("lifecycle", target, started, findings)
+    }
+
     /// The process exit code: 1 when a check failed, 2 when one couldn't be
     /// decided or none passed, and 0 only when every selected check that
     /// applied passed.

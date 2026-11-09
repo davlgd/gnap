@@ -23,6 +23,8 @@ gnap-registry = { path = "../../crates/gnap-registry" }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+# The lifecycle scenario runs against a real authorization server, in memory.
+gnap-as = { path = "../../crates/gnap-as" }
 
 [lints.rust]
 unsafe_code = "forbid"

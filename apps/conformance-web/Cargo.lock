@@ -538,6 +538,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gnap-as"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "gnap-core",
+ "gnap-crypto",
+ "gnap-registry",
+ "gnap-types",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "gnap-client"
 version = "0.1.0"
 dependencies = [
@@ -554,6 +568,7 @@ name = "gnap-conformance-web"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "gnap-as",
  "gnap-client",
  "gnap-crypto",
  "gnap-net",
