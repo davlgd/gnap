@@ -8,30 +8,74 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its older runs. Each run on main gets its
+# own group, so none is cancelled or dropped from the queue by a later push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
 
 jobs:
+  # The quick checks run first, and the jobs below start only once they pass: a
+  # formatting, documentation, or commit problem fails the run before the costly jobs
+  quick:
+    name: Format, documentation and commit conventions
+    runs-on: ubuntu-latest
+    steps:
+      # commitlint reads the commit objects of the pull request, so the history is
+      # fetched, but only the blobs of the checked-out tree are downloaded
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Install rustfmt
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Format
+        # The three applications are separate workspaces, which --all doesn't reach
+        run: |
+          cargo fmt --all --check
+          for app in delegation-demo conformance-web biscuit-files; do
+            cargo fmt --manifest-path "apps/$app/Cargo.toml" --check
+          done
+
+      - name: Install the tools pinned in mise.toml
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+
+      - name: Lint the Markdown and check internal links
+        run: mise run lint:docs
+
+      - name: Check the commit subjects
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: commitlint --from "$PR_BASE" --to "$PR_HEAD" --verbose
+
   check:
     name: Test, lint and document
+    needs: quick
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install the stable toolchain
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
 
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Format
-        run: cargo fmt --all --check
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Lint
         # The workspace turns on clippy's pedantic and nursery groups; RUSTFLAGS
         # makes any warning fail the build.
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets --all-features
 
       - name: Test
         run: cargo test --workspace
@@ -53,17 +97,19 @@ jobs:
 
   claims:
     name: What the code claims about the RFCs
+    needs: quick
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # Published receipts verify source hashes against their earlier commit.
           fetch-depth: 0
       - name: Install Python for the verification tools
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Quotations are literal
         # The code quotes the RFCs to justify what it does. A drifted quotation
         # lends the authority of the normative text to a sentence nobody wrote,
@@ -87,30 +133,36 @@ jobs:
 
   msrv:
     name: Minimum supported Rust version
+    needs: quick
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust 1.95.0
         run: rustup toolchain install 1.95.0 --profile minimal
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build
         # Verify the minimum version against the committed dependency graph.
         run: cargo +1.95.0 build --workspace --locked
 
   ecosystem:
     name: Real application consumers
+    needs: quick
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
-          package-manager-cache: false
+          persist-credentials: false
+      - name: Install the Node.js version pinned in mise.toml
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          install_args: node
       - name: Check application interface behavior
         run: node --test apps/conformance-web/tests/ui/*.test.mjs apps/delegation-demo/tests/ui/*.test.mjs
       - name: Install stable toolchain
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             apps/delegation-demo -> target
@@ -119,7 +171,6 @@ jobs:
       - name: Check and build standalone consumers
         run: |
           for app in delegation-demo conformance-web biscuit-files; do
-            cargo fmt --manifest-path "apps/$app/Cargo.toml" --check
             cargo clippy --manifest-path "apps/$app/Cargo.toml" --all-targets --locked -- -D warnings
             cargo test --manifest-path "apps/$app/Cargo.toml" --locked
             cargo build --manifest-path "apps/$app/Cargo.toml" --locked
@@ -201,19 +252,28 @@ jobs:
 
   registries:
     name: Registry generation and upstream drift
+    needs: quick
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install the registry formatter
         run: rustup toolchain install stable --profile minimal --component rustfmt
       - name: Reproduce the vendored registry artifact
         run: |
           python3 tools/generate_registry.py
           git diff --exit-code -- crates/gnap-registry/src/generated.rs
-      - name: Refresh and regenerate
-        run: |
-          python3 tools/fetch_registries.py
-          python3 tools/generate_registry.py
+      - name: Fetch the current IANA registries
+        id: fetch
+        # Network-bound: an unreachable IANA is reported, it doesn't block a merge
+        continue-on-error: true
+        timeout-minutes: 5
+        run: python3 tools/fetch_registries.py
+      - name: Regenerate from the fetched registries
+        # Once the data is fetched, a generator failure on it is a real failure
+        if: steps.fetch.outcome == 'success'
+        run: python3 tools/generate_registry.py
       - name: Report any drift
         # Not a failure: IANA moving is news, not a bug. The diff says what
         # changed and the generated file is ready to commit.
