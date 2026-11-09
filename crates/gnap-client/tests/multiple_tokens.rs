@@ -510,3 +510,24 @@ fn a_rotation_is_compared_by_meaning_not_by_bytes() {
     assert!(matches!(e, ClientError::Usage(_)), "{e}");
     assert_eq!(as_.sent(), 1);
 }
+
+/// A GNAP error to a revocation is the AS's refusal: the session returns it
+/// as such and keeps the token, whose state hasn't changed (§3.6, §6.2).
+#[test]
+fn a_refused_revocation_returns_the_gnap_error_and_keeps_the_token() {
+    let sk = signer();
+    let as_ = FakeAs::with(vec![&two_of_three(), r#"{"error":"invalid_client"}"#]);
+    as_.replies.borrow_mut()[0].status = 400;
+    let mut s = Session::new(&as_, &sk, ENDPOINT);
+    s.start(&three(), 1_000).unwrap();
+
+    let e = s.revoke_token(Some("documents"), 1_010).unwrap_err();
+    assert!(
+        matches!(&e, ClientError::Server(error) if error.code.as_str() == "invalid_client"),
+        "{e}"
+    );
+    assert_eq!(
+        labels(&s, 1_010),
+        vec![Some("documents".to_owned()), Some("reports".to_owned())]
+    );
+}

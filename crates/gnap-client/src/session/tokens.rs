@@ -336,6 +336,14 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         let response = self.call_management("DELETE", &manage, None, signer, now)?;
 
         if response.status != 204 {
+            // §3.6 — a GNAP error is the AS's refusal, not a malformed answer;
+            // the token's state is unchanged.
+            if let Ok(GrantResponse {
+                error: Some(error), ..
+            }) = grant_response(&response)
+            {
+                return Err(ClientError::Server(error));
+            }
             return Err(ClientError::Protocol(format!(
                 "revoking answered {} where §6.2 says 204 No Content",
                 response.status
