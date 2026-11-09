@@ -20,6 +20,25 @@ import urllib.request
 from smoke_ecosystem import client, origin
 
 
+
+SESSION_FIELDS = {"restrictions", "next_request_uses", "key_rotations", "key_attempts_left",
+                  "previous_key_testable", "retired_token_testable"}
+
+
+def session_view(view):
+    """The client's closed description of the session it holds."""
+    def count(value):
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    return (isinstance(view, dict) and set(view) == SESSION_FIELDS
+            and isinstance(view["restrictions"], list)
+            and all(isinstance(block, dict) and set(block) == {"file", "until"}
+                    and block["file"] in ("notes", "draft") and count(block["until"])
+                    for block in view["restrictions"])
+            and view["next_request_uses"] in ("restricted", "issued", "none")
+            and count(view["key_rotations"]) and count(view["key_attempts_left"])
+            and isinstance(view["previous_key_testable"], bool)
+            and isinstance(view["retired_token_testable"], bool))
+
 class Failure(Exception):
     """Only a locally authored check identifier is exposed in the report."""
 
@@ -142,7 +161,8 @@ class Scenario:
             expected.add("key_rotations")
         elif name in {"read", "write", "read-draft", "write-notes", "check-retired", "check-old-key"}:
             expected |= {"status", "result"}
-        if set(body) != expected or not isinstance(body.get("event"), str):
+        expected.add("session")
+        if set(body) != expected or not isinstance(body.get("event"), str) or not session_view(body["session"]):
             raise Failure("client-response-shape")
         return headers, body
 

@@ -47,6 +47,7 @@ class ApplicationDouble:
         body = {"event": "PRIVATE-EVENT-NOT-FOR-REPORT"}
         if action == "start":
             self.sessions[browser] = {"attenuated": False, "key_rotations": 0, "revoked": False, "old": False}
+            body["session"] = self.view(self.sessions[browser])
             return 200, headers(True), body
         if browser not in self.sessions:
             return 401, headers(), None
@@ -70,7 +71,16 @@ class ApplicationDouble:
                 {"written_bytes": 42} if action == "write" else
                 {"content": "Synthetic notes: local attenuation preserves the client's key.\n"})
             body.update(status=status, result=result)
+        body["session"] = self.view(state)
         return 200, headers(), body
+
+    @staticmethod
+    def view(state):
+        return {"restrictions": [{"file": "notes", "until": 1}] if state["attenuated"] else [],
+                "next_request_uses": "none" if state["revoked"] else "restricted" if state["attenuated"] else "issued",
+                "key_rotations": state["key_rotations"], "key_attempts_left": 3 - state["key_rotations"],
+                "previous_key_testable": state["key_rotations"] > 0 and not state["revoked"],
+                "retired_token_testable": state["revoked"]}
 
 
 class BiscuitSmokeTests(unittest.TestCase):
@@ -212,3 +222,25 @@ class BiscuitSmokeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionViewTests(unittest.TestCase):
+    VIEW = {"restrictions": [{"file": "notes", "until": 1}], "next_request_uses": "restricted",
+            "key_rotations": 1, "key_attempts_left": 2, "previous_key_testable": True,
+            "retired_token_testable": False}
+
+    def test_the_closed_view_is_accepted(self):
+        self.assertTrue(smoke.session_view(self.VIEW))
+
+    def test_any_other_member_or_value_is_refused(self):
+        for change in ({"token": "private"}, {"next_request_uses": "anything"}, {"key_rotations": True},
+                       {"key_attempts_left": -1}, {"previous_key_testable": 1},
+                       {"restrictions": [{"file": "secrets", "until": 1}]},
+                       {"restrictions": [{"file": "notes", "until": 1, "token": "private"}]},
+                       {"restrictions": "notes"}):
+            self.assertFalse(smoke.session_view({**self.VIEW, **change}), change)
+        missing = dict(self.VIEW)
+        del missing["retired_token_testable"]
+        self.assertFalse(smoke.session_view(missing))
+        self.assertFalse(smoke.session_view(None))
+
