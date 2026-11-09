@@ -132,8 +132,10 @@ fn worker(
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(_) => break,
         };
+        // One instant for the action and for the view of its result.
+        let clock = crate::now();
         let result = (|| -> Result<Value, String> {
-            let now = crate::now().ok_or("clock unavailable")?;
+            let now = clock.ok_or("clock unavailable")?;
             if command.action == "start" {
                 if sessions.len() >= MAX_RECORDS {
                     return Err("client busy; try later".into());
@@ -329,16 +331,14 @@ fn worker(
                 _ => Err("unknown action".into()),
             }
         })();
-        // Every answer about a session the client holds carries its view.
-        let result = result.map(|mut value| {
-            if let (Some(s), Some(now), Some(object)) = (
-                sessions.get(&command.id),
-                crate::now(),
-                value.as_object_mut(),
-            ) {
+        // Every answer about a session the client holds carries its view,
+        // at the instant the action used.
+        let result = result.and_then(|mut value| {
+            if let (Some(s), Some(object)) = (sessions.get(&command.id), value.as_object_mut()) {
+                let now = clock.ok_or("clock unavailable")?;
                 object.insert("session".into(), view(s, now));
             }
-            value
+            Ok(value)
         });
         let _ = command.reply.send(result);
     }
