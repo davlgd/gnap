@@ -6,7 +6,7 @@ The GNAP authorization-server role without a prescribed HTTP framework. It negot
 
 Create an `AuthorizationServer` with an authorization `Policy`, trusted `KeyResolver`, transactional `Storage`, nonce generator and endpoint URIs. Your HTTP adapter passes the request to the corresponding handler then sends the response back, without changing the signed request bytes along the way.
 
-Run `cargo doc -p gnap-as --open` for the API documentation, with a compiled constructor example and the storage contract. The [integration guide](https://github.com/davlgd/gnap/blob/main/docs/getting-started.md#authorization-server) explains how to connect it to clients and resources.
+Run `cargo doc -p gnap-as --open` for the API documentation, with a compiled constructor example and the storage contract. The [integration guide](https://github.com/davlgd/gnap/blob/main/docs/getting-started.md#build-an-authorization-server) explains how to connect it to clients and resources.
 
 Policy supplies the decisions GNAP leaves to a deployment: owner authentication, consent, approved rights, lifetimes and trust. The included in-memory storage doesn't supply persistence or a production identity system.
 

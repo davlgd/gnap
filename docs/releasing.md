@@ -1,6 +1,6 @@
 # Releasing the crates
 
-This guide prepares the ten SDK crates for their first release on crates.io. The crates aren't published: use them as source dependencies, as [Getting started](getting-started.md#integrate-a-protocol-role) shows. The HTTP applications are examples, not packages of the release.
+This guide prepares the ten SDK crates for their first release on crates.io. The crates aren't published: use them as source dependencies, as [Getting started](getting-started.md#add-the-libraries-to-your-application) shows. The HTTP applications are examples, not packages of the release.
 
 Publishing is a separate decision of the maintainer. Don't upload a package, create a release tag, or change registry ownership while you check the packages. A published version is effectively permanent, as Cargo's [publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html) explains.
 

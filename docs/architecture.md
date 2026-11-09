@@ -1,6 +1,6 @@
 # Library and application boundaries
 
-The workspace separates protocol roles from the code that connects them to a network, authenticates users and stores durable state. Start with the [integration guide](getting-started.md#integrate-a-protocol-role) for runnable examples; this page explains the contracts behind them.
+The workspace separates protocol roles from the code that connects them to a network, authenticates users and stores durable state. Start with the [integration guide](getting-started.md#add-the-libraries-to-your-application) for runnable examples; this page explains the contracts behind them.
 
 ## Protocol roles
 
