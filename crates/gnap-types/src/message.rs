@@ -184,8 +184,9 @@ impl std::error::Error for ContinueError {}
 /// §5.3-MN09 forbids repeating `client` here: "the client instance is assumed
 /// not to have changed", and the AS finds it through the continuation token.
 /// The field is therefore absent from this type, and refused on the way in
-/// rather than absorbed as an extension.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+/// rather than absorbed as an extension. Its `Debug` output hides the
+/// interaction reference.
+#[derive(Clone, PartialEq, Eq, Default, Serialize)]
 pub struct ContinueRequest {
     /// The interaction reference, after a callback (§5.1). Single use.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -391,4 +392,20 @@ pub(crate) fn validate_discovery_endpoint(
         return Err(DiscoveryError::HttpsRequired);
     }
     Ok(())
+}
+
+impl fmt::Debug for ContinueRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContinueRequest")
+            .field(
+                "interact_ref",
+                &crate::interact::redacted(self.interact_ref.as_ref()),
+            )
+            .field("access_token", &self.access_token)
+            .field("subject", &self.subject)
+            .field("interact", &self.interact)
+            .field("user", &self.user)
+            .field("extra", &self.extra)
+            .finish()
+    }
 }

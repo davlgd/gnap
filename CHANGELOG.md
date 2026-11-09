@@ -22,7 +22,7 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** a grant, continuation, or management request that carries a body and a repeated `Content-Type` field is refused.
 
-`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonce, interaction handle and reference, and user code; the request and the token it holds keep their own `Debug` output. `MAX_GRANT_BODY_BYTES` names the body bound of the derivation and key-rotation handlers; the HTTP adapter still bounds ordinary grant requests.
+`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonces, interaction handle and references, and user code. `MAX_GRANT_BODY_BYTES` names the body bound of the derivation and key-rotation handlers; the HTTP adapter still bounds ordinary grant requests.
 
 ### gnap-crypto
 
@@ -40,7 +40,7 @@ The `Debug` output of a `Grant` counts its spent interaction references without 
 
 **Breaking:** `HttpRequest::json_body` replaces any `Content-Type` field already set, instead of adding a second one. To build a message whose media type disagrees with its body, set `body` directly.
 
-`HttpRequest::has_json_content_type` and `HttpResponse::has_json_content_type` check the media type of a JSON message. The `Debug` output of `TokenValue` hides the value, and the message types implement `Eq` where every field does.
+`HttpRequest::has_json_content_type` and `HttpResponse::has_json_content_type` check the media type of a JSON message. The `Debug` output of `TokenValue` hides the value, and that of the interaction and continuation messages hides their finish nonces, interaction references, and user codes. The message types implement `Eq` where every field does.
 
 ### gnap-registry
 
