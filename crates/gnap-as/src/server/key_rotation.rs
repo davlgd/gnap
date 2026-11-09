@@ -284,24 +284,15 @@ fn valid_resolved_key(resolved: &ResolvedTokenKey, jose: bool) -> bool {
         && check_presented_key(&resolved.key, resolved.verifier.as_ref()).is_ok()
 }
 
+/// Whether `key` presents a public key: `KeyObject::validate` refuses a JWK
+/// with a private member, even null, and a certificate field must not hold a
+/// private key, which the shape validator doesn't parse.
 fn public_key(key: &KeyObject) -> bool {
-    if key.validate().is_err() {
-        return false;
-    }
-    if let Some(jwk) = &key.jwk {
-        // KeyObject's shape validator is not a complete JWK parser. Explicitly
-        // refuse private members even when null; actual key parsing belongs to
-        // the resolver (the default uses the bounded `httpsig` key import).
-        if ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]
-            .iter()
-            .any(|field| jwk.contains_key(*field))
-        {
-            return false;
-        }
-    }
-    !key.cert
-        .as_ref()
-        .is_some_and(|pem| pem.contains("PRIVATE KEY"))
+    key.validate().is_ok()
+        && !key
+            .cert
+            .as_ref()
+            .is_some_and(|pem| pem.contains("PRIVATE KEY"))
 }
 
 fn same_proof(previous: &Proof, replacement: &Proof) -> bool {

@@ -1274,3 +1274,50 @@ fn only_a_new_interaction_response_replaces_the_finish_deadline() {
         );
     }
 }
+
+/// GNAP-9635-§7.1-M01 — "A key presented by value MUST be a public key".
+///
+/// Whichever private member a JWK carries, even null, nothing leaves the
+/// client; a public key, and a key named by reference, still do.
+#[test]
+fn a_private_key_never_leaves_the_client() {
+    const PRIVATE: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+    let sk = signer();
+    let grant = |key: serde_json::Value| -> GrantRequest {
+        serde_json::from_value(serde_json::json!({
+            "client": {"key": key},
+            "access_token": {"access": ["dolphin-metadata"]}
+        }))
+        .unwrap()
+    };
+    let public = serde_json::json!({"kty": "RSA", "kid": "gnap-demo", "alg": "PS256",
+                                    "n": "AQAB", "e": "AQAB"});
+    for member in PRIVATE {
+        for value in [serde_json::json!("AQAB"), serde_json::Value::Null] {
+            let mut jwk = public.clone();
+            jwk[member] = value.clone();
+            let as_ = FakeAs::with(vec![APPROVED]);
+            let mut s = Session::new(&as_, &sk, ENDPOINT);
+            let e = s
+                .start(
+                    &grant(serde_json::json!({"proof": "httpsig", "jwk": jwk})),
+                    1_000,
+                )
+                .unwrap_err();
+            assert!(matches!(e, ClientError::Usage(_)), "{member} {value}: {e}");
+            assert!(
+                as_.seen.borrow().is_empty(),
+                "{member} {value}: nothing left"
+            );
+        }
+    }
+    for key in [
+        serde_json::json!({"proof": "httpsig", "jwk": public}),
+        serde_json::json!("k-1"),
+    ] {
+        let as_ = FakeAs::with(vec![APPROVED]);
+        let mut s = Session::new(&as_, &sk, ENDPOINT);
+        s.start(&grant(key.clone()), 1_000).unwrap();
+        assert_eq!(as_.seen.borrow().len(), 1, "{key}");
+    }
+}
