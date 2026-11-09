@@ -28,6 +28,7 @@ function render(data) {
   document.querySelector('#tokens').textContent = (data.tokens || []).map(t => `${t.label || 'unlabelled'}: ${(t.rights || []).join(', ')}`).join(' | ') || 'None';
   const events = document.querySelector('#events'); events.replaceChildren();
   for (const event of data.events || []) { const item = document.createElement('li'); item.textContent = event; events.append(item); }
+  renderTrace(data.trace);
   document.querySelector('#resource').textContent = data.folder ? JSON.stringify(data.folder, null, 2) : 'No resource has been read with the current token.';
   const codes = Boolean(data.user_code_uri);
   document.querySelector('#device-code').hidden = !codes;
@@ -64,3 +65,91 @@ for (const button of document.querySelectorAll('[data-action]')) button.addEvent
   finally { if (error.textContent) button.disabled = false; }
 });
 fetch('/api/status', {credentials: 'same-origin'}).then(r => r.json()).then(render).catch(e => {error.textContent = e.message;});
+
+// The exchange inspector. Every label comes from these tables: the trace holds
+// only closed values, and anything unexpected reads as Unknown.
+// The registered GNAP error codes, which a Rust test compares with the registry.
+const ERROR_CODES = ['invalid_request', 'invalid_client', 'invalid_interaction', 'invalid_flag', 'invalid_rotation', 'key_rotation_not_supported', 'invalid_continuation', 'user_denied', 'request_denied', 'unknown_interaction', 'unknown_user', 'too_fast', 'too_many_attempts'];
+const LABELS = {
+  party: { authorization_server: 'Authorization server', documents_server: 'Documents server', reports_server: 'Reports server' },
+  lane: { authorization_server: 'to-as', documents_server: 'to-documents', reports_server: 'to-reports' },
+  route: { grant: '/gnap', continue: '/continue', token_management: '/token/…', folder: '/resource/folder', archive: '/resource/archive', folder_metadata: '/resource/folder-metadata', reports: '/resource/reports' },
+  method: { GET: 'GET', POST: 'POST', PATCH: 'PATCH', DELETE: 'DELETE', OPTIONS: 'OPTIONS' },
+  proof: { httpsig: 'HTTP message signature', jws: 'Attached JWS', jwsd: 'Detached JWS', ambiguous: 'Ambiguous: several proof fields', unparsable: 'Present but unparsable', none: 'None' },
+  covered: { '@method': '@method', '@target-uri': '@target-uri', 'content-digest': 'content-digest', 'content-type': 'content-type', 'content-length': 'content-length', authorization: 'authorization' },
+  alg: { 'rsa-pss-sha512': 'rsa-pss-sha512', 'ecdsa-p256-sha256': 'ecdsa-p256-sha256', ed25519: 'ed25519' },
+  digest: { 'sha-256': 'sha-256', 'sha-512': 'sha-512' },
+  media: { json: 'JSON', jose: 'JOSE', other: 'other type', ambiguous: 'several types' },
+  kind: { empty: 'no body', object: 'JSON object', array: 'JSON array', scalar: 'JSON value', jose: 'JOSE, not decoded', not_json: 'not JSON', too_large: 'too large to read', too_deep: 'nested too deeply to read' },
+  field: { access_token: 'access_token', client: 'client', continue: 'continue', error: 'error', instance_id: 'instance_id', interact: 'interact', interact_ref: 'interact_ref', subject: 'subject', user: 'user' },
+  label: { documents: 'documents', reports: 'reports' },
+  right: { 'synthetic-folder:read': 'synthetic-folder:read', 'synthetic-archive:read': 'synthetic-archive:read', 'synthetic-reports:read': 'synthetic-reports:read', 'archive-metadata:read': 'archive-metadata:read' },
+};
+const label = (table, value) => (Object.hasOwn(LABELS[table], value) ? LABELS[table][value] : 'Unknown');
+const count = value => (Number.isInteger(value) && value > 0 ? value : 0);
+
+function textNode(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.textContent = text;
+  return node;
+}
+
+function describeBody(body) {
+  if (!body || typeof body !== 'object') return 'Unknown';
+  const parts = [label('kind', body.kind)];
+  const fields = (Array.isArray(body.fields) ? body.fields : []).map(field => label('field', field.name));
+  if (fields.length) parts.push(`fields: ${fields.join(', ')}`);
+  if (count(body.other_fields)) parts.push(`${count(body.other_fields)} other field(s)`);
+  for (const token of Array.isArray(body.tokens) ? body.tokens : []) {
+    const name = token.label ? label('label', token.label) : token.other_label ? 'another label' : 'unlabelled';
+    const rights = (Array.isArray(token.rights) ? token.rights : []).map(right => label('right', right));
+    const others = count(token.other_rights) ? ` and ${count(token.other_rights)} other right(s)` : '';
+    parts.push(`token ${name}: ${rights.join(', ') || 'no named right'}${others}`);
+  }
+  if (count(body.more_tokens)) parts.push(`${count(body.more_tokens)} more token(s)`);
+  if (body.error !== null && body.error !== undefined) parts.push(`error ${ERROR_CODES.includes(body.error) ? body.error : 'Unknown'}`);
+  return parts.join('; ');
+}
+
+function exchangeRow(attempt) {
+  const request = attempt.request || {};
+  const outcome = attempt.outcome || {};
+  const known = Object.hasOwn(LABELS.party, request.to);
+  const row = document.createElement('li');
+  row.className = `exchange ${known ? LABELS.lane[request.to] : 'to-unknown'}`;
+  const summary = document.createElement('details');
+  const head = document.createElement('summary');
+  head.append(
+    textNode('span', 'call', `${label('method', request.method)} ${label('route', request.route)}`),
+    textNode('span', 'reply', outcome.kind === 'response'
+      ? `${Number.isInteger(outcome.status) ? outcome.status : '?'}${outcome.media ? ` ${label('media', outcome.media)}` : ''}`
+      : 'no response observed'),
+  );
+  head.dataset.outcome = outcome.kind === 'response' ? 'response' : 'none';
+  const facts = document.createElement('dl');
+  facts.className = 'facts';
+  const fact = (term, value) => facts.append(textNode('dt', '', term), textNode('dd', '', value));
+  fact('To', known ? label('party', request.to) : 'Unknown destination');
+  fact('Proof announced', `${label('proof', request.proof)}, not verified here`);
+  const covered = (Array.isArray(request.covered) ? request.covered : []).map(item => label('covered', item));
+  if (covered.length) fact('Signature covers', covered.join(', ') + (count(request.other_components) ? `, and ${count(request.other_components)} other(s)` : ''));
+  if (request.alg) fact('Signature algorithm', label('alg', request.alg));
+  fact('Authorization', request.gnap_authorization ? 'GNAP token presented' : 'none');
+  const digests = (Array.isArray(request.digests) ? request.digests : []).map(item => label('digest', item));
+  if (digests.length) fact('Content digest', digests.join(', '));
+  fact('Request body', describeBody(request.body));
+  fact('Response', outcome.kind === 'response' ? describeBody(outcome.body) : 'None observed: whether the request even left isn\'t known here');
+  summary.append(head, facts);
+  row.append(summary);
+  return row;
+}
+
+function renderTrace(trace) {
+  const list = document.querySelector('#trace');
+  const attempts = trace && Array.isArray(trace.attempts) ? trace.attempts : [];
+  list.replaceChildren(...attempts.map(exchangeRow));
+  const dropped = document.querySelector('#trace-dropped');
+  dropped.hidden = !(trace && count(trace.dropped));
+  dropped.textContent = dropped.hidden ? '' : `${count(trace.dropped)} later exchange(s) not kept: the record keeps the first 64.`;
+}

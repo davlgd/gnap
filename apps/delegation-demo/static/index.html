@@ -3,7 +3,7 @@
 <body>
 <header class="site-header">
 <a class="wordmark" href="/">GNAP delegation lab<small>a client, an authorization server and three resource servers</small></a>
-<nav class="site-nav" aria-label="Lab"><a href="#scenario">Scenario</a><a href="#consent">Consent</a><a href="#use">Use</a><a href="#change">Change</a><a href="#grant">Grant state</a></nav>
+<nav class="site-nav" aria-label="Lab"><a href="#scenario">Scenario</a><a href="#consent">Consent</a><a href="#use">Use</a><a href="#change">Change</a><a href="#grant">Grant state</a><a href="#exchanges">Exchanges</a></nav>
 </header>
 <main class="wide">
 <h1>Delegate access to a folder, then change your mind</h1>
@@ -71,5 +71,14 @@
 <p class="fine">An in-memory sandbox: a restart ends every session and token. Only this application's own endpoints are called.</p>
 </aside>
 </div>
+
+<section id="exchanges" class="panel" aria-labelledby="exchanges-title">
+<h2 id="exchanges-title">Exchanges the client made</h2>
+<p>Each row is a request the client attempted, and what came back. Open a row to see what it announced: these are the fields the request declared, not a verified proof, and no token, signature, nonce or handle is ever shown.</p>
+<div class="lanes" aria-hidden="true"><span>Client</span><span>Authorization server</span><span>Documents server</span><span>Reports server</span></div>
+<ol id="trace" class="exchanges"></ol>
+<p id="trace-dropped" class="hint" hidden></p>
+<p class="hint">Not shown: the calls a resource server makes on its own, to introspect a token or to reach the metadata server behind the documents server, which the client doesn't observe, and the authorization server's push to the client.</p>
+</section>
 </main>
 </body></html>
