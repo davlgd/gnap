@@ -177,6 +177,23 @@ fn the_jose_request_helper_refuses_what_it_would_overwrite() {
     text.body = Some(br#"{"looks":"like json"}"#.to_vec());
     let result = sign_jose_request(text, JwsMethod::Jws, &es256, None, 1_000);
     assert!(matches!(result, Err(ClientError::Usage(_))), "{result:?}");
+
+    let mut twice = HttpRequest::new("POST", "https://rs.example/a")
+        .header("Content-Type", "application/json")
+        .header("content-type", "application/json");
+    twice.body = Some(br#"{"a":1}"#.to_vec());
+    let result = sign_jose_request(twice, JwsMethod::Jws, &es256, None, 1_000);
+    assert!(
+        matches!(result, Err(ClientError::Usage(_))),
+        "two types are ambiguous"
+    );
+
+    let detached = HttpRequest::new("GET", "https://rs.example/a").header("detached-jws", "x");
+    let result = gnap_client::sign_request(detached, &es256, None, 1_000);
+    assert!(
+        matches!(result, Err(ClientError::Usage(_))),
+        "httpsig refuses a JOSE field"
+    );
 }
 
 /// A `jwsd` proof keeps the body's bytes and type, a `jws` one replaces a

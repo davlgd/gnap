@@ -32,8 +32,8 @@ use gnap_types::token::TokenValue;
 ///
 /// # Errors
 ///
-/// Rejects pre-existing Authorization, Signature, Signature-Input or
-/// Content-Digest headers, regardless of case. Also fails if secure randomness
+/// Rejects pre-existing Authorization, Signature, Signature-Input,
+/// Content-Digest or Detached-JWS headers, regardless of case. Also fails if secure randomness
 /// or signing fails. It never silently replaces a supplied security header.
 pub fn sign_request(
     request: HttpRequest,
@@ -59,11 +59,12 @@ pub(crate) fn sign_request_labelled(
     now: u64,
     label: &str,
 ) -> Result<HttpRequest, ClientError> {
-    const RESERVED: [&str; 4] = [
+    const RESERVED: [&str; 5] = [
         "Authorization",
         "Signature",
         "Signature-Input",
         "Content-Digest",
+        DETACHED_JWS_HEADER,
     ];
     if request.headers.iter().any(|(name, _)| {
         RESERVED
@@ -71,7 +72,7 @@ pub(crate) fn sign_request_labelled(
             .any(|reserved| name.eq_ignore_ascii_case(reserved))
     }) {
         return Err(ClientError::Usage(
-            "sign_request requires a request without Authorization, Signature, Signature-Input or Content-Digest headers"
+            "sign_request requires a request without Authorization, Signature, Signature-Input, Content-Digest or Detached-JWS headers"
                 .into(),
         ));
     }
@@ -333,14 +334,15 @@ pub fn sign_jose_request(
                     .trim()
                     .eq_ignore_ascii_case("application/json")
             };
-            if request
+            let mut types = request
                 .headers
                 .iter()
-                .any(|(name, value)| name.eq_ignore_ascii_case("content-type") && !json(value))
-            {
+                .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"));
+            let single = types.next().is_none_or(|(_, value)| json(value));
+            if !single || types.next().is_some() {
                 return Err(ClientError::Usage(
-                    "a jws proof attaches JSON content; the request's Content-Type isn't \
-                     application/json (RFC 9635 §7.3.4)"
+                    "a jws proof attaches JSON content; the request needs at most one \
+                     Content-Type, application/json (RFC 9635 §7.3.4)"
                         .into(),
                 ));
             }
