@@ -31,6 +31,11 @@ pub struct KeyObject {
     pub cert_s256: Option<String>,
 }
 
+/// The private and symmetric members of every JWK key type (RFC 7518 §6.2.2,
+/// §6.3.2, §6.4.1, RFC 8037 §2). A public key carries none of them, not even
+/// with a null value.
+pub const PRIVATE_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
 /// What prevents a key from being valid as the RFC defines it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyError {
@@ -46,6 +51,9 @@ pub enum KeyError {
     JwkAlgNone,
     /// The key sent by value is symmetric, which §2.3 forbids.
     SymmetricByValue,
+    /// The JWK sent by value carries the named private member, which §7.1
+    /// forbids: the key has to be public.
+    PrivateByValue(&'static str),
 }
 
 impl core::fmt::Display for KeyError {
@@ -79,6 +87,12 @@ impl core::fmt::Display for KeyError {
                  MUST NOT send a symmetric key by value, since that hands over the key \
                  itself instead of proving possession of it (RFC 9635 §2.3, §11.5)"
             ),
+            Self::PrivateByValue(member) => write!(
+                f,
+                "key.jwk: the JWK carries the private member `{member}`. A key presented by \
+                 value MUST be a public key: sending it hands over the private key itself \
+                 (RFC 9635 §7.1)"
+            ),
         }
     }
 }
@@ -97,7 +111,8 @@ impl KeyObject {
     /// # Errors
     ///
     /// Fails when no format is supplied, when several are, when a JWK is
-    /// missing `alg` or `kid`, declares `alg: "none"`, or is a symmetric key.
+    /// missing `alg` or `kid`, declares `alg: "none"`, is a symmetric key, or
+    /// carries a private member.
     ///
     pub fn validate(&self) -> Result<(), KeyError> {
         let mut formats = Vec::new();
@@ -137,6 +152,10 @@ impl KeyObject {
             // RFC 7518 §6.1 names the symmetric key type `oct`.
             if jwk.get("kty").and_then(serde_json::Value::as_str) == Some("oct") {
                 return Err(KeyError::SymmetricByValue);
+            }
+            // §7.1 — "A key presented by value MUST be a public key".
+            if let Some(member) = PRIVATE_MEMBERS.into_iter().find(|m| jwk.contains_key(*m)) {
+                return Err(KeyError::PrivateByValue(member));
             }
         }
 

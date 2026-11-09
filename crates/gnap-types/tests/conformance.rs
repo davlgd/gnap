@@ -567,6 +567,39 @@ fn a_symmetric_key_is_never_sent_by_value() {
     assert_eq!(k.validate(), Ok(()));
 }
 
+/// GNAP-9635-§7.1-M01 — "A key presented by value MUST be a public key".
+///
+/// Every private member of the RSA, EC, and OKP key types is refused, even
+/// with a null value, and the member is named.
+#[test]
+fn a_private_key_is_never_sent_by_value() {
+    for (kty, alg) in [("RSA", "PS256"), ("EC", "ES256"), ("OKP", "EdDSA")] {
+        for member in gnap_types::key::PRIVATE_MEMBERS {
+            if member == "k" {
+                continue; // The symmetric member, under `kty: oct`, above.
+            }
+            for value in [serde_json::json!("AAAA"), serde_json::Value::Null] {
+                let mut jwk = serde_json::json!({"kty": kty, "kid": "k", "alg": alg});
+                jwk[member] = value.clone();
+                let k: KeyObject =
+                    serde_json::from_value(serde_json::json!({"proof": "httpsig", "jwk": jwk}))
+                        .unwrap();
+                assert_eq!(
+                    k.validate(),
+                    Err(KeyError::PrivateByValue(member)),
+                    "{kty} {member} {value}"
+                );
+            }
+        }
+    }
+    // `k` alone, on a key type that isn't `oct`, is a private member too.
+    let k: KeyObject = serde_json::from_str(
+        r#"{"proof":"httpsig","jwk":{"kty":"RSA","kid":"k","alg":"PS256","k":"AAAA"}}"#,
+    )
+    .unwrap();
+    assert_eq!(k.validate(), Err(KeyError::PrivateByValue("k")));
+}
+
 /// GNAP-9635-§7.1-MN04 — "The `alg` parameter MUST NOT be `none`."
 ///
 /// A key that declares no algorithm proves nothing, so a proof made with it

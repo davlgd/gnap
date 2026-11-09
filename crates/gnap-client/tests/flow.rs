@@ -1083,6 +1083,7 @@ fn a_rotated_token_starts_its_own_expiry_clock() {
 
 /// GNAP-9635-§2.3-MN09 — "The client instance MUST NOT send a symmetric key by
 /// value in the key field of the request".
+/// GNAP-9635-§7.1-M01 — "A key presented by value MUST be a public key".
 /// GNAP-9635-§2.3.2-M03 and GNAP-9635-§2.3.2-M05 — the display URIs are
 /// absolute.
 ///
@@ -1096,6 +1097,12 @@ fn what_the_client_says_about_itself_is_checked_before_it_leaves() {
                          "jwk": {"kty": "oct", "kid": "shared", "alg": "HS256", "k": "AAAA"}}},
       "access_token": {"access": ["dolphin-metadata"]}
     }"#;
+    const PRIVATE: &str = r#"{
+      "client": {"key": {"proof": "httpsig",
+                         "jwk": {"kty": "RSA", "kid": "gnap-demo", "alg": "PS256",
+                                 "n": "AQAB", "e": "AQAB", "d": "AQAB"}}},
+      "access_token": {"access": ["dolphin-metadata"]}
+    }"#;
     const RELATIVE_LOGO: &str = r#"{
       "client": {"key": {"proof": "httpsig",
                          "jwk": {"kty": "RSA", "kid": "gnap-demo", "alg": "PS256",
@@ -1105,7 +1112,11 @@ fn what_the_client_says_about_itself_is_checked_before_it_leaves() {
     }"#;
 
     let sk = signer();
-    for (body, expected) in [(SYMMETRIC, "symmetric"), (RELATIVE_LOGO, "logo_uri")] {
+    for (body, expected) in [
+        (SYMMETRIC, "symmetric"),
+        (PRIVATE, "private member"),
+        (RELATIVE_LOGO, "logo_uri"),
+    ] {
         let as_ = FakeAs::with(vec![APPROVED]);
         let mut s = Session::new(&as_, &sk, ENDPOINT);
         let request: GrantRequest = serde_json::from_str(body).unwrap();
