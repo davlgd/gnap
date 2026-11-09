@@ -83,6 +83,11 @@ fn server(interact: bool, deny: bool) -> Server {
     .with_key_rotation(true)
 }
 
+thread_local! {
+    /// The operator's interrupt, per test thread.
+    static INTERRUPTED: Cell<bool> = const { Cell::new(false) };
+}
+
 /// A clock the scenario moves forward by waiting.
 struct Virtual(Cell<u64>);
 impl Clock for Virtual {
@@ -90,11 +95,14 @@ impl Clock for Virtual {
         self.0.get()
     }
     fn sleep_until(&self, at: u64) -> bool {
+        if self.interrupted() {
+            return false;
+        }
         self.0.set(self.0.get().max(at));
         true
     }
     fn interrupted(&self) -> bool {
-        false
+        INTERRUPTED.with(Cell::get)
     }
     fn pause(&self, at: u64) {
         self.0.set(self.0.get().max(at));
@@ -156,11 +164,11 @@ impl HttpTransport for InMemory<'_> {
                 .flatten()
                 .is_some();
             let status = (self.resource)(&token, live).ok_or("unreachable resource")?;
-            return Ok(HttpResponse {
+            return Ok((self.tamper)(&request, &|| HttpResponse {
                 status,
                 headers: vec![],
                 body: vec![],
-            });
+            }));
         }
         Ok((self.tamper)(&request, &|| {
             self.server.handle(&request, self.clock.now())
@@ -604,4 +612,172 @@ fn a_grant_without_continuation_needs_no_revocation() {
         "{sent:?}"
     );
     assert_eq!(report.exit_code(), 0, "{}", report.text());
+}
+
+/// Only `user_denied` says the resource owner refused: another GNAP error
+/// to a continuation decides nothing about the interaction.
+#[test]
+fn a_continuation_error_other_than_a_denial_is_inconclusive() {
+    fn invalid_client(request: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+        if request.method == "POST" && request.url.starts_with("https://as.example/continue") {
+            return HttpResponse {
+                status: 400,
+                headers: vec![
+                    ("Content-Type".into(), "application/json".into()),
+                    ("Cache-Control".into(), "no-store".into()),
+                ],
+                body: br#"{"error":"invalid_client"}"#.to_vec(),
+            };
+        }
+        forward()
+    }
+    let server = server(true, false);
+    let (report, _) = run_with(
+        &server,
+        &plan("httpsig", "ES256", false, false),
+        &|_| {},
+        live_tokens,
+        invalid_client,
+    );
+    assert_eq!(
+        outcome(&report, "interaction-outcome"),
+        Some(Outcome::Inconclusive),
+        "{}",
+        report.text()
+    );
+    assert_eq!(report.exit_code(), 2);
+}
+
+thread_local! {
+    /// The request whose answer raises the interrupt: its method, its URI's
+    /// prefix, and how many such requests pass first.
+    static TRIGGER: Cell<(&'static str, &'static str, u32)> = const { Cell::new(("", "", 0)) };
+}
+
+fn interrupt_on_trigger(request: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+    let response = forward();
+    let (method, prefix, left) = TRIGGER.with(Cell::get);
+    if request.method == method && request.url.starts_with(prefix) {
+        if left == 0 {
+            INTERRUPTED.with(|flag| flag.set(true));
+        }
+        TRIGGER.with(|trigger| trigger.set((method, prefix, left.saturating_sub(1))));
+    }
+    response
+}
+
+/// An interrupt during a request stops the scenario at its next step: what
+/// follows is cleanup only, and the steps not reached are listed.
+#[test]
+fn an_interrupt_stops_the_scenario_before_its_next_step() {
+    const MANAGE: &str = "https://as.example/manage";
+    // Each trigger is the last request before one of the scenario's stops.
+    for (trigger, skipped, resource) in [
+        (
+            ("OPTIONS", GRANT, 0),
+            &["grant-request", "token-issued"][..],
+            false,
+        ),
+        (
+            ("POST", GRANT, 0),
+            &["resource-access", "token-rotation", "key-rotation"][..],
+            true,
+        ),
+        (
+            ("POST", GRANT, 0),
+            &["token-rotation", "key-rotation"][..],
+            false,
+        ),
+        (
+            ("GET", RESOURCE, 0),
+            &["token-rotation", "key-rotation"][..],
+            true,
+        ),
+        (
+            ("POST", MANAGE, 0),
+            &["key-rotation", "token-revocation"][..],
+            false,
+        ),
+        (
+            ("POST", MANAGE, 1),
+            &["resource-access-before-revocation", "token-revocation"][..],
+            true,
+        ),
+        (
+            ("POST", MANAGE, 1),
+            &["token-revocation", "revoked-token-refused"][..],
+            false,
+        ),
+        (
+            ("GET", RESOURCE, 1),
+            &["token-revocation", "revoked-token-refused"][..],
+            true,
+        ),
+    ] {
+        TRIGGER.with(|cell| cell.set(trigger));
+        INTERRUPTED.with(|flag| flag.set(false));
+        let server = server(false, false);
+        let (report, sent) = run_with(
+            &server,
+            &plan("jws", "ES256", resource, true),
+            &|_| {},
+            live_tokens,
+            interrupt_on_trigger,
+        );
+        INTERRUPTED.with(|flag| flag.set(false));
+        let (method, prefix, nth) = trigger;
+        let after: Vec<&(String, String, u64)> = sent
+            .iter()
+            .filter(|(m, u, _)| m == method && u.starts_with(prefix))
+            .nth(nth as usize)
+            .map(|first| {
+                sent.iter()
+                    .skip_while(|request| !std::ptr::eq(*request, first))
+                    .skip(1)
+                    .collect()
+            })
+            .unwrap();
+        assert!(
+            after.iter().all(|(m, _, _)| m == "DELETE"),
+            "{trigger:?}: {after:?}"
+        );
+        assert_eq!(
+            outcome(&report, "operator-interrupt"),
+            Some(Outcome::Inconclusive)
+        );
+        for id in skipped {
+            assert_eq!(
+                outcome(&report, id),
+                Some(Outcome::Skipped),
+                "{trigger:?} {id}: {}",
+                report.text()
+            );
+        }
+        // Cleanup still runs once the AS holds a grant.
+        if trigger.0 != "OPTIONS" {
+            assert_ne!(outcome(&report, "grant-revocation"), None, "{trigger:?}");
+        }
+        assert_eq!(report.exit_code(), 2);
+    }
+}
+
+/// The report says what the scenario was asked to run, without its rights
+/// or its resource.
+#[test]
+fn the_report_carries_the_plan_profile() {
+    let server = server(false, false);
+    let (report, _) = run(&server, &plan("jwsd", "EdDSA", true, false), &|_| {});
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(
+        json["profile"],
+        serde_json::json!({
+            "proof": "jwsd", "alg": "EdDSA", "access": 1,
+            "resource": true, "rotate_key": false, "wait": 30
+        })
+    );
+    assert!(
+        !json.to_string().contains(RESOURCE),
+        "the resource URI stays out"
+    );
+    assert_eq!(outcome(&report, "key-rotation"), Some(Outcome::Skipped));
 }

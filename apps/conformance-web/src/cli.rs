@@ -78,10 +78,29 @@ pub struct Report {
     pub target: String,
     /// The time the command started, in seconds since the Unix epoch.
     pub started: u64,
+    /// What a scenario was asked to run, so that its results can be told
+    /// apart from another run's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Profile>,
     pub findings: Vec<Finding>,
     pub summary: Summary,
     /// What the report doesn't establish.
     pub scope: &'static str,
+}
+
+/// The plan of a scenario, without its rights or its resource URI, which
+/// may name what the operator keeps private.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Profile {
+    pub proof: &'static str,
+    pub alg: &'static str,
+    /// How many rights the grant requests.
+    pub access: usize,
+    /// Whether the scenario reads a resource.
+    pub resource: bool,
+    pub rotate_key: bool,
+    /// The longest wait for an interaction, in seconds.
+    pub wait: u64,
 }
 
 /// What a report never claims.
@@ -108,6 +127,7 @@ impl Report {
             command,
             target: target.to_owned(),
             started,
+            profile: None,
             findings,
             summary,
             scope: SCOPE,
@@ -116,8 +136,11 @@ impl Report {
 
     /// The report of the `lifecycle` scenario.
     #[must_use]
-    pub fn scenario(target: &str, started: u64, findings: Vec<Finding>) -> Self {
-        Self::new("lifecycle", target, started, findings)
+    pub fn scenario(target: &str, started: u64, profile: Profile, findings: Vec<Finding>) -> Self {
+        Self {
+            profile: Some(profile),
+            ..Self::new("lifecycle", target, started, findings)
+        }
     }
 
     /// The process exit code: 1 when a check failed, 2 when one couldn't be
@@ -138,6 +161,17 @@ impl Report {
     #[must_use]
     pub fn text(&self) -> String {
         let mut text = format!("{} {} — {}\n\n", self.command, self.target, self.scope);
+        if let Some(p) = self.profile {
+            text.push_str(&format!(
+                "profile: {} {}, {} right(s), resource {}, key rotation {}, wait {} s\n\n",
+                p.proof,
+                p.alg,
+                p.access,
+                if p.resource { "read" } else { "not read" },
+                if p.rotate_key { "asked" } else { "not asked" },
+                p.wait
+            ));
+        }
         for finding in &self.findings {
             let outcome = match finding.outcome {
                 Outcome::Passed => "PASS",

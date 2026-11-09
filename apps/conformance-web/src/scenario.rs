@@ -9,12 +9,13 @@
 //! policy declined, such as an unknown client or a missing management API,
 //! is a limit of the scenario, not a deviation from the RFC.
 
-use crate::cli::{Finding, Outcome, Report};
+use crate::cli::{Finding, Outcome, Profile, Report};
 use gnap_client::{
     sign_jose_request, sign_request, ClientError, HttpRequest, HttpTransport, Session, Step,
 };
 use gnap_crypto::jws::JwsMethod;
 use gnap_crypto::{Ed25519Signer, Es256Signer, JwkSigner, Ps256Signer, Rs256Signer};
+use gnap_registry::ErrorCode;
 use gnap_types::access::AccessItem;
 use gnap_types::token::TokenValue;
 use serde_json::json;
@@ -165,6 +166,43 @@ const fn method_name(proof: Proof) -> &'static str {
         Proof::Jose(method) => method.name(),
     }
 }
+
+const fn alg_name(alg: Alg) -> &'static str {
+    match alg {
+        Alg::Ps256 => "PS256",
+        Alg::Rs256 => "RS256",
+        Alg::Es256 => "ES256",
+        Alg::EdDsa => "EdDSA",
+    }
+}
+
+impl Plan {
+    /// What the report says the scenario was asked to run.
+    #[must_use]
+    pub fn profile(&self) -> Profile {
+        Profile {
+            proof: method_name(self.proof),
+            alg: alg_name(self.alg),
+            access: self.access.len(),
+            resource: self.resource.is_some(),
+            rotate_key: self.rotate_key,
+            wait: self.wait,
+        }
+    }
+}
+
+/// The scenario's steps, in order: a step it didn't reach is reported as
+/// skipped, so that every run lists the same checks.
+const STEPS: [&str; 8] = [
+    "grant-request",
+    "token-issued",
+    "resource-access",
+    "token-rotation",
+    "key-rotation",
+    "resource-access-before-revocation",
+    "token-revocation",
+    "revoked-token-refused",
+];
 
 const RFC: &str = "https://www.rfc-editor.org/rfc/rfc9635.html";
 const GRANT: &str = "https://www.rfc-editor.org/rfc/rfc9635.html#section-2";
@@ -373,6 +411,7 @@ pub fn lifecycle<T: HttpTransport>(
         return Report::scenario(
             &plan.endpoint,
             started,
+            plan.profile(),
             vec![finding(
                 "key-generation",
                 Outcome::Inconclusive,
@@ -419,6 +458,9 @@ pub fn lifecycle<T: HttpTransport>(
         );
         return finish(run, transport, started);
     };
+    if run.clock.interrupted() {
+        return finish(run, transport, started);
+    }
     let issued_at = clock.now();
     let result = run.session.start(&request, issued_at);
     run.continued_at = clock.now();
@@ -497,13 +539,23 @@ pub fn lifecycle<T: HttpTransport>(
                 approved_at = clock.now();
             }
             Ok(Step::Pending(_) | Step::Recoverable(_)) => {}
-            Err(ClientError::Server(_)) => {
+            Err(ClientError::Server(error)) if error.code == ErrorCode::UserDenied => {
                 run.push(
                     "interaction-outcome",
                     Outcome::NotApplicable,
                     CONTINUATION,
-                    "The AS ended the grant, as when the resource owner denies it: a result \
-                     of the scenario, not a deviation. The later steps don't apply.",
+                    "The resource owner denied the request (user_denied): a result of the \
+                     scenario, not a deviation. The later steps don't apply.",
+                );
+                return finish(run, transport, started);
+            }
+            Err(ClientError::Server(_)) => {
+                run.push(
+                    "interaction-outcome",
+                    Outcome::Inconclusive,
+                    CONTINUATION,
+                    "The AS answered the continuation with a GNAP error other than \
+                     user_denied, which doesn't show how the interaction ended.",
                 );
                 return finish(run, transport, started);
             }
@@ -536,9 +588,15 @@ pub fn lifecycle<T: HttpTransport>(
         "The approved grant carries an access token.",
     );
 
+    if run.clock.interrupted() {
+        return finish(run, transport, started);
+    }
     // §7.2 — the resource accepts the token, proven with its key.
     run.witness(transport, "resource-access", &token, &holder);
 
+    if run.clock.interrupted() {
+        return finish(run, transport, started);
+    }
     // §6.1 — the token's value changes; the rights don't.
     let rotated = run.session.rotate_token(None, clock.now());
     run.push(
@@ -554,8 +612,18 @@ pub fn lifecycle<T: HttpTransport>(
         run.hold_token(clock.now());
     }
 
+    if run.clock.interrupted() {
+        return finish(run, transport, started);
+    }
     // §6.1.1 — the token's key changes, when asked for.
-    if plan.rotate_key {
+    if !plan.rotate_key {
+        run.push(
+            "key-rotation",
+            Outcome::Skipped,
+            KEY_ROTATION,
+            "The plan didn't ask for a key change: pass --rotate-key to try it.",
+        );
+    } else {
         if announces_rotation.flatten() == Some(false) || announces_rotation.flatten().is_none() {
             run.push(
                 "key-rotation",
@@ -595,9 +663,20 @@ pub fn lifecycle<T: HttpTransport>(
             if adopted {
                 run.hold_token(clock.now());
             }
+        } else {
+            run.push(
+                "key-rotation",
+                Outcome::Inconclusive,
+                KEY_ROTATION,
+                "The scenario couldn't generate the new key: the system's random source is \
+                 unavailable.",
+            );
         }
     }
 
+    if run.clock.interrupted() {
+        return finish(run, transport, started);
+    }
     // §6.2 — the token is revoked, and the resource refuses it. The last
     // token, with the last key, has to be accepted first, or a refusal after
     // revocation could come from anything else.
@@ -606,6 +685,9 @@ pub fn lifecycle<T: HttpTransport>(
         let (value, key) = (value.clone(), Arc::clone(key));
         run.witness(transport, "resource-access-before-revocation", &value, &key)
     });
+    if run.clock.interrupted() {
+        return finish(run, transport, started);
+    }
     let revoked = run.session.revoke_token(None, clock.now());
     run.push(
         "token-revocation",
@@ -648,6 +730,16 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
             RFC,
             "The operator interrupted the scenario; its findings so far are kept.",
         );
+    }
+    for id in STEPS {
+        if run.findings.iter().all(|finding| finding.id != id) {
+            run.push(
+                id,
+                Outcome::Skipped,
+                RFC,
+                "The scenario ended before this step, as an earlier finding explains.",
+            );
+        }
     }
     // A revoked token leaves the session, so a managed token it still holds
     // is one the scenario didn't revoke.
@@ -697,7 +789,12 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
              scenario had no grant to revoke.",
         );
     }
-    Report::scenario(&run.plan.endpoint, started, run.findings)
+    Report::scenario(
+        &run.plan.endpoint,
+        started,
+        run.plan.profile(),
+        run.findings,
+    )
 }
 
 #[cfg(test)]
