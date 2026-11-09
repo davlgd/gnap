@@ -4024,3 +4024,38 @@ fn invalid_generated_values_preserve_the_existing_deadline() {
     assert_eq!(preserved.token, original.token);
     assert_eq!(preserved.management_token, original.management_token);
 }
+
+/// GNAP-9635-§7.1-M01 — "A key presented by value MUST be a public key".
+///
+/// A grant whose JWK carries a private member is refused as an invalid
+/// client before its key is used: the key it presents isn't a public key.
+#[test]
+fn a_private_key_sent_by_value_is_refused() {
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    let public = signer.public_jwk().unwrap();
+    let grant = |jwk: &serde_json::Map<String, serde_json::Value>| {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "client": {"key": {"proof": "httpsig", "jwk": jwk}},
+            "access_token": {"access": ["dolphin-metadata"]},
+            "interact": {"start": ["redirect"]}
+        }))
+        .unwrap();
+        // `OneKey` accepts every client: only the key's shape decides.
+        server().handle(&signed_grant(&signer, &body, 1_000), 1_000)
+    };
+
+    let accepted = grant(&public);
+    assert!(
+        !body_of(&accepted).contains("invalid_client"),
+        "{}",
+        body_of(&accepted)
+    );
+
+    let mut private = public;
+    private.insert("d".into(), serde_json::json!("AQAB"));
+    let refused = grant(&private);
+    assert_eq!(refused.status, 400);
+    let answer = body_of(&refused);
+    assert!(answer.contains("invalid_client"), "{answer}");
+    assert!(answer.contains("private member"), "{answer}");
+}

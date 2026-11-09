@@ -567,6 +567,41 @@ fn a_symmetric_key_is_never_sent_by_value() {
     assert_eq!(k.validate(), Ok(()));
 }
 
+/// GNAP-9635-§7.1-M01 — "A key presented by value MUST be a public key".
+///
+/// Every private member of the RSA, EC, and OKP key types is refused, even
+/// with a null value, and the member is named.
+#[test]
+fn a_private_key_is_never_sent_by_value() {
+    // RFC 7518 §6.3.2 (RSA), §6.2.2 (EC), §6.4.1 (oct), and RFC 8037 §2 (OKP),
+    // listed here rather than read from the constant under test.
+    const PRIVATE: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+    assert_eq!(gnap_types::key::PRIVATE_MEMBERS, PRIVATE);
+    for (kty, alg) in [("RSA", "PS256"), ("EC", "ES256"), ("OKP", "EdDSA")] {
+        for member in PRIVATE {
+            for value in [serde_json::json!("AAAA"), serde_json::Value::Null] {
+                let mut jwk = serde_json::json!({"kty": kty, "kid": "k", "alg": alg});
+                jwk[member] = value.clone();
+                let k: KeyObject =
+                    serde_json::from_value(serde_json::json!({"proof": "httpsig", "jwk": jwk}))
+                        .unwrap();
+                assert_eq!(
+                    k.validate(),
+                    Err(KeyError::PrivateByValue(member)),
+                    "{kty} {member} {value}"
+                );
+            }
+        }
+    }
+    // The shape check leaves algorithms to the resolver: a public key of an
+    // algorithm this library doesn't implement is still well-formed.
+    let k: KeyObject = serde_json::from_str(
+        r#"{"proof":"httpsig","jwk":{"kty":"EC","crv":"P-521","kid":"k","alg":"ES512","x":"AA","y":"AA"}}"#,
+    )
+    .unwrap();
+    assert_eq!(k.validate(), Ok(()));
+}
+
 /// GNAP-9635-§7.1-MN04 — "The `alg` parameter MUST NOT be `none`."
 ///
 /// A key that declares no algorithm proves nothing, so a proof made with it

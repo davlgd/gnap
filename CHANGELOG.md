@@ -56,6 +56,8 @@ The `Debug` output of a `Grant` counts its spent interaction references without 
 
 ### gnap-types
 
+**Breaking:** `KeyObject::validate` refuses a JWK that carries a private or symmetric member, one of the new `PRIVATE_MEMBERS`, even with a null value, as RFC 9635 §7.1 requires a key presented by value to be public. The error is the new `KeyError::PrivateByValue` variant, which a `match` on `KeyError` has to handle. A `gnap-client` session thus refuses such a key before anything leaves, and a `gnap-as` server answers `invalid_client`. A private key in the `cert` field is outside this check, which doesn't parse certificates.
+
 **Breaking:** the `object_or_reference!` macro is no longer exported, since it only declares this crate's types.
 
 **Breaking:** `HttpRequest::json_body` replaces any `Content-Type` field already set, instead of adding a second one. To build a message whose media type disagrees with its body, set `body` directly.

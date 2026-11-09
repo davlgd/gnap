@@ -11,6 +11,7 @@ use crate::proof::{ProofError, Verifier};
 use crate::ps256::Ps256Verifier;
 use crate::rs256::Rs256Verifier;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use gnap_types::key::PRIVATE_MEMBERS;
 use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 use std::collections::HashSet;
@@ -202,10 +203,6 @@ pub(crate) fn string<'a>(jwk: &'a Map<String, Value>, field: &str) -> Result<&'a
         .and_then(Value::as_str)
         .ok_or_else(|| error(&format!("{field} must be a string")))
 }
-
-/// The private and symmetric members of every key type (RFC 7518 §6), refused
-/// in a public key whatever its type, even when null.
-const PRIVATE_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
 /// The checks every public key import applies: a bounded `kid`, no private,
 /// symmetric, or certificate member, and a usage that permits verification.

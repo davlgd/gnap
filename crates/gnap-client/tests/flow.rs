@@ -1083,6 +1083,7 @@ fn a_rotated_token_starts_its_own_expiry_clock() {
 
 /// GNAP-9635-§2.3-MN09 — "The client instance MUST NOT send a symmetric key by
 /// value in the key field of the request".
+/// GNAP-9635-§7.1-M01 — "A key presented by value MUST be a public key".
 /// GNAP-9635-§2.3.2-M03 and GNAP-9635-§2.3.2-M05 — the display URIs are
 /// absolute.
 ///
@@ -1096,6 +1097,12 @@ fn what_the_client_says_about_itself_is_checked_before_it_leaves() {
                          "jwk": {"kty": "oct", "kid": "shared", "alg": "HS256", "k": "AAAA"}}},
       "access_token": {"access": ["dolphin-metadata"]}
     }"#;
+    const PRIVATE: &str = r#"{
+      "client": {"key": {"proof": "httpsig",
+                         "jwk": {"kty": "RSA", "kid": "gnap-demo", "alg": "PS256",
+                                 "n": "AQAB", "e": "AQAB", "d": "AQAB"}}},
+      "access_token": {"access": ["dolphin-metadata"]}
+    }"#;
     const RELATIVE_LOGO: &str = r#"{
       "client": {"key": {"proof": "httpsig",
                          "jwk": {"kty": "RSA", "kid": "gnap-demo", "alg": "PS256",
@@ -1105,7 +1112,11 @@ fn what_the_client_says_about_itself_is_checked_before_it_leaves() {
     }"#;
 
     let sk = signer();
-    for (body, expected) in [(SYMMETRIC, "symmetric"), (RELATIVE_LOGO, "logo_uri")] {
+    for (body, expected) in [
+        (SYMMETRIC, "symmetric"),
+        (PRIVATE, "private member"),
+        (RELATIVE_LOGO, "logo_uri"),
+    ] {
         let as_ = FakeAs::with(vec![APPROVED]);
         let mut s = Session::new(&as_, &sk, ENDPOINT);
         let request: GrantRequest = serde_json::from_str(body).unwrap();
@@ -1261,5 +1272,52 @@ fn only_a_new_interaction_response_replaces_the_finish_deadline() {
             session.accept_callback(&valid_callback(), 1_020).is_ok(),
             may_finish
         );
+    }
+}
+
+/// GNAP-9635-§7.1-M01 — "A key presented by value MUST be a public key".
+///
+/// Whichever private member a JWK carries, even null, nothing leaves the
+/// client; a public key, and a key named by reference, still do.
+#[test]
+fn a_private_key_never_leaves_the_client() {
+    const PRIVATE: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+    let sk = signer();
+    let grant = |key: serde_json::Value| -> GrantRequest {
+        serde_json::from_value(serde_json::json!({
+            "client": {"key": key},
+            "access_token": {"access": ["dolphin-metadata"]}
+        }))
+        .unwrap()
+    };
+    let public = serde_json::json!({"kty": "RSA", "kid": "gnap-demo", "alg": "PS256",
+                                    "n": "AQAB", "e": "AQAB"});
+    for member in PRIVATE {
+        for value in [serde_json::json!("AQAB"), serde_json::Value::Null] {
+            let mut jwk = public.clone();
+            jwk[member] = value.clone();
+            let as_ = FakeAs::with(vec![APPROVED]);
+            let mut s = Session::new(&as_, &sk, ENDPOINT);
+            let e = s
+                .start(
+                    &grant(serde_json::json!({"proof": "httpsig", "jwk": jwk})),
+                    1_000,
+                )
+                .unwrap_err();
+            assert!(matches!(e, ClientError::Usage(_)), "{member} {value}: {e}");
+            assert!(
+                as_.seen.borrow().is_empty(),
+                "{member} {value}: nothing left"
+            );
+        }
+    }
+    for key in [
+        serde_json::json!({"proof": "httpsig", "jwk": public}),
+        serde_json::json!("k-1"),
+    ] {
+        let as_ = FakeAs::with(vec![APPROVED]);
+        let mut s = Session::new(&as_, &sk, ENDPOINT);
+        s.start(&grant(key.clone()), 1_000).unwrap();
+        assert_eq!(as_.seen.borrow().len(), 1, "{key}");
     }
 }
