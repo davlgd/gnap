@@ -276,8 +276,9 @@ pub(crate) fn signed_view(request: &HttpRequest) -> SignedRequest<'_> {
 /// this function doesn't check the key against a JWK. A `jwsd` proof covers
 /// the body's exact bytes and leaves the body and its `Content-Type` as they
 /// are, whatever the media type. A `jws` proof attaches a JSON body: the body
-/// becomes the compact JWS, of type `application/jose`, and a `Content-Type`
-/// other than `application/json` is refused. A request without a body is
+/// becomes the compact JWS, of type `application/jose`, a declared
+/// `Content-Length` takes its length, and a `Content-Type` other than
+/// `application/json` is refused. A request without a body is
 /// proven in `Detached-JWS` either way. A proof of the same request signed
 /// in the same second is the same proof to a verifier's replay protection.
 ///
@@ -350,6 +351,14 @@ pub fn sign_jose_request(
                 .headers
                 .retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
             request = request.header("Content-Type", JOSE_MEDIA_TYPE);
+            // The compact JWS is longer than the content it replaces: a
+            // declared length follows it, or a transport would cut it.
+            let length = value.len().to_string();
+            for (name, declared) in &mut request.headers {
+                if name.eq_ignore_ascii_case("content-length") {
+                    declared.clone_from(&length);
+                }
+            }
             request.body = Some(value.into_bytes());
         }
     }

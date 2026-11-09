@@ -213,14 +213,27 @@ fn the_jose_request_helper_places_each_proof() {
     let mut binary =
         HttpRequest::new("PUT", "https://rs.example/a").header("Content-Type", "image/png");
     binary.body = Some(vec![137, 80, 78, 71]);
+    let binary = binary.header("Content-Length", "4");
     let signed = sign_jose_request(binary, JwsMethod::Jwsd, &es256, None, 1_000).unwrap();
+    assert_eq!(
+        header(&signed, "content-length"),
+        ["4"],
+        "a detached proof keeps it"
+    );
     assert_eq!(signed.body.as_deref(), Some(&[137, 80, 78, 71][..]));
     assert_eq!(header(&signed, "content-type"), ["image/png"]);
     assert_eq!(header(&signed, "detached-jws").len(), 1);
 
-    let json = HttpRequest::new("POST", "https://rs.example/a").json_body(br#"{"a":1}"#.to_vec());
+    let json = HttpRequest::new("POST", "https://rs.example/a")
+        .json_body(br#"{"a":1}"#.to_vec())
+        .header("Content-Length", "7");
     let signed = sign_jose_request(json, JwsMethod::Jws, &es256, None, 1_000).unwrap();
     assert_eq!(header(&signed, "content-type"), ["application/jose"]);
+    assert_eq!(
+        header(&signed, "content-length"),
+        [signed.body.as_ref().unwrap().len().to_string()],
+        "the declared length follows the attached JWS"
+    );
     assert_eq!(header(&signed, "detached-jws"), Vec::<String>::new());
     let compact = String::from_utf8(signed.body.unwrap()).unwrap();
     assert_eq!(compact.split('.').count(), 3, "a compact JWS");
