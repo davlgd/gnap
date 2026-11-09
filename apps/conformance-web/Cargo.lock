@@ -584,6 +584,7 @@ dependencies = [
  "httpsig",
  "p256",
  "rsa",
+ "serde",
  "serde_json",
  "sfv 0.16.0",
  "sha2",

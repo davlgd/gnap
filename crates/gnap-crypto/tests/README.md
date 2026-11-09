@@ -12,6 +12,17 @@ in SEC1 and SubjectPublicKeyInfo formats. `rfc9421-b14.pkcs8.pem` and
 [Appendix B.1.4](https://www.rfc-editor.org/rfc/rfc9421.html#appendix-B.1.4),
 in PKCS#8 and SubjectPublicKeyInfo formats, as the RFC publishes them.
 
+`rfc9635-gnap-rsa.jwk.json` is the public RSA key `gnap-rsa` of the examples
+in [RFC 9635, Section 7.3.3](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.3).
+`rfc9635-7.3.3.detached-jws.txt` is the value of the `Detached-JWS` field in
+that section's example, and `rfc9635-7.3.4.attached-jws.txt` the content of the
+example in [Section 7.3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.4),
+with the line wrapping of RFC 8792 removed. Both sign with `RS256` under
+`gnap-rsa`, and both protected headers carry `"typ":"gnap-binding+jwsd"`,
+which matches neither the `gnap-binding-jwsd` nor the `gnap-binding-jws` that
+the sections require. The content printed in Section 7.3.3 doesn't hash to the
+signed payload either, so the tests use them as signatures, not as requests.
+
 These private keys are deliberately public. They are test material, not deployment
 credentials, and must never protect real data. The HTTP delegation application
 generates its own key at startup and does not load these fixtures.

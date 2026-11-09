@@ -12,6 +12,7 @@ pub mod es256;
 pub mod hash;
 pub mod httpsig;
 pub mod jwk;
+pub mod jws;
 pub mod proof;
 pub mod ps256;
 pub mod rotation;
@@ -32,6 +33,10 @@ pub use hash::{
 };
 pub use httpsig::{parse_signature_params, parse_signatures, LabelledSignature, ReceivedParams};
 pub use jwk::{PublicKey, HTTPSIG_ALGORITHMS, JWS_ALGORITHMS};
+pub use jws::{
+    sign_jws, sign_jws_rotation, verify_jws_request, verify_jws_rotation, AcceptedJws, JwsKey,
+    JwsMethod, JwsParams, JwsProof, JwsReplayMemory, ReplayCache, ReplayId,
+};
 pub use proof::{JwkSigner, ProofError, Signer, Verifier};
 pub use ps256::{Ps256Signer, Ps256Verifier};
 pub use rotation::{verify_key_rotation, AcceptedRotation, RotationNonceMemory, RotationProof};
