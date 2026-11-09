@@ -544,9 +544,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     /// The proof method is the key's, never one the request suggests: `httpsig`
     /// for a key without a value on file, such as a client named by reference,
     /// and `jws` or `jwsd` after [`Self::with_jose_proofs`], for a JWK sent by
-    /// value. A JOSE proof is verified with that JWK itself, whose thumbprint
-    /// scopes its replay protection: the resolver's verifier says that the
-    /// client is known, and its algorithm has to agree with the JWK.
+    /// value. A JOSE proof has to verify under both the key the resolver
+    /// approved and that JWK, whose thumbprint scopes its replay protection:
+    /// neither a JWK the resolver didn't approve nor a resolver's key the
+    /// client didn't present can stand in for the other.
     fn prove<'r>(
         &self,
         request: &'r HttpRequest,
@@ -590,15 +591,23 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 "the key resolver verifies another algorithm than the JWK declares",
             ));
         }
+        let both = BothKeys {
+            presented: &public,
+            resolved: verifier,
+        };
+        let key = JwsKey {
+            verifier: &both,
+            identity: public.thumbprint().into(),
+            expectations: Expectations {
+                now,
+                max_clock_skew: MAX_CLOCK_SKEW,
+                key_id: None,
+            },
+        };
         let reserve = |ids: &[ReplayId], at: u64| reserve(&self.storage, ids, at);
-        verify_jws_request(
-            method,
-            &signed_request(request),
-            &JwsKey::for_public_key(&public, now, MAX_CLOCK_SKEW),
-            &reserve,
-        )
-        .map(|accepted| Cow::Owned(accepted.content))
-        .map_err(|e| error(ErrorCode::InvalidClient, &e.to_string()))
+        verify_jws_request(method, &signed_request(request), &key, &reserve)
+            .map(|accepted| Cow::Owned(accepted.content))
+            .map_err(|e| error(ErrorCode::InvalidClient, &e.to_string()))
     }
 
     /// Verifies the request's signature (§7.3.1), with this server's policy.
@@ -627,6 +636,28 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
     fn parse<D: serde::de::DeserializeOwned>(content: &[u8]) -> Result<D, HttpResponse> {
         serde_json::from_slice(content)
             .map_err(|e| error(ErrorCode::InvalidRequest, &e.to_string()))
+    }
+}
+
+/// A JOSE proof's key: the client's JWK and the resolver's key both have to
+/// verify the signature. The JWK names the `kid` and the algorithm.
+struct BothKeys<'a> {
+    presented: &'a PublicKey,
+    resolved: &'a dyn Verifier,
+}
+
+impl Verifier for BothKeys<'_> {
+    fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), gnap_crypto::ProofError> {
+        self.presented.verify(data, signature)?;
+        self.resolved.verify(data, signature)
+    }
+
+    fn algorithm(&self) -> &'static str {
+        self.presented.algorithm()
+    }
+
+    fn expected_key_id(&self) -> Option<&str> {
+        self.presented.expected_key_id()
     }
 }
 

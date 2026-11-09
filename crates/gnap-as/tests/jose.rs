@@ -389,38 +389,45 @@ fn an_unproven_request_reaches_no_policy_nonce_or_store() {
     }
 }
 
-/// The proof is verified with the presented JWK, not with the verifier the
-/// resolver returns: a resolver that answers with another key of the same
-/// algorithm and `kid` neither lets that key sign for the JWK nor stops the
-/// JWK's holder.
+/// The proof has to verify under both the presented JWK and the key the
+/// resolver approves: a resolver that answers with another key of the same
+/// algorithm and `kid` lets neither that key sign for the JWK, nor a JWK it
+/// didn't approve sign in the place of the key it trusts.
 #[test]
-fn the_proof_is_verified_with_the_presented_jwk() {
-    struct Impostor;
-    impl KeyResolver for Impostor {
+fn the_proof_needs_the_presented_jwk_and_the_approved_key() {
+    struct Trusted;
+    impl KeyResolver for Trusted {
         fn resolve(&self, _: &Client) -> Option<Box<dyn Verifier>> {
-            Some(Box::new(impostor().verifier()))
+            Some(Box::new(trusted().verifier()))
         }
     }
-    fn impostor() -> &'static Ed25519Signer {
+    fn trusted() -> &'static Ed25519Signer {
         static KEY: OnceLock<Ed25519Signer> = OnceLock::new();
         KEY.get_or_init(|| Ed25519Signer::generate("ed25519-key").unwrap())
     }
-    let signer = &signers()[2];
     let server = AuthorizationServer::new(
         Approve::default(),
-        Impostor,
+        Trusted,
         MemoryStorage::new(),
         Counted::default(),
         endpoints(),
     )
     .with_jose_proofs(true);
-    let body = grant_body(signer.as_ref(), &json!("jwsd"));
-    let response = server.handle(&grant_call(&body).signed(JwsMethod::Jwsd, impostor()), NOW);
-    assert_eq!(error_code(&response), "invalid_client");
-    granted(&server.handle(
-        &grant_call(&body).signed(JwsMethod::Jwsd, signer.as_ref()),
-        NOW,
-    ));
+    // An attacker's key, presented under the trusted key's algorithm and `kid`.
+    let attacker = &signers()[2];
+    let body = grant_body(attacker.as_ref(), &json!("jwsd"));
+    for signer in [attacker.as_ref() as &dyn JwkSigner, trusted()] {
+        let response = server.handle(&grant_call(&body).signed(JwsMethod::Jwsd, signer), NOW);
+        assert_eq!(
+            error_code(&response),
+            "invalid_client",
+            "{}",
+            signer.thumbprint()
+        );
+    }
+    // The trusted key, presented and signing, is accepted.
+    let body = grant_body(trusted(), &json!("jwsd"));
+    granted(&server.handle(&grant_call(&body).signed(JwsMethod::Jwsd, trusted()), NOW));
 }
 
 /// What the profile refuses: proof parameters, a client named by reference
