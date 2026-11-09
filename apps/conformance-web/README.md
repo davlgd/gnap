@@ -41,6 +41,20 @@ Core kinds: `grant_request`, `grant_response`, `continue_request`. The `as_disco
 
 Reports contain stable per-check identifiers, `pass`/`fail`/`not_tested`, scope, normative RFC links, remediation text, source (`import` or `live`), harness version, optional `CC_COMMIT_ID` revision, and UTC Unix observation time. A network failure is inconclusive and returns HTTP 502, not a conformance failure. HTTP 200 from the analyzer means analysis completed, **not** that checks passed. Downloadable reports contain neither the submitted body nor raw server replies.
 
+## Check a server from the command line
+
+`gnap-conformance` runs selected checks against an authorization server you name, and prints a report. It's built with the workbench:
+
+```bash
+cargo build --manifest-path apps/conformance-web/Cargo.toml --locked
+apps/conformance-web/target/debug/gnap-conformance discover https://as.example/gnap
+apps/conformance-web/target/debug/gnap-conformance probe https://as.example/gnap --json
+```
+
+`discover` sends `OPTIONS` to the grant endpoint and checks its discovery document ([RFC 9635 §9](https://www.rfc-editor.org/rfc/rfc9635.html#section-9)), without fetching any link it announces. `probe` sends the workbench's malformed initial grant request, which carries no client or proof, and checks the refusal ([§3.6](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.6)). Each command sends only that request, through the bounded transport of the workbench: no proxy, redirect, or retry, public addresses pinned, and bounded time and sizes.
+
+The endpoint is HTTPS on port 443 with a public DNS name, without credentials, query, or fragment; `--allow-loopback-http` admits a local `http://localhost`, `127.0.0.1`, or `[::1]` server. Each check is `passed`, `failed`, `inconclusive`, `skipped`, or `not_applicable`, with the clause it relies on. `--json` prints the report in the `gnap-conformance/1` schema. The exit code is 0 when every selected check that applied passed, 1 when one failed, and 2 for a usage error or when no check could be decided. Passing selected checks isn't conformance or certification.
+
 ## Tested scope and its limits
 
 The three core message kinds reuse `gnap-types` deserialization and explicitly selected `validate()` methods, plus `gnap-crypto` Content-Digest verification:
