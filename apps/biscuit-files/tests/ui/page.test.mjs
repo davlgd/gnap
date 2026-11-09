@@ -154,7 +154,7 @@ test('a value the page does not know shows as unknown, prototype names included'
   assert.equal(lab.nodes.get('#retired').textContent, 'Unknown');
   assert.equal(lab.nodes.get('#previous').textContent, 'Unknown');
   const blocks = lab.nodes.get('#restrictions').textContent;
-  assert.match(blocks, /^an unknown file until /);
+  assert.match(blocks, /^3 of 8 at most: an unknown file until /);
   assert.match(blocks, /the notes until an unknown time/);
   assert.equal(blocks.split('; then ').length, 3);
 });
@@ -166,7 +166,7 @@ test('the blocks show in order, eight at most, and the rest is counted', async (
   await settle();
   const blocks = lab.nodes.get('#restrictions').textContent;
   assert.equal(blocks.split('; then ').length, 8);
-  assert.ok(blocks.startsWith('the notes until '));
+  assert.ok(blocks.startsWith('10 of 8 at most: the notes until '));
   assert.ok(blocks.endsWith('; and 2 more'));
 });
 
@@ -228,5 +228,12 @@ test('the key line counts rotations and attempts in words', async () => {
     await settle();
     assert.equal(lab.nodes.get('#rotations').textContent, line);
   }
+});
+
+test('the panel says how many blocks a token may still take', async () => {
+  const lab = page();
+  lab.reply(0, 200, held());
+  await settle();
+  assert.equal(lab.nodes.get('#restrictions').textContent, 'None yet, of 8 at most');
 });
 

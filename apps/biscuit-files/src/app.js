@@ -11,6 +11,7 @@ const NEXT = {
   none: 'No token to present',
 };
 const FILES = { notes: 'the notes', draft: 'the draft' };
+// The client's own bound on the restrictive blocks of a token.
 const MAX_BLOCKS_SHOWN = 8;
 const MAX_EVENTS = 20;
 
@@ -49,7 +50,7 @@ const rotations = n => (n === 0 ? 'Never rotated' : n === 1 ? 'Rotated once' : `
 
 function blocks(list) {
   if (!Array.isArray(list)) return 'Unknown';
-  if (list.length === 0) return 'None';
+  if (list.length === 0) return `None yet, of ${MAX_BLOCKS_SHOWN} at most`;
   const shown = list.slice(0, MAX_BLOCKS_SHOWN).map(block => {
     const file = block !== null && typeof block === 'object' && Object.hasOwn(FILES, block.file) ? FILES[block.file] : 'an unknown file';
     const until = block !== null && typeof block === 'object' && count(block.until)
@@ -57,7 +58,7 @@ function blocks(list) {
     return `${file} until ${until}`;
   });
   const more = list.length > MAX_BLOCKS_SHOWN ? `; and ${list.length - MAX_BLOCKS_SHOWN} more` : '';
-  return `${shown.join('; then ')}${more}`;
+  return `${list.length} of ${MAX_BLOCKS_SHOWN} at most: ${shown.join('; then ')}${more}`;
 }
 
 // Nothing is known any more: the client may have acted before it failed.
