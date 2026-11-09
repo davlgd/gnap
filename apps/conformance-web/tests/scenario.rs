@@ -576,6 +576,15 @@ fn cleanup_revokes_a_token_the_scenario_still_holds() {
         deletes[2].starts_with("https://as.example/continue"),
         "{deletes:?}"
     );
+    // Cleanup waits before its first request, so that the wait doesn't
+    // spend the network budget its first request starts.
+    let cleanup: Vec<u64> = sent
+        .iter()
+        .filter(|(method, _, _)| method == "DELETE")
+        .skip(1)
+        .map(|(_, _, at)| *at)
+        .collect();
+    assert_eq!(cleanup[0], cleanup[1], "{sent:?}");
 }
 
 /// Without a continuation API, which RFC 9635 allows, there is no grant to

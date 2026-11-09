@@ -60,7 +60,9 @@ impl Limits {
     };
 
     /// Cleanup after a command-line scenario: a reserved budget that the
-    /// scenario's own calls never spend.
+    /// scenario's own calls never spend, for a token's revocation and the
+    /// grant's. The scenario's wait before it, `scenario::CLEANUP_WAIT`, is
+    /// not part of it.
     pub const CLEANUP: Self = Self {
         calls: 2,
         budget: Duration::from_secs(10),

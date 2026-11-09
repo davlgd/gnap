@@ -27,7 +27,8 @@ pub const MAX_ACCESS: usize = 8;
 pub const MAX_ACCESS_BYTES: usize = 512;
 /// Longest wait for an operator's interaction, in seconds.
 pub const MAX_WAIT: u64 = 600;
-/// Longest wait before the cleanup's continuation call, in seconds.
+/// Longest wait before cleanup's first request, in seconds: cleanup takes
+/// at most this wait, then the network budget of `Limits::CLEANUP`.
 pub const CLEANUP_WAIT: u64 = 10;
 
 /// The proof method the scenario's key declares.
@@ -741,6 +742,21 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
             );
         }
     }
+    // §5 — the continuation API is called again only after its wait. Cleanup
+    // waits it out first, for at most CLEANUP_WAIT, so that the wait never
+    // spends the network budget, which starts at cleanup's first request.
+    if let Some(wait) = run
+        .session
+        .continuation()
+        .map(gnap_types::message::Continue::effective_wait)
+    {
+        let now = run.clock.now();
+        run.clock.pause(
+            run.continued_at
+                .saturating_add(wait)
+                .min(now.saturating_add(CLEANUP_WAIT)),
+        );
+    }
     // A revoked token leaves the session, so a managed token it still holds
     // is one the scenario didn't revoke.
     let now = run.clock.now();
@@ -759,19 +775,7 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
              within the budget reserved for cleanup.",
         );
     }
-    if let Some(wait) = run
-        .session
-        .continuation()
-        .map(gnap_types::message::Continue::effective_wait)
-    {
-        // §5 — the continuation API is called again only after its wait,
-        // which cleanup waits out for at most its own budget.
-        let now = run.clock.now();
-        run.clock.pause(
-            run.continued_at
-                .saturating_add(wait)
-                .min(now.saturating_add(CLEANUP_WAIT)),
-        );
+    if run.session.continuation().is_some() {
         let revoked = run.session.revoke_grant(run.clock.now());
         run.push(
             "grant-revocation",
