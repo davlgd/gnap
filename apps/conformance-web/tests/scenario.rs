@@ -125,10 +125,10 @@ struct InMemory<'a> {
     resource: fn(&str, bool) -> Option<u16>,
     /// Stands between the scenario and the AS, to stage a fault: it may
     /// forward the request, change the answer, or answer in its place.
-    tamper: Tamper,
+    tamper: Tamper<'a>,
 }
 
-type Tamper = fn(&HttpRequest, &dyn Fn() -> HttpResponse) -> HttpResponse;
+type Tamper<'a> = &'a dyn Fn(&HttpRequest, &dyn Fn() -> HttpResponse) -> HttpResponse;
 
 fn untouched(_: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
     forward()
@@ -195,7 +195,7 @@ fn run(
     gnap_conformance_web::cli::Report,
     Vec<(String, String, u64)>,
 ) {
-    run_with(server, plan, notify, live_tokens, untouched)
+    run_with(server, plan, notify, live_tokens, &untouched)
 }
 
 fn run_with(
@@ -203,7 +203,7 @@ fn run_with(
     plan: &Plan,
     notify: &dyn Fn(&str),
     resource: fn(&str, bool) -> Option<u16>,
-    tamper: Tamper,
+    tamper: Tamper<'_>,
 ) -> (
     gnap_conformance_web::cli::Report,
     Vec<(String, String, u64)>,
@@ -224,7 +224,7 @@ fn run_on(
     plan: &Plan,
     notify: &dyn Fn(&str),
     resource: fn(&str, bool) -> Option<u16>,
-    tamper: Tamper,
+    tamper: Tamper<'_>,
 ) -> (
     gnap_conformance_web::cli::Report,
     Vec<(String, String, u64)>,
@@ -508,7 +508,7 @@ fn an_unreachable_resource_is_inconclusive() {
         &plan("jwsd", "ES256", true, false),
         &|_| {},
         |_, _| None,
-        untouched,
+        &untouched,
     );
     assert_eq!(
         outcome(&report, "resource-access"),
@@ -535,7 +535,7 @@ fn a_refusal_after_revocation_needs_an_acceptance_before() {
         &plan("httpsig", "ES256", true, false),
         &|_| {},
         first_only,
-        untouched,
+        &untouched,
     );
     assert_eq!(outcome(&report, "resource-access"), Some(Outcome::Passed));
     assert_eq!(
@@ -579,7 +579,7 @@ fn cleanup_revokes_a_token_the_scenario_still_holds() {
         &plan("httpsig", "ES256", false, false),
         &|_| {},
         live_tokens,
-        refuse_first_token_delete,
+        &refuse_first_token_delete,
     );
     assert_ne!(outcome(&report, "token-revocation"), Some(Outcome::Passed));
     assert_eq!(
@@ -634,7 +634,7 @@ fn a_grant_without_continuation_needs_no_revocation() {
         &plan("jwsd", "EdDSA", false, false),
         &|_| {},
         live_tokens,
-        drop_continuation,
+        &drop_continuation,
     );
     assert_eq!(
         outcome(&report, "grant-revocation"),
@@ -673,7 +673,7 @@ fn a_continuation_error_other_than_a_denial_is_inconclusive() {
         &plan("httpsig", "ES256", false, false),
         &|_| {},
         live_tokens,
-        invalid_client,
+        &invalid_client,
     );
     assert_eq!(
         outcome(&report, "interaction-outcome"),
@@ -758,7 +758,7 @@ fn an_interrupt_stops_the_scenario_before_its_next_step() {
             &plan("jws", "ES256", resource, true),
             &|_| {},
             live_tokens,
-            interrupt_on_trigger,
+            &interrupt_on_trigger,
         );
         INTERRUPTED.with(|flag| flag.set(false));
         let (method, prefix, nth) = trigger;
@@ -860,7 +860,7 @@ fn a_refused_revocation_is_inconclusive() {
         &plan("jwsd", "ES256", false, false),
         &|_| {},
         live_tokens,
-        refuse,
+        &refuse,
     );
     assert_eq!(
         outcome(&report, "token-revocation"),
@@ -888,7 +888,7 @@ fn an_expired_token_is_never_presented() {
         &plan("httpsig", "EdDSA", true, false),
         &|_| {},
         live_tokens,
-        one_second,
+        &one_second,
     );
     assert_eq!(
         outcome(&report, "resource-access"),
@@ -924,7 +924,7 @@ fn an_approved_but_expired_token_is_inconclusive() {
         &plan("httpsig", "ES256", false, false),
         &|_| {},
         live_tokens,
-        expired,
+        &expired,
     );
     assert_eq!(
         outcome(&report, "token-issued"),
@@ -975,7 +975,7 @@ fn a_recoverable_error_while_polling_is_inconclusive() {
         &plan("httpsig", "ES256", false, false),
         &notify,
         live_tokens,
-        too_fast_once,
+        &too_fast_once,
     );
     assert_eq!(
         outcome(&report, "continuation-error"),
@@ -1048,7 +1048,7 @@ fn a_retried_revocation_is_signed_at_a_later_second() {
         &plan("httpsig", "ES256", false, false),
         &|_| {},
         live_tokens,
-        refuse_once_without_continuation,
+        &refuse_once_without_continuation,
     );
     assert_eq!(
         outcome(&report, "token-cleanup"),
@@ -1131,7 +1131,7 @@ fn the_interaction_wait_ignores_a_wall_clock_set_back() {
         &plan("httpsig", "ES256", false, false),
         &|_| {},
         live_tokens,
-        untouched,
+        &untouched,
     );
     assert_eq!(
         outcome(&report, "interaction-outcome"),
@@ -1157,7 +1157,7 @@ fn the_interaction_wait_ignores_a_wall_clock_jump() {
         &plan("httpsig", "ES256", false, false),
         &|_| {},
         live_tokens,
-        untouched,
+        &untouched,
     );
     assert_eq!(
         outcome(&report, "interaction-outcome"),
@@ -1187,7 +1187,7 @@ fn an_expired_rotated_token_leaves_the_last_reads_inconclusive() {
         &plan("jwsd", "ES256", true, false),
         &|_| {},
         live_tokens,
-        expired_rotation,
+        &expired_rotation,
     );
     for id in ["resource-access-before-revocation", "revoked-token-refused"] {
         assert_eq!(
@@ -1204,24 +1204,29 @@ fn an_expired_rotated_token_leaves_the_last_reads_inconclusive() {
 /// the grant request itself is inconclusive, even when a poll approves.
 #[test]
 fn a_recoverable_first_answer_is_inconclusive() {
-    fn too_fast_first(request: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+    let server = server(true, false);
+    // The first answer becomes a GNAP error with its continuation, and the
+    // operator approves meanwhile, so that a poll finds the grant approved.
+    let too_fast_first = |request: &HttpRequest, forward: &dyn Fn() -> HttpResponse| {
         let response = forward();
         if request.method == "POST" && request.url == GRANT {
             let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+            let link = body["interact"]["redirect"].as_str().unwrap();
+            let handle = link.rsplit('/').next().unwrap();
+            server.complete_interaction(handle, 1_700_000_000).unwrap();
             return json_answer(
                 400,
                 &serde_json::json!({"error": "too_fast", "continue": body["continue"]}),
             );
         }
         response
-    }
-    let server = server(false, false);
-    let (report, _) = run_with(
+    };
+    let (report, sent) = run_with(
         &server,
         &plan("httpsig", "ES256", false, false),
         &|_| {},
         live_tokens,
-        too_fast_first,
+        &too_fast_first,
     );
     assert_eq!(
         outcome(&report, "grant-request"),
@@ -1229,5 +1234,10 @@ fn a_recoverable_first_answer_is_inconclusive() {
         "{}",
         report.text()
     );
+    // The scenario polled the continuation and went on with the token.
+    assert_eq!(outcome(&report, "token-issued"), Some(Outcome::Passed));
+    assert!(sent
+        .iter()
+        .any(|(m, url, _)| m == "POST" && url.starts_with("https://as.example/continue")));
     assert_eq!(report.exit_code(), 2);
 }
