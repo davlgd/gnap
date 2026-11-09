@@ -598,10 +598,12 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         let key = JwsKey {
             verifier: &both,
             identity: public.thumbprint().into(),
+            // The JWK's `kid` comes through `BothKeys`; the resolver's, if it
+            // names one, binds the proof as it binds an `httpsig` signature.
             expectations: Expectations {
                 now,
                 max_clock_skew: MAX_CLOCK_SKEW,
-                key_id: None,
+                key_id: verifier.expected_key_id(),
             },
         };
         let reserve = |ids: &[ReplayId], at: u64| reserve(&self.storage, ids, at);

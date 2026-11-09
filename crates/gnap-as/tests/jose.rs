@@ -428,6 +428,40 @@ fn the_proof_needs_the_presented_jwk_and_the_approved_key() {
     // The trusted key, presented and signing, is accepted.
     let body = grant_body(trusted(), &json!("jwsd"));
     granted(&server.handle(&grant_call(&body).signed(JwsMethod::Jwsd, trusted()), NOW));
+
+    // The trusted key under another `kid` is refused: the resolver's key names
+    // the `kid` the proof has to carry, as it does for `httpsig`.
+    let alias = Alias(trusted());
+    for method in [JwsMethod::Jws, JwsMethod::Jwsd] {
+        let body = grant_body(&alias, &method_name(method));
+        let response = server.handle(&grant_call(&body).signed(method, &alias), NOW + 1);
+        assert_eq!(error_code(&response), "invalid_client", "{}", method.name());
+        assert!(String::from_utf8_lossy(&response.body).contains("kid"));
+    }
+}
+
+/// A key presented under a `kid` of its own.
+struct Alias<'a>(&'a Ed25519Signer);
+impl gnap_crypto::Signer for Alias<'_> {
+    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, gnap_crypto::ProofError> {
+        self.0.sign(data)
+    }
+    fn key_id(&self) -> &'static str {
+        "alias-kid"
+    }
+    fn algorithm(&self) -> &'static str {
+        self.0.algorithm()
+    }
+}
+impl JwkSigner for Alias<'_> {
+    fn public_jwk(&self) -> Result<serde_json::Map<String, Value>, gnap_crypto::ProofError> {
+        let mut jwk = self.0.public_jwk()?;
+        jwk.insert("kid".into(), json!("alias-kid"));
+        Ok(jwk)
+    }
+    fn thumbprint(&self) -> String {
+        self.0.thumbprint()
+    }
 }
 
 /// What the profile refuses: proof parameters, a client named by reference
