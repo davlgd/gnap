@@ -16,6 +16,8 @@ This file lists the changes to the published crates that affect their users, cra
 
 A session proves its requests with the method its `client.key` declares: `httpsig` as before, or `jws` and `jwsd`, for which the proof takes no parameters, the JWK has to import as a public key with the signer's `alg` and `kid`, and the first request's proof has to verify under it before it leaves. A key named by reference keeps `httpsig`. `rotate_key` changes such a key with nested JOSE proofs, which it checks under the current and the new JWK before sending, and `sign_request` keeps proving with `httpsig`.
 
+`sign_jose_request` signs a request with a `jws` or `jwsd` proof, as `sign_request` does with `httpsig`: a `jwsd` proof keeps the body and its type, and a `jws` one attaches a JSON body.
+
 `HttpTransport` is implemented for `&T`, `Box<T>`, and `Arc<T>`. `Session::verify_subject` takes a signer of any supported algorithm, requiring `S: JwkSigner` instead of `Borrow<Ps256Signer>`, and a key change accepts a public PS256, ES256, or Ed25519 JWK.
 
 ### gnap-as
@@ -28,7 +30,7 @@ A session proves its requests with the method its `client.key` declares: `httpsi
 
 **Breaking:** a grant request with an unknown user reference is first authenticated: one whose proof fails gets `invalid_client`, and `Policy::recognises_user` runs only after the proof, as no policy callback runs before it.
 
-`AuthorizationServer::with_jose_proofs` accepts the `jws` and `jwsd` proofs for grant, continuation, and token management requests, for a client key sent by value as a JWK, and announces them in discovery. Such a proof has to verify under both the key the resolver approves and the JWK, whose thumbprint scopes its replay protection, and the server reserves it in a store implementing the new `JwsReplayStore` trait, which `MemoryStorage` does, holding at most `MAX_JWS_PROOFS` proofs. A key change of a token bound to a JOSE key, after `with_key_rotation`, carries the nested proofs of RFC 9635 §7.3.3.1 and §7.3.4.1: the previous key's and the new key's both verify, and are reserved together, and a proof cut from the request fails rather than rotating the value. `KeyResolver::resolve_token_key` accepts by default a parameterless `jws` or `jwsd` key that `PublicKey::for_jws` imports. `handle_grant_with_derivation` serves an attached JWS within `MAX_GRANT_BODY_BYTES` as an ordinary grant request.
+`AuthorizationServer::with_jose_proofs` accepts the `jws` and `jwsd` proofs for grant, continuation, and token management requests, for a client key sent by value as a JWK, and announces them in discovery. Such a proof has to verify under both the key the resolver approves and the JWK, whose thumbprint scopes its replay protection, and the server reserves it in a store implementing the new `JwsReplayStore` trait, which `MemoryStorage` does, holding at most `MAX_JWS_PROOFS` proofs. A key change of a token bound to a JOSE key, after `with_key_rotation`, carries the nested proofs of RFC 9635 §7.3.3.1 and §7.3.4.1: the previous key's and the new key's both verify, and are reserved together, and a proof cut from the request fails rather than rotating the value. `KeyResolver::resolve_token_key` accepts by default a parameterless `jws` or `jwsd` key that `PublicKey::for_jws` imports. Introspection reports a token bound to a JOSE key as active, while a resource server still proves itself with `httpsig`. `handle_grant_with_derivation` serves an attached JWS within `MAX_GRANT_BODY_BYTES` as an ordinary grant request.
 
 `OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonces, interaction handle and references, and user code. `MAX_GRANT_BODY_BYTES` names the body bound of the derivation and key-rotation handlers; the HTTP adapter still bounds ordinary grant requests. The default token-key resolution, the resource-server registry, the derivation handler, and a key change accept public ES256 and Ed25519 JWKs as well as PS256 ones. A key change checks these built-in algorithms early, and leaves a JWK of any other algorithm to the configured resolver.
 
@@ -62,6 +64,8 @@ The `Debug` output of a `Grant` counts its spent interaction references without 
 
 ### gnap-rs, gnap-biscuit, and gnap-subject
 
-`gnap-rs` accepts a token bound to a public ES256 or Ed25519 key as well as a PS256 one. The client key of the Biscuit file profile and the signature of an identity assertion remain PS256.
+**Breaking:** `gnap-rs`'s `Authorizer::authorize` returns an `Authorized`, which carries the content the proof authenticates, instead of `()`: the body for `httpsig` and `jwsd`, and the JWS payload for `jws`. Process that content, and `.map(drop)` where only the decision matters.
+
+`gnap-rs` accepts a token bound to a public ES256 or Ed25519 key as well as a PS256 one, and with `Authorizer::with_jose_proofs`, a token bound to a `jws` or `jwsd` key. The proof method is the one of the introspected key; a request carrying another method's envelope is refused, and the introspection request names `httpsig` only for a request that carries an HTTP signature. The client key of the Biscuit file profile and the signature of an identity assertion remain PS256.
 
 The three crates name their security bounds as constants, such as `MAX_RESPONSE_BYTES` and `MAX_CLOCK_SKEW` in `gnap-rs`, and `MAX_CLOCK_SKEW_SECONDS` and `MAX_SUBJECT_BYTES` in `gnap-subject`.
