@@ -3679,7 +3679,7 @@ fn an_unknown_user_reference_in_a_modification_is_refused() {
 fn a_request_for_no_token_is_approved_without_one() {
     /// Approves with the given rights, releasing a subject when asked to, and
     /// the longest token lifetime there is: no token, no expiry to compute.
-    struct ReleaseSubject(Vec<AccessItem>, bool);
+    struct ReleaseSubject(Vec<AccessItem>, bool, bool);
     impl Policy for ReleaseSubject {
         fn evaluate(&self, _request: &GrantRequest) -> Decision {
             Decision::Approve {
@@ -3698,10 +3698,13 @@ fn a_request_for_no_token_is_approved_without_one() {
         fn token_lifetime(&self, _request: &GrantRequest) -> Option<std::num::NonZeroU64> {
             std::num::NonZeroU64::new(u64::MAX)
         }
+        fn keep_grant_open(&self, _request: &GrantRequest) -> bool {
+            self.2
+        }
     }
-    let served = |access: Vec<AccessItem>, subject: bool| {
+    let served = |access: Vec<AccessItem>, subject: bool, keep_open: bool| {
         let as_ = AuthorizationServer::new(
-            ReleaseSubject(access, subject),
+            ReleaseSubject(access, subject, keep_open),
             OneKey(RSA_SPKI),
             MemoryStorage::new(),
             Counted(Cell::new(0)),
@@ -3717,19 +3720,26 @@ fn a_request_for_no_token_is_approved_without_one() {
         as_.handle(&signed_grant(&signer, body, 1_000), 1_000)
     };
 
-    let response = served(Vec::new(), true);
-    assert_eq!(response.status, 200, "{}", body_of(&response));
-    let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
-    assert!(body.get("access_token").is_none(), "{body}");
-    assert_eq!(body["subject"]["sub_ids"][0]["format"], "opaque");
+    for keep_open in [false, true] {
+        let response = served(Vec::new(), true, keep_open);
+        assert_eq!(response.status, 200, "{}", body_of(&response));
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body.get("access_token").is_none(), "{body}");
+        assert_eq!(body["subject"]["sub_ids"][0]["format"], "opaque");
+        assert_eq!(body.get("continue").is_some(), keep_open, "{body}");
+    }
 
-    let response = served(vec![AccessItem::Reference("dolphin-metadata".into())], true);
+    let response = served(
+        vec![AccessItem::Reference("dolphin-metadata".into())],
+        true,
+        false,
+    );
     assert_eq!(response.status, 500, "{}", body_of(&response));
     assert!(body_of(&response).contains("asks for no token"));
 
     // An approval that releases neither a token nor a subject would read as a
     // pending grant, so it's refused as a policy fault.
-    let response = served(Vec::new(), false);
+    let response = served(Vec::new(), false, true);
     assert_eq!(response.status, 500, "{}", body_of(&response));
     assert!(body_of(&response).contains("issue a token or release subject"));
 }
