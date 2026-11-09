@@ -97,7 +97,8 @@
 //! from the configured grant endpoint, advertises `httpsig`, and omits token
 //! formats: opaque references have no registered GNAP token-format name.
 //!
-//! RS authentication requires a PS256 public JWK and a nonce. Proof parameter
+//! RS authentication requires a public JWK that `httpsig` accepts (`PS256`,
+//! `ES256`, or `EdDSA`) and a nonce. Proof parameter
 //! objects with nonempty extensions are outside this profile. The introspected
 //! value is in the signed JSON body, never an Authorization header. RS-management
 //! access tokens, dynamic RS-key registration, derivation and structured-token

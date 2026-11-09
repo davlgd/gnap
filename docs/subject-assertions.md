@@ -10,10 +10,10 @@ Pair an exact GNAP grant endpoint, an exact HTTPS issuer, and that issuer's dedi
 
 ## Verify from a client session
 
-For a `Ps256Signer`, `Session::verify_subject` checks the subject response that the session retained, using:
+When its signer exports a public JWK, `Session::verify_subject` checks the subject response the session retained, using:
 
 - The endpoint the session actually contacted
-- The SHA-256 [RFC 7638 thumbprint](https://www.rfc-editor.org/rfc/rfc7638.html) of its original proof key, as audience
+- The SHA-256 [RFC 7638 thumbprint](https://www.rfc-editor.org/rfc/rfc7638.html) of its original proof key, of any algorithm, as audience
 - Its interaction finish nonce, as the assertion nonce
 - Your current time, and your limits on lifetime and age
 

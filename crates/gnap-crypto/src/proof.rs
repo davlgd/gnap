@@ -59,9 +59,10 @@ pub trait Signer {
     /// When the key is a JWK, §7.3.1 requires this to be its `kid`.
     fn key_id(&self) -> &str;
 
-    /// The algorithm name, for information only.
+    /// The JWA name of the algorithm (RFC 7518), such as `PS256` or `EdDSA`.
     ///
-    /// It does not travel in the message: it serves logs and error messages.
+    /// An `httpsig` signature never carries it (§7.3.1). A verifier compares it
+    /// with the `alg` of the key the client presented, which must match.
     fn algorithm(&self) -> &'static str;
 }
 
@@ -85,6 +86,38 @@ macro_rules! forward_signer {
 
 forward_signer!(&S, Box<S>, std::sync::Arc<S>);
 
+/// A signer whose public key travels as a JWK that names its algorithm, as
+/// GNAP presents keys (RFC 9635 §7.1).
+pub trait JwkSigner: Signer {
+    /// The public key as a JWK, with its `alg` and this signer's `kid`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the key can't be presented under the import bounds of
+    /// [`crate::jwk::PublicKey::from_jwk`].
+    fn public_jwk(&self) -> Result<serde_json::Map<String, serde_json::Value>, ProofError>;
+
+    /// The SHA-256 JWK thumbprint of the public key (RFC 7638).
+    fn thumbprint(&self) -> String;
+}
+
+macro_rules! forward_jwk_signer {
+    ($($pointer:ty),*) => {$(
+        impl<S: JwkSigner + ?Sized> JwkSigner for $pointer {
+            fn public_jwk(
+                &self,
+            ) -> Result<serde_json::Map<String, serde_json::Value>, ProofError> {
+                (**self).public_jwk()
+            }
+            fn thumbprint(&self) -> String {
+                (**self).thumbprint()
+            }
+        }
+    )*};
+}
+
+forward_jwk_signer!(&S, Box<S>, std::sync::Arc<S>);
+
 /// Validates a signature over a byte string.
 pub trait Verifier {
     /// Returns `Ok(())` when the signature matches, an error otherwise.
@@ -94,7 +127,7 @@ pub trait Verifier {
     /// Fails when the signature does not match the data under this key.
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), ProofError>;
 
-    /// The algorithm name, for information only.
+    /// The JWA name of the algorithm (RFC 7518), as [`Signer::algorithm`] gives it.
     fn algorithm(&self) -> &'static str;
 
     /// The identity the `keyid` parameter has to name, when the key form has

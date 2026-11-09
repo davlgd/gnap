@@ -200,3 +200,99 @@ fn a_resolved_reference_is_pinned_by_value_for_subsequent_management() {
     let refreshed = single(&server.handle(&current, NOW + 2));
     assert_eq!(refreshed.key, expected);
 }
+
+/// A verifier that a deployment supplies for an algorithm this SDK doesn't
+/// implement, here built on a PS256 key for the test.
+struct CustomAlgorithm(Ps256Verifier);
+
+impl Verifier for CustomAlgorithm {
+    fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), gnap_crypto::ProofError> {
+        self.0.verify(data, signature)
+    }
+    fn algorithm(&self) -> &'static str {
+        "X-CUSTOM"
+    }
+    fn expected_key_id(&self) -> Option<&str> {
+        self.0.expected_key_id()
+    }
+}
+
+/// Resolves a by-value key of the custom algorithm itself.
+struct CustomKeys;
+
+impl KeyResolver for CustomKeys {
+    fn resolve(&self, client: &Client) -> Option<Box<dyn Verifier>> {
+        Keys.resolve(client)
+    }
+
+    fn resolve_token_key(
+        &self,
+        client: &Client,
+        binding: Option<&Key>,
+    ) -> Option<ResolvedTokenKey> {
+        let custom = binding.and_then(Key::as_value).filter(|key| {
+            key.jwk
+                .as_ref()
+                .is_some_and(|jwk| jwk.get("alg") == Some(&json!("X-CUSTOM")))
+        });
+        let Some(key) = custom else {
+            return Keys.resolve_token_key(client, binding);
+        };
+        Some(ResolvedTokenKey {
+            key: key.clone(),
+            verifier: Box::new(CustomAlgorithm(new_key().verifier())),
+        })
+    }
+}
+
+/// A public key of an algorithm outside this SDK reaches the configured
+/// resolver when presented by value, as it would by reference.
+#[test]
+fn a_custom_algorithm_by_value_is_left_to_the_configured_resolver() {
+    let server = configured_server(
+        true,
+        Approve {
+            key_rotation: true,
+            value_rotation: true,
+        },
+        CustomKeys,
+    );
+    let tokens = grant(&server);
+    let mut jwk = new_key().public_jwk().unwrap();
+    jwk.insert("alg".into(), json!("X-CUSTOM"));
+    let custom: Key =
+        serde_json::from_value(json!({"proof": "httpsig", "jwk": Value::Object(jwk)})).unwrap();
+    let request = add_new_proof(old_proof(&tokens[0], &custom), new_key());
+    let rotated = single(&server.handle(&request, NOW + 1));
+    assert_eq!(rotated.key, Some(custom));
+}
+
+/// `EdDSA` with a curve other than Ed25519 reaches the resolver, while an
+/// Ed25519 candidate without a usable curve is refused before it.
+#[test]
+fn an_eddsa_key_of_another_curve_is_left_to_the_resolver_but_a_missing_curve_is_not() {
+    let okp = |crv: &Value| -> Key {
+        let mut jwk = json!({"kty":"OKP","alg":"EdDSA","kid":"replacement",
+            "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"});
+        if !crv.is_null() {
+            jwk["crv"] = crv.clone();
+        }
+        serde_json::from_value(json!({"proof":"httpsig","jwk":jwk})).unwrap()
+    };
+    // The default resolver doesn't implement Ed448, so it reports that it
+    // can't rotate to it, instead of the early refusal of a malformed key.
+    for (crv, expected) in [
+        (json!("Ed448"), "key_rotation_not_supported"),
+        (Value::Null, "invalid_rotation"),
+        (json!(25519), "invalid_rotation"),
+    ] {
+        let server = server(true, true);
+        let tokens = grant(&server);
+        let request = add_new_proof(old_proof(&tokens[0], &okp(&crv)), new_key());
+        assert_eq!(
+            error_code(&server.handle(&request, NOW + 1)),
+            expected,
+            "{crv}"
+        );
+    }
+}

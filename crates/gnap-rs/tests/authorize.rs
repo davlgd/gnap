@@ -862,3 +862,47 @@ fn by_value_rs_identity_is_serialized_without_becoming_the_audience_or_client_ke
     assert_eq!(outgoing["proof"], "httpsig");
     assert_eq!(nonces.0.borrow().len(), 1);
 }
+
+/// A token bound to an ES256 or Ed25519 key authorizes a request signed with
+/// it, and refuses the same request when the AS names the other key.
+#[test]
+fn es256_and_ed25519_token_keys_authorize_their_own_requests_only() {
+    use gnap_crypto::{Ed25519Signer, Es256Signer, JwkSigner};
+
+    // The same `kid`, so that only the key material tells the two apart.
+    let es256 = Es256Signer::generate("same-kid").unwrap();
+    let ed25519 = Ed25519Signer::generate("same-kid").unwrap();
+    let pairs: [(&dyn JwkSigner, &dyn JwkSigner); 2] = [(&es256, &ed25519), (&ed25519, &es256)];
+    for (signer, other) in pairs {
+        let signed = sign_request(
+            HttpRequest::new("GET", RESOURCE),
+            signer,
+            Some(&TokenValue::new(VALUE).unwrap()),
+            1000,
+        )
+        .unwrap();
+        for (named, expected) in [(signer, Ok(())), (other, Err(AuthorizationError::Denied))] {
+            let mut introspection = active();
+            introspection["key"]["jwk"] = Value::Object(named.public_jwk().unwrap());
+            let transport = Scripted {
+                introspection: response(&introspection),
+                ..Scripted::new()
+            };
+            let outcome = authorize(
+                &transport,
+                &Replay::default(),
+                &signed,
+                &AudiencePolicy::IntrospectionContext,
+                &permit,
+                || 1000,
+            );
+            assert_eq!(
+                outcome,
+                expected,
+                "{} request, {} key",
+                signer.algorithm(),
+                named.algorithm()
+            );
+        }
+    }
+}

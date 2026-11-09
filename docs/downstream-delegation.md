@@ -14,7 +14,7 @@ The grant request and response use the ordinary GNAP grant endpoint and messages
 
 These are choices of this project, not requirements of RFC 9767:
 
-- Opaque, key-bound tokens, with `httpsig`, PS256, and fresh signature nonces
+- Opaque, key-bound tokens, with `httpsig` and fresh signature nonces
 - One downstream hop, to a different resource server: a derived token can't derive another one
 - One immediate token, without subject, user information, interaction, or continuation
 - A lifetime of at most 60 seconds, within the remaining lifetime of the incoming token

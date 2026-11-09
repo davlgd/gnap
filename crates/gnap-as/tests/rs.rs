@@ -183,14 +183,14 @@ fn issue<S: Storage>(server: &Server<S>) -> Value {
     );
     serde_json::from_slice(&response.body).unwrap()
 }
-fn query(value: &str, signer: &Ps256Signer, now: u64) -> HttpRequest {
+fn query(value: &str, signer: &dyn Signer, now: u64) -> HttpRequest {
     signed(
         &json!({"resource_server":"files", "access_token":value, "proof":"httpsig", "access":["read"]}),
         signer,
         now,
     )
 }
-fn signed(body: &Value, signer: &Ps256Signer, now: u64) -> HttpRequest {
+fn signed(body: &Value, signer: &dyn Signer, now: u64) -> HttpRequest {
     sign_request(
         HttpRequest::new("POST", ENDPOINT).json_body(serde_json::to_vec(body).unwrap()),
         signer,
@@ -826,4 +826,53 @@ fn discovery_inherits_only_the_explicit_loopback_development_option() {
             "http://remote.example/introspect"
         )
         .is_err());
+}
+
+/// Resolves the registered resource server to the public key of `0`.
+struct KeyedRs(&'static dyn gnap_crypto::JwkSigner);
+impl ResourceServerResolver for KeyedRs {
+    fn resolve(&self, rs: &ResourceServer) -> Option<ResolvedResourceServer> {
+        (rs.as_reference() == Some("files")).then(|| ResolvedResourceServer {
+            id: RsId("files".into()),
+            key: serde_json::from_value(
+                json!({"proof":"httpsig", "jwk":self.0.public_jwk().unwrap()}),
+            )
+            .unwrap(),
+        })
+    }
+}
+
+/// A resource server registered with an ES256 or Ed25519 key introspects with
+/// it; a key of the other algorithm under the same `kid` is refused, and so is
+/// a replay of the same signed request.
+#[test]
+fn es256_and_ed25519_resource_servers_introspect_with_their_own_key_only() {
+    static ES256: OnceLock<gnap_crypto::Es256Signer> = OnceLock::new();
+    static ED25519: OnceLock<gnap_crypto::Ed25519Signer> = OnceLock::new();
+    let es256 = ES256.get_or_init(|| gnap_crypto::Es256Signer::generate("shared-kid").unwrap());
+    let ed25519 =
+        ED25519.get_or_init(|| gnap_crypto::Ed25519Signer::generate("shared-kid").unwrap());
+    let pairs: [(
+        &'static dyn gnap_crypto::JwkSigner,
+        &'static dyn gnap_crypto::JwkSigner,
+    ); 2] = [(es256, ed25519), (ed25519, es256)];
+    for (registered, impostor) in pairs {
+        let server = server();
+        let grant = issue(&server);
+        let value = grant["access_token"]["value"].as_str().unwrap();
+        let policy = RsPolicy::new();
+        let nonces = MemoryStorage::new();
+        let resolver = KeyedRs(registered);
+        let api = server
+            .resource_server_api(&resolver, &policy, &nonces, ENDPOINT)
+            .unwrap();
+        let request = query(value, registered, 1_005);
+        let wire: Value = serde_json::from_slice(&api.handle(&request, 1_005).body).unwrap();
+        assert_eq!(wire["active"], true, "{}", registered.algorithm());
+        rs_error(api.handle(&request, 1_005), "invalid_resource_server");
+        rs_error(
+            api.handle(&query(value, impostor, 1_006), 1_006),
+            "invalid_resource_server",
+        );
+    }
 }

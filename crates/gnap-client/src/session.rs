@@ -37,7 +37,6 @@ use gnap_crypto::proof::Signer;
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{AccessToken, Cardinality, TokenValue};
 use gnap_types::user::SubjectResponse;
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -94,11 +93,12 @@ pub struct VerifiedSubject<'a> {
     pub identity: gnap_subject::VerifiedIdentity,
 }
 
-impl<T, S: Borrow<gnap_crypto::Ps256Signer>> Session<T, S> {
+impl<T, S: gnap_crypto::JwkSigner> Session<T, S> {
     /// Verify a PS256 ID Token with this session's retained finish nonce.
     ///
     /// The audience convention here is the RFC 7638 thumbprint of the client's
-    /// original PS256 proof key. Agree on it with the AS; GNAP does not define
+    /// original proof key, whatever its algorithm; the assertion itself is
+    /// signed with PS256 by the AS. Agree on it with the AS; GNAP does not define
     /// an OAuth client ID or this audience mapping. Token key rotation does
     /// not change the grant's proof key or identity recipient. The exact AS
     /// endpoint must match the configured trust. Raw `subject()` remains
@@ -124,7 +124,7 @@ impl<T, S: Borrow<gnap_crypto::Ps256Signer>> Session<T, S> {
         let identity = trust.verify_subject(
             response,
             &self.endpoint,
-            &self.signer.borrow().thumbprint(),
+            &self.signer.thumbprint(),
             nonce,
             now,
         )?;

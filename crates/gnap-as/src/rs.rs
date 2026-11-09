@@ -10,10 +10,7 @@ use crate::{
     GrantSelector, NonceStore, Nonces, ResourceSetError, ResourceSetStore, RsId, Storage,
     TokenRecord, MAX_CLOCK_SKEW,
 };
-use gnap_crypto::{
-    ps256::Ps256Verifier,
-    verify::{verify_request_with_policy, Expectations, SignedRequest},
-};
+use gnap_crypto::verify::{verify_request_with_policy, Expectations, SignedRequest};
 use gnap_registry::{AccessTokenFlag, KeyProofingMethod, RsErrorCode};
 use gnap_types::{
     access::AccessItem,
@@ -49,7 +46,8 @@ pub struct ResolvedResourceServer {
 pub trait ResourceServerResolver {
     /// Returns the registered RS identity/key, or refuses an unknown identity.
     ///
-    /// The SDK verifies a PS256 JWK and any key supplied by value against this
+    /// The SDK verifies a public JWK that `httpsig` accepts, and any key
+    /// supplied by value, against this
     /// result. Accepting arbitrary presented keys here would bypass registration.
     /// References and by-value aliases of the same RS must resolve to the same
     /// canonical owner. Key rotation/registration remain deployment operations.
@@ -505,7 +503,7 @@ fn json_request(request: &HttpRequest, max_bytes: usize) -> Option<&[u8]> {
         .filter(|bytes| bytes.len() <= max_bytes)
 }
 
-fn public_verifier(key: &KeyObject) -> Option<Ps256Verifier> {
+fn public_verifier(key: &KeyObject) -> Option<gnap_crypto::PublicKey> {
     key.validate().ok()?;
     if key.proof.method() != &KeyProofingMethod::Httpsig {
         return None;
@@ -513,7 +511,7 @@ fn public_verifier(key: &KeyObject) -> Option<Ps256Verifier> {
     if matches!(&key.proof, MethodOrObject::Detailed { params, .. } if !params.is_empty()) {
         return None;
     }
-    Ps256Verifier::from_public_jwk(key.jwk.as_ref()?).ok()
+    gnap_crypto::PublicKey::for_httpsig(key.jwk.as_ref()?).ok()
 }
 
 fn binding_matches(

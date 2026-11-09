@@ -20,7 +20,6 @@ pub(crate) fn management_binding(
 ) -> bool {
     use gnap_crypto::{
         proof::{ProofError, Verifier},
-        ps256::Ps256Verifier,
         verify::{verify_request_with_policy, Expectations, SignedRequest},
     };
     struct Both<'a>(&'a dyn Verifier, &'a dyn Verifier);
@@ -39,7 +38,7 @@ pub(crate) fn management_binding(
     let Some(jwk) = key.jwk.as_ref() else {
         return false;
     };
-    let Ok(rs) = Ps256Verifier::from_public_jwk(jwk) else {
+    let Ok(rs) = gnap_crypto::PublicKey::for_httpsig(jwk) else {
         return false;
     };
     if management.algorithm() != rs.algorithm()

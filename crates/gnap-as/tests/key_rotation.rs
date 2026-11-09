@@ -51,7 +51,7 @@ struct Keys;
 impl KeyResolver for Keys {
     fn resolve(&self, client: &Client) -> Option<Box<dyn Verifier>> {
         let key = client.as_value()?.key.as_value()?;
-        let verifier = Ps256Verifier::from_public_jwk(key.jwk.as_ref()?).ok()?;
+        let verifier = gnap_crypto::PublicKey::for_httpsig(key.jwk.as_ref()?).ok()?;
         Some(Box::new(verifier))
     }
 }

@@ -22,7 +22,7 @@ The transport is blocking, like the client's. From an async server, call it in a
 
 Pass the original method, absolute target URI, headers, and body to `Authorizer::authorize`, with the required access entries, your `AccessPolicy`, and a clock in Unix seconds. Reconstructing a different URL behind a proxy, or decoding and re-encoding the body, can invalidate the request's signature: build the external URI only from proxy information your deployment approves. Perform the protected operation only when `authorize` returns `Ok(())`.
 
-For each request, the authorizer fetches the discovery document, then sends an introspection request signed with the resource server's key. It checks the issuer and the endpoints, the response, the required rights, the public PS256 key binding, the client's signature and its replay nonce, and the token's time window. It caches neither discovery nor a positive result, so each request makes two exchanges with the authorization server: a choice of this profile, not a requirement of the RFC.
+For each request, the authorizer fetches the discovery document, then sends an introspection request signed with the resource server's key. It checks the issuer and the endpoints, the response, the required rights, the public key binding, the client's signature and its replay nonce, and the token's time window. It caches neither discovery nor a positive result, so each request makes two exchanges with the authorization server: a choice of this profile, not a requirement of the RFC.
 
 The SDK compares the required access entries with the authorization server's answer by exact inclusion. Interpreting an access entry for your resource remains your application's job: no normalization, no label-derived audience, no implicit expansion.
 
@@ -47,7 +47,7 @@ An inactive result can mean that the authorization server couldn't determine the
 
 ## Profile limits
 
-This profile accepts key-bound requests signed with `httpsig` without parameters, a public PS256 key, and a nonempty signature nonce. The SDK doesn't decode the opaque token: the introspection response must carry integer `iat` and `exp` claims, with `exp` after `iat`. Requiring both dates is a choice of this SDK, not of [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.3).
+This profile accepts key-bound requests signed with `httpsig` without parameters, with a public PS256, ES256, or Ed25519 key, and a nonempty signature nonce. The SDK doesn't decode the opaque token: the introspection response must carry integer `iat` and `exp` claims, with `exp` after `iat`. Requiring both dates is a choice of this SDK, not of [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.3).
 
 Token dates get no grace period: `nbf` and `iat` are inclusive, `exp` is exclusive, and a clock that goes backwards refuses access. Three non-decreasing clock readings frame the network work and the proof verification, and the last one must still precede expiry. The signature verifier's 300-second clock-skew allowance doesn't extend a token's validity, and a failed final check can consume a valid proof's nonce.
 

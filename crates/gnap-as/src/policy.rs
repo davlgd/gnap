@@ -233,8 +233,9 @@ pub trait KeyResolver {
     ///
     /// `binding: None` selects the original client's key. An explicit binding
     /// selects the token's key instead, without changing client identity.
-    /// The default accepts public PS256 JWKs by value with parameterless
-    /// `httpsig`; a client or key reference needs an explicit resolver override.
+    /// The default accepts, by value with parameterless `httpsig`, the public
+    /// JWKs that [`gnap_crypto::PublicKey::for_httpsig`] imports; a client or
+    /// key reference needs an explicit resolver override.
     /// It never treats a kid as public key material.
     ///
     /// An override must validate public key material and return a verifier for
@@ -256,7 +257,7 @@ pub trait KeyResolver {
         if key.proof.method().as_str() != "httpsig" || !parameterless_proof(&key.proof) {
             return None;
         }
-        let verifier = gnap_crypto::Ps256Verifier::from_public_jwk(key.jwk.as_ref()?).ok()?;
+        let verifier = gnap_crypto::PublicKey::for_httpsig(key.jwk.as_ref()?).ok()?;
         Some(ResolvedTokenKey {
             key: key.clone(),
             verifier: Box::new(verifier),
