@@ -221,7 +221,16 @@ async fn the_record_is_read_by_its_own_cookie_until_the_session_expires() {
     assert_eq!(routes(&view_b), ["grant"]);
     assert_eq!(labels(&view_a), [Value::Null]);
     assert_eq!(labels(&view_b), [json!("documents"), json!("reports")]);
-    for cookie in [None, Some("unknownunknownunknown12")] {
+    // A well-formed identity that names no session.
+    let unknown = "unknownunknownunknown1";
+    let mut headers = HeaderMap::new();
+    headers.insert("cookie", format!("gnap_demo={unknown}").parse().unwrap());
+    assert_eq!(
+        session_cookie(&headers).as_deref(),
+        Some(unknown),
+        "the cookie is well formed"
+    );
+    for cookie in [None, Some(unknown)] {
         let view = status(&router, &origin, cookie).await;
         assert!(view.get("trace").is_none_or(Value::is_null), "{view}");
     }

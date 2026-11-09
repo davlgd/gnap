@@ -127,3 +127,98 @@ test('a refresh keeps the rows shown, appends new attempts, and a new trace repl
   assert.notEqual(nodes.get('#trace').children[0], replaced, 'a longer trace that differs from the shown one replaces it');
   assert.equal(nodes.get('#trace').children.length, 2);
 });
+
+/// The page with its buttons, a fetch whose answers the test gives, and the
+/// timers it schedules.
+function page() {
+  const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [`#${id}`, element('')]));
+  const buttons = [...html.matchAll(/data-action="([^"]+)"/g)].map(([, action]) => {
+    const button = element('button');
+    button.dataset.action = action;
+    button.addEventListener = (type, handler) => { button[type] = handler; };
+    nodes.set(`[data-action="${action}"]`, button);
+    return button;
+  });
+  const requests = [];
+  const timers = [];
+  const context = {
+    document: {
+      querySelector: selector => nodes.get(selector),
+      querySelectorAll: () => buttons,
+      createElement: element,
+    },
+    fetch: url => new Promise(resolve => requests.push({ url, resolve })),
+    setTimeout: callback => { timers.push(callback); return timers.length; },
+    clearTimeout: () => {},
+    location: { origin: 'https://demo.example', assign() {} },
+  };
+  runInNewContext(script, context, { timeout: 1000 });
+  const answer = (index, data) => requests[index].resolve({ json: async () => data });
+  const routes = () => text(nodes.get('#trace'));
+  return { nodes, requests, timers, answer, routes };
+}
+
+const attempt = route => ({ ...known, request: { ...known.request, route } });
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('a late status read from before a new start never shows the old grant', async () => {
+  const lab = page();
+  assert.equal(lab.requests[0].url, '/api/status');
+  const failed = lab.nodes.get('[data-action="read"]').click();
+  assert.equal(lab.requests[1].url, '/api/read');
+  lab.answer(1, { error: 'synthetic failure' });
+  await failed;
+  assert.equal(lab.requests[2].url, '/api/status', 'the refused action reads the record again');
+  const started = lab.nodes.get('[data-action="start-code"]').click();
+  lab.answer(3, { state: 'pending', trace: { attempts: [attempt('grant')], dropped: 0 } });
+  await started;
+  assert.ok(lab.routes().includes('/gnap'));
+  lab.answer(2, { trace: { attempts: [attempt('folder')], dropped: 0 } });
+  lab.answer(0, { state: 'approved', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await settle();
+  assert.ok(!lab.routes().includes('/resource/folder'), 'an older read is dropped');
+  assert.ok(lab.routes().includes('/gnap'));
+});
+
+test('a status read a timer started before an action never renders over it', async () => {
+  const lab = page();
+  lab.answer(0, { state: 'starting', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await settle();
+  assert.equal(lab.timers.length, 1, 'a starting grant schedules a refresh');
+  lab.timers[0]();
+  const inFlight = lab.requests.length - 1;
+  assert.equal(lab.requests[inFlight].url, '/api/status');
+  const started = lab.nodes.get('[data-action="start"]').click();
+  lab.answer(inFlight + 1, { state: 'pending', trace: { attempts: [attempt('grant')], dropped: 0 } });
+  await started;
+  lab.answer(inFlight, { state: 'approved', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await settle();
+  assert.ok(!lab.routes().includes('/resource/folder'), 'the read that left before the action is dropped');
+  assert.ok(lab.routes().includes('/gnap'));
+});
+
+test('an action answered after a newer one never renders over it', async () => {
+  const lab = page();
+  lab.answer(0, { state: 'approved', trace: { attempts: [attempt('grant')], dropped: 0 } });
+  await settle();
+  const reading = lab.nodes.get('[data-action="read"]').click();
+  const starting = lab.nodes.get('[data-action="start-code"]').click();
+  lab.answer(2, { state: 'pending', trace: { attempts: [attempt('continue')], dropped: 0 } });
+  await starting;
+  lab.answer(1, { state: 'approved', trace: { attempts: [attempt('grant'), attempt('folder')], dropped: 0 } });
+  await reading;
+  assert.ok(lab.routes().includes('/continue'));
+  assert.ok(!lab.routes().includes('/resource/folder'), 'the older action is dropped');
+});
+
+test('a new start clears the record before the new grant answers', async () => {
+  const lab = page();
+  lab.answer(0, { state: 'approved', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await settle();
+  assert.ok(lab.routes().includes('/resource/folder'));
+  const started = lab.nodes.get('[data-action="start"]').click();
+  assert.equal(lab.nodes.get('#trace').children.length, 0, 'the old record is gone at once');
+  lab.answer(1, { state: 'pending', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await started;
+  assert.equal(lab.nodes.get('#trace').children.length, 1, 'the new record is drawn, even when it looks the same');
+});

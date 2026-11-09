@@ -2,6 +2,14 @@
 const error = document.querySelector('#error');
 let identityExpiryTimer;
 let statusTimer;
+// Each action opens a new generation of the view: a status read that left
+// before it, from a timer, the first load or a refused action, is dropped
+// rather than rendered over the newer state.
+let generation = 0;
+function refreshStatus(apply) {
+  const mine = generation;
+  return fetch('/api/status', {credentials: 'same-origin'}).then(r => r.json()).then(view => { if (mine === generation) apply(view); });
+}
 function render(data) {
   if (data.error) { error.textContent = data.error; return; }
   error.textContent = '';
@@ -51,23 +59,27 @@ function render(data) {
   if (push?.expired) for (const action of ['approve', 'deny']) document.querySelector(`[data-action="${action}"]`).disabled = true;
   if (identityLive) identityExpiryTimer = setTimeout(() => { document.querySelector('#identity').textContent = 'The displayed assertion has expired. Refresh the status to verify again.'; }, data.identity.expires_at * 1000 - Date.now());
   // This refreshes only this client's view. It never polls GNAP continuation.
-  if (data.state === 'starting' || (data.continuation_open && wait > 0) || (push && !push.expired && (data.state === 'awaiting_push' || push.delivery === 'queued'))) statusTimer = setTimeout(() => fetch('/api/status').then(r => r.json()).then(render).catch(e => {error.textContent = e.message;}), 1000);
+  if (data.state === 'starting' || (data.continuation_open && wait > 0) || (push && !push.expired && (data.state === 'awaiting_push' || push.delivery === 'queued'))) statusTimer = setTimeout(() => refreshStatus(render).catch(e => {error.textContent = e.message;}), 1000);
 }
 for (const button of document.querySelectorAll('[data-action]')) button.addEventListener('click', async () => {
   button.disabled = true;
+  const mine = ++generation;
+  // A new grant starts a new record.
+  if (button.dataset.action.startsWith('start')) { shownAttempts = []; document.querySelector('#trace').replaceChildren(); }
   try {
     const response = await fetch(`/api/${button.dataset.action}`, {method: 'POST', credentials: 'same-origin'});
     const data = await response.json();
+    if (mine !== generation) return;
     if (['start', 'start-identity', 'start-push', 'start-multiple', 'expand', 'downscope'].includes(button.dataset.action) && data.state === 'pending' && data.interaction_uri) { const target = new URL(data.interaction_uri); if (target.origin !== location.origin) throw new Error('Unexpected interaction origin'); location.assign(target.href); return; }
     if (data.redirect) { const target = new URL(data.redirect); if (target.origin !== location.origin) throw new Error('Unexpected callback origin'); location.assign(target.href); return; }
     render(data);
     // A refused action answers with its error only: read the record again, so
     // the attempt it made shows, without sending the action twice.
-    if (data.error) fetch('/api/status', {credentials: 'same-origin'}).then(r => r.json()).then(view => renderTrace(view.trace)).catch(() => {});
+    if (data.error) refreshStatus(view => renderTrace(view.trace)).catch(() => {});
   } catch (e) { error.textContent = e.message; }
   finally { if (error.textContent) button.disabled = false; }
 });
-fetch('/api/status', {credentials: 'same-origin'}).then(r => r.json()).then(render).catch(e => {error.textContent = e.message;});
+refreshStatus(render).catch(e => {error.textContent = e.message;});
 
 // The exchange inspector. Every label comes from these tables: the trace holds
 // only closed values, and anything unexpected reads as Unknown.
