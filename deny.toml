@@ -1,0 +1,51 @@
+# Dependency policy for `cargo deny`.
+#
+# Without this file, `cargo deny check licenses` allows nothing and rejects
+# every dependency, including MIT and Apache-2.0, which makes the check
+# unusable as a gate. The licences this project accepts are stated here.
+#
+# The advisories section is deliberately left at its defaults: no advisory is
+# ignored and no exception is granted. `cargo deny check advisories` therefore
+# reports RUSTSEC-2026-0387 on `crypto-bigint 0.5.5`, reached only through
+# `biscuit-auth 6.0.0`, which has no released fix. That report is accurate.
+
+[licenses]
+# Every licence below was observed in the resolved graph. SPDX expressions with
+# `OR` resolve to the first allowed choice, so `MIT OR Apache-2.0 OR
+# LGPL-2.1-or-later` and `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT`
+# both resolve to a permissive option without LGPL or the LLVM exception
+# applying. The single `AND` expression, `(MIT OR Apache-2.0) AND Unicode-3.0`,
+# needs Unicode-3.0 allowed in addition, which it is. ISC is required by
+# `ring 0.17`, which declares `Apache-2.0 AND ISC` and appears in the three
+# application graphs but not in the SDK workspace. CDLA-Permissive-2.0 covers
+# `webpki-root-certs`, a certificate-data crate pulled in by the applications'
+# TLS stack; it is a permissive data licence, not a code licence.
+# One policy serves four graphs (the SDK workspace and the three application
+# workspaces), so a licence allowed here may be unused in any single graph.
+unused-allowed-license = "allow"
+allow = [
+    "Apache-2.0",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+# The three applications are `publish = false` and carry no `license` field,
+# which `cargo deny` reports as unlicensed. They are not distributed.
+[licenses.private]
+ignore = true
+
+[bans]
+# Several crates legitimately appear at more than one major version because
+# independent transitive dependencies select different generations.
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
