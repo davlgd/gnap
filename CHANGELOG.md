@@ -22,7 +22,7 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** a grant, continuation, or management request that carries a body and a repeated `Content-Type` field is refused.
 
-`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonce, interaction handle and reference, and user code; the request and the token it holds keep their own `Debug` output. `MAX_GRANT_BODY_BYTES` names the bound on a grant or key-rotation body.
+`OsNonces` draws each symbol from a 64-character alphabet, without the bias of the former 62-character one. The `Debug` output of `MemoryStorage` shows counts only, and that of a stored record hides its continuation and management credentials, nonce, interaction handle and reference, and user code; the request and the token it holds keep their own `Debug` output. `MAX_GRANT_BODY_BYTES` names the body bound of the derivation and key-rotation handlers; the HTTP adapter still bounds ordinary grant requests.
 
 ### gnap-crypto
 

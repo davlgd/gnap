@@ -61,8 +61,10 @@ pub const MAX_CLOCK_SKEW: u64 = 300;
 /// so nobody has to guess it.
 pub const INTERACTION_LIFETIME: u64 = 600;
 
-/// Largest grant or key-rotation body, in bytes, that the server parses: an
-/// implementation bound, not a GNAP message limit.
+/// Largest body, in bytes, that the derivation and key-rotation handlers parse.
+///
+/// An implementation bound, not a GNAP message limit. The ordinary grant
+/// handler leaves the body size to the HTTP adapter, which must bound it.
 pub const MAX_GRANT_BODY_BYTES: usize = 64 * 1024;
 
 /// Where the AS answers.
