@@ -105,6 +105,10 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
     /// error such as `invalid_rotation` or `key_rotation_not_supported`;
     /// [`ClientError::Protocol`] when the answer breaks a rule above.
     ///
+    /// `replacement` must be `Send + Sync + 'static`, so that a session holding
+    /// it can move between threads. A signer that is `Send` but not `Sync`
+    /// meets that bound behind a `Mutex`, in a wrapper of your own.
+    ///
     /// The session keeps its handle on `replacement` only after a successful
     /// response. A value rotation carries it forward; another key change, a
     /// confirmed revocation, a newly issued lot or the end of the session

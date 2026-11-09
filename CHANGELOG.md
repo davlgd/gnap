@@ -8,7 +8,7 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** `Session<'a, T, S>` becomes `Session<T, S>`, and owns its transport and its signer. A call such as `Session::new(&transport, &signer, endpoint)` keeps compiling. Where you named the type, write `Session<&Transport, &Ps256Signer>`, or pass an `Arc` to keep a session in long-lived state.
 
-**Breaking:** `Session::rotate_key` takes the replacement signer as a `SharedSigner`, which is an `Arc<dyn Signer + Send + Sync>`, and `Session::rotate_key_owned` is gone. Move the new signer into the `Arc`, or wrap a reference with `Arc::new(&signer)` when the signer lives for the whole program.
+**Breaking:** `Session::rotate_key` takes the replacement signer as a `SharedSigner`, which is an `Arc<dyn Signer + Send + Sync>`, and `Session::rotate_key_owned` is gone. The replacement must therefore be `Send + Sync + 'static`, so that a session can move between threads: move the new signer into the `Arc`, or wrap a reference that lives for the whole program.
 
 **Breaking:** a response must carry exactly one `Content-Type` field naming `application/json`, as RFC 9635 §3 requires: the session refuses a missing field.
 
@@ -16,9 +16,9 @@ This file lists the changes to the published crates that affect their users, cra
 
 ### gnap-as
 
-**Breaking:** `Nonces::next` returns `Result<String, NonceError>`, so an implementation wraps its value in `Ok`. When a draw fails, the server answers 500 and stores nothing, and `OsNonces` no longer panics.
+**Breaking:** `Nonces::next` returns `Result<String, NonceError>`, so an implementation wraps its value in `Ok`. When a draw fails, the operation publishes nothing and fails with a 500, or a 503 for a resource registration, and `OsNonces` no longer panics.
 
-**Breaking:** `Decision::Approve` applies only to a request for exactly one token. When the request holds several, the server refuses it as a configuration fault: select them with `Decision::ApproveTokens`.
+**Breaking:** `Decision::Approve` applies to a request for one token or for none. When the request holds several, the server refuses it as a configuration fault: select them with `Decision::ApproveTokens`. A request for no token, which asks only for subject information, gets no token, and an approval that grants it rights is refused too.
 
 **Breaking:** a grant, continuation, or management request with a repeated `Content-Type` field is refused, whatever the order of its values.
 
@@ -34,7 +34,7 @@ This file lists the changes to the published crates that affect their users, cra
 
 **Breaking:** the `object_or_reference!` macro is no longer exported, since it only declares this crate's types.
 
-**Breaking:** `HttpRequest::json_body` keeps a `Content-Type` field already set, instead of adding a second one.
+**Breaking:** `HttpRequest::json_body` replaces any `Content-Type` field already set, instead of adding a second one. To build a message whose media type disagrees with its body, set `body` directly.
 
 `HttpRequest::has_json_content_type` and `HttpResponse::has_json_content_type` check the media type of a JSON message. The `Debug` output of `TokenValue` hides the value, and the message types implement `Eq` where every field does.
 

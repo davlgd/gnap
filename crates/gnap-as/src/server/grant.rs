@@ -170,16 +170,25 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                     .access_token
                     .as_ref()
                     .map(|a| a.tokens.as_slice());
-                let Some([slot]) = slots else {
-                    return misconfigured(
-                        "Decision::Approve needs exactly one requested token; \
-                         select tokens with Decision::ApproveTokens",
-                    );
-                };
-                let tokens = vec![TokenApproval {
-                    requested_label: slot.label.clone(),
-                    access,
-                }];
+                let tokens =
+                    match slots {
+                        // §2: a client that only wants subject information omits
+                        // `access_token`, and gets no token.
+                        None if access.is_empty() => Vec::new(),
+                        None => return misconfigured(
+                            "Decision::Approve grants rights to a request that asks for no token",
+                        ),
+                        Some([slot]) => vec![TokenApproval {
+                            requested_label: slot.label.clone(),
+                            access,
+                        }],
+                        Some(_) => {
+                            return misconfigured(
+                                "Decision::Approve needs exactly one requested token; \
+                             select tokens with Decision::ApproveTokens",
+                            )
+                        }
+                    };
                 self.approve_selected(aggregate, tokens, subject, now, authenticated)
             }
             Decision::ApproveTokens { tokens, subject } => {

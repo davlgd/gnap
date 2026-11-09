@@ -23,8 +23,12 @@ pub trait Nonces {
     ///
     /// # Errors
     ///
-    /// Fails when no unguessable value can be produced. The server then
-    /// answers 500 before it stores anything.
+    /// Fails when no unguessable value can be produced. The operation then
+    /// fails without publishing a partial grant or token: grant, continuation,
+    /// and management requests get a 500, a resource registration a 503, and
+    /// an interaction completion an [`InteractionError`](crate::InteractionError).
+    /// A nonce that the request's proof reserved stays consumed, so a retry
+    /// needs a fresh signature.
     fn next(&self) -> Result<String, NonceError>;
 }
 

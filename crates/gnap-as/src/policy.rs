@@ -38,9 +38,11 @@ pub enum Decision {
     ///
     /// The access granted may differ from the access requested; §3.2.1 requires
     /// the response to reflect what was actually granted.
-    /// A shorthand for a request of exactly one token: the server refuses it,
-    /// as a configuration fault, when the request holds several. Use
-    /// `ApproveTokens` to select among several and keep their rights separate.
+    /// A shorthand for a request of one token, or of none. The server refuses
+    /// it, as a configuration fault, when the request holds several tokens, or
+    /// grants rights to a request that asks for no token: a client that wants
+    /// only subject information gets no token. Use `ApproveTokens` to select
+    /// among several and keep their rights separate.
     Approve {
         /// The rights attached to the issued token.
         access: Vec<AccessItem>,

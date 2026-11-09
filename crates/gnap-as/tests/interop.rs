@@ -691,65 +691,70 @@ fn a_broken_nonce_source_is_reported_not_fatal() {
     );
 }
 
-/// A random source that stops working fails the request with a 500, and a
-/// failed rotation leaves the issued token and its credential in place.
+/// A random source that stops working fails the request with a 500 and
+/// publishes nothing, whichever draw fails: the grant isn't created, and a
+/// refused rotation leaves the token and its credential in place.
 #[test]
 fn an_unavailable_nonce_source_fails_without_publishing() {
-    /// Counts draws, and fails every draw while the shared switch is on.
-    struct Switchable {
+    /// Counts draws, and fails the draw that the shared countdown names.
+    struct Failing {
         draws: Cell<u32>,
-        failing: Rc<Cell<bool>>,
+        fail_at: Rc<Cell<Option<u32>>>,
     }
-    impl Nonces for Switchable {
+    impl Nonces for Failing {
         fn next(&self) -> Result<String, gnap_as::NonceError> {
-            if self.failing.get() {
-                return Err(gnap_as::NonceError);
-            }
             self.draws.set(self.draws.get() + 1);
+            if let Some(remaining) = self.fail_at.get() {
+                if remaining == 1 {
+                    self.fail_at.set(None);
+                    return Err(gnap_as::NonceError);
+                }
+                self.fail_at.set(Some(remaining - 1));
+            }
             Ok(format!("nonce{:04}", self.draws.get()))
         }
     }
 
-    let failing = Rc::new(Cell::new(true));
-    let as_ = AuthorizationServer::new(
-        AlwaysInteract {
-            interacted: Cell::new(true),
-        },
-        OneKey(RSA_SPKI),
-        MemoryStorage::new(),
-        Switchable {
-            draws: Cell::new(0),
-            failing: Rc::clone(&failing),
-        },
-        Endpoints {
-            grant: GRANT.into(),
-            continuation: CONTINUE.into(),
-            interaction: "https://as.example/i".into(),
-            token_management: "https://as.example/token".into(),
-        },
-    )
-    .with_key_rotation(false);
-    let transport = Direct::wrapping(&as_);
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    for position in 1..=3 {
+        let fail_at = Rc::new(Cell::new(None));
+        let as_ = AuthorizationServer::new(
+            AlwaysInteract {
+                interacted: Cell::new(true),
+            },
+            OneKey(RSA_SPKI),
+            MemoryStorage::new(),
+            Failing {
+                draws: Cell::new(0),
+                fail_at: Rc::clone(&fail_at),
+            },
+            Endpoints {
+                grant: GRANT.into(),
+                continuation: CONTINUE.into(),
+                interaction: "https://as.example/i".into(),
+                token_management: "https://as.example/token".into(),
+            },
+        );
+        let transport = Direct::wrapping(&as_);
 
-    let mut refused = Session::new(&transport, &signer, GRANT);
-    assert!(refused.start(&request(), 1_000).is_err());
-    let (_, response) = transport.exchanges.borrow()[0].clone();
-    assert_eq!(response.status, 500);
-    assert!(String::from_utf8_lossy(&response.body).contains("nonce source"));
+        fail_at.set(Some(position));
+        let mut refused = Session::new(&transport, &signer, GRANT);
+        assert!(refused.start(&request(), 1_000).is_err(), "draw {position}");
+        let (_, response) = transport.exchanges.borrow().last().unwrap().clone();
+        assert_eq!(response.status, 500, "draw {position}");
+        assert!(String::from_utf8_lossy(&response.body).contains("nonce source"));
+        assert_eq!(as_.storage().len().unwrap(), 0, "draw {position}");
 
-    failing.set(false);
-    let mut client = Session::new(&transport, &signer, GRANT);
-    client.start(&request(), 1_000).unwrap();
-    failing.set(true);
-    assert!(client.rotate_token(None, 1_001).is_err());
-    let (_, response) = transport.exchanges.borrow().last().unwrap().clone();
-    assert_eq!(response.status, 500);
+        let mut client = Session::new(&transport, &signer, GRANT);
+        client.start(&request(), 1_000).unwrap();
+        fail_at.set(Some(position));
+        assert!(client.rotate_token(None, 1_001).is_err(), "draw {position}");
+        let (_, response) = transport.exchanges.borrow().last().unwrap().clone();
+        assert_eq!(response.status, 500, "draw {position}");
 
-    // The refused rotation published nothing: the same credential rotates once
-    // the source works again.
-    failing.set(false);
-    client.rotate_token(None, 1_002).unwrap();
+        // Nothing was published: the same credential rotates once the source works.
+        client.rotate_token(None, 1_002).unwrap();
+    }
 }
 
 /// GNAP-9635-§2.5-M07 — when interaction is required and the client offers no
@@ -3585,6 +3590,57 @@ fn an_unknown_user_reference_in_a_modification_is_refused() {
         response.r#continue.is_some(),
         "the pending grant can still continue"
     );
+}
+
+/// §2: a client that only wants subject information omits `access_token`.
+/// An approval then releases the subject and issues no token, and a policy
+/// that grants rights to such a request is a configuration fault.
+#[test]
+fn a_request_for_no_token_is_approved_without_one() {
+    struct ReleaseSubject(Vec<AccessItem>);
+    impl Policy for ReleaseSubject {
+        fn evaluate(&self, _request: &GrantRequest) -> Decision {
+            Decision::Approve {
+                access: self.0.clone(),
+                subject: Some(ReleasedSubject {
+                    ground: SubjectGround::EstablishedOtherwise("synthetic test owner"),
+                    subject: Box::new(
+                        serde_json::from_str(
+                            r#"{"sub_ids":[{"format":"opaque","id":"XUT2MFM1XBIKJKSDU8QM"}]}"#,
+                        )
+                        .unwrap(),
+                    ),
+                }),
+            }
+        }
+    }
+    let served = |access: Vec<AccessItem>| {
+        let as_ = AuthorizationServer::new(
+            ReleaseSubject(access),
+            OneKey(RSA_SPKI),
+            MemoryStorage::new(),
+            Counted(Cell::new(0)),
+            Endpoints {
+                grant: GRANT.into(),
+                continuation: CONTINUE.into(),
+                interaction: "https://as.example/i".into(),
+                token_management: "https://as.example/token".into(),
+            },
+        );
+        let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+        let body = br#"{"client":"client-541-ab","subject":{"sub_id_formats":["opaque"]}}"#;
+        as_.handle(&signed_grant(&signer, body, 1_000), 1_000)
+    };
+
+    let response = served(Vec::new());
+    assert_eq!(response.status, 200, "{}", body_of(&response));
+    let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+    assert!(body.get("access_token").is_none(), "{body}");
+    assert_eq!(body["subject"]["sub_ids"][0]["format"], "opaque");
+
+    let response = served(vec![AccessItem::Reference("dolphin-metadata".into())]);
+    assert_eq!(response.status, 500, "{}", body_of(&response));
+    assert!(body_of(&response).contains("asks for no token"));
 }
 
 /// `Decision::Approve` names no token, so a request for several is a policy

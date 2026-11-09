@@ -31,7 +31,12 @@ fn selected(
     approvals: Vec<TokenApproval>,
 ) -> Result<Vec<TokenApproval>, HttpResponse> {
     let Some(wanted) = &request.access_token else {
-        return Err(misconfigured("token selection requires a token request"));
+        // A request for no token is approved with none.
+        return if approvals.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err(misconfigured("token selection requires a token request"))
+        };
     };
     if approvals.is_empty() || approvals.len() > MAX_APPROVALS {
         return Err(misconfigured(
@@ -133,25 +138,24 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             }
             tokens.push(token);
         }
-        let Some(cardinality) = request
-            .access_token
-            .as_ref()
-            .map(|tokens| tokens.cardinality)
-        else {
-            return misconfigured("token selection requires a token request");
+        let response_tokens = match request.access_token.as_ref() {
+            Some(requested) => {
+                let response_tokens = AccessTokenResponse {
+                    cardinality: requested.cardinality,
+                    tokens,
+                };
+                if response_tokens.validate().is_err() {
+                    return misconfigured("invalid prepared token response");
+                }
+                Some(response_tokens)
+            }
+            None => None,
         };
-        let response_tokens = AccessTokenResponse {
-            cardinality,
-            tokens,
-        };
-        if response_tokens.validate().is_err() {
-            return misconfigured("invalid prepared token response");
-        }
         // Only this final assignment replaces old authority in the candidate.
         // Its caller still has to commit the whole aggregate by create/CAS.
         aggregate.tokens = records;
         let mut response = GrantResponse {
-            access_token: Some(response_tokens),
+            access_token: response_tokens,
             ..GrantResponse::default()
         };
         complete_approval(
