@@ -379,6 +379,7 @@ impl ResourceClient {
                 &policy,
                 clock,
             )
+            .map(drop)
             .map_err(|error| match error {
                 gnap_rs::AuthorizationError::Denied => ResourceError::Denied,
                 gnap_rs::AuthorizationError::Unavailable => ResourceError::Unavailable,
