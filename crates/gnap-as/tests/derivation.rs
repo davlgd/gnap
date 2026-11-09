@@ -149,7 +149,7 @@ impl DerivationPolicy for Mapping {
         })
     }
 }
-fn signed(body: &Value, signer: &Ps256Signer, now: u64) -> HttpRequest {
+fn signed(body: &Value, signer: &dyn gnap_crypto::Signer, now: u64) -> HttpRequest {
     sign_request(
         HttpRequest::new("POST", GRANT).json_body(serde_json::to_vec(body).unwrap()),
         signer,
@@ -974,4 +974,107 @@ fn total_retained_derived_grants_are_bounded_and_maintenance_releases_capacity()
         .lookup(GrantSelector::AccessToken("candidate257"))
         .unwrap()
         .is_some());
+}
+
+/// Resolves the client to its PS256 key, and RS1 to the key of `0` both as a
+/// client of the derived grant and as a registered resource server.
+struct DerivingRs(&'static dyn gnap_crypto::JwkSigner);
+impl DerivingRs {
+    fn key(&self) -> KeyObject {
+        serde_json::from_value(json!({"proof":"httpsig", "jwk":self.0.public_jwk().unwrap()}))
+            .unwrap()
+    }
+}
+impl KeyResolver for DerivingRs {
+    fn resolve(&self, identity: &Client) -> Option<Box<dyn Verifier>> {
+        match identity.as_reference()? {
+            "client" => Some(Box::new(client().verifier())),
+            "rs1" => Some(Box::new(
+                gnap_crypto::PublicKey::for_httpsig(self.key().jwk.as_ref()?).ok()?,
+            )),
+            _ => None,
+        }
+    }
+}
+impl ResourceServerResolver for DerivingRs {
+    fn resolve(&self, identity: &ResourceServer) -> Option<ResolvedResourceServer> {
+        let name = identity.as_reference()?;
+        ["rs1", "rs2"]
+            .contains(&name)
+            .then(|| ResolvedResourceServer {
+                id: RsId(name.into()),
+                key: self.key(),
+            })
+    }
+}
+
+/// An RS1 with an ES256 or an Ed25519 key derives a child bound to that key
+/// and manages it; a key of the other algorithm under the same `kid` can't.
+#[test]
+fn es256_and_ed25519_resource_servers_derive_and_manage_their_own_children() {
+    static ES256: OnceLock<gnap_crypto::Es256Signer> = OnceLock::new();
+    static ED25519: OnceLock<gnap_crypto::Ed25519Signer> = OnceLock::new();
+    let es256 = ES256.get_or_init(|| gnap_crypto::Es256Signer::generate("same-kid").unwrap());
+    let ed25519 = ED25519.get_or_init(|| gnap_crypto::Ed25519Signer::generate("same-kid").unwrap());
+    let pairs: [(
+        &'static dyn gnap_crypto::JwkSigner,
+        &'static dyn gnap_crypto::JwkSigner,
+    ); 2] = [(es256, ed25519), (ed25519, es256)];
+    for (registered, impostor) in pairs {
+        let resolver = DerivingRs(registered);
+        let server = AuthorizationServer::new(
+            GrantPolicy,
+            DerivingRs(registered),
+            Arc::new(MemoryStorage::new()),
+            Counter::default(),
+            Endpoints {
+                grant: GRANT.into(),
+                continuation: "https://as.example/continue".into(),
+                interaction: "https://as.example/interact".into(),
+                token_management: "https://as.example/token".into(),
+            },
+        );
+        let issued = server.handle(
+            &signed(
+                &json!({"client":"client","access_token":{"access":["folder"]}}),
+                client(),
+                1000,
+            ),
+            1000,
+        );
+        let parent = token(&issued);
+        let nonces = MemoryStorage::new();
+        let refused = server.handle_grant_with_derivation(
+            &signed(&body(&parent), impostor, 1000),
+            &resolver,
+            &Mapping,
+            &nonces,
+            &|| 1000,
+        );
+        assert_eq!(refused.status, 400, "{}", registered.algorithm());
+        let response = server.handle_grant_with_derivation(
+            &signed(&body(&parent), registered, 1000),
+            &resolver,
+            &Mapping,
+            &nonces,
+            &|| 1000,
+        );
+        let child = token(&response);
+        assert_eq!(
+            child.key.as_ref().unwrap().as_value(),
+            Some(&resolver.key())
+        );
+        let manage = child.manage.as_ref().unwrap();
+        let delete = |signer: &dyn gnap_crypto::Signer| {
+            sign_request(
+                HttpRequest::new("DELETE", &manage.uri),
+                signer,
+                Some(&manage.access_token.value),
+                1001,
+            )
+            .unwrap()
+        };
+        assert_ne!(server.handle(&delete(impostor), 1001).status, 204);
+        assert_eq!(server.handle(&delete(registered), 1001).status, 204);
+    }
 }
