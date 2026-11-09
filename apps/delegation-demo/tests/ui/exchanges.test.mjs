@@ -147,7 +147,7 @@ function page() {
       querySelectorAll: () => buttons,
       createElement: element,
     },
-    fetch: url => new Promise(resolve => requests.push({ url, resolve })),
+    fetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
     setTimeout: callback => { timers.push(callback); return timers.length; },
     clearTimeout: () => {},
     location: { origin: 'https://demo.example', assign() {} },
@@ -289,5 +289,34 @@ test('a status read that leaves and answers while an action runs is dropped', as
   await started;
   assert.ok(lab.routes().includes('/gnap'));
   assert.ok(!lab.routes().includes('/resource/folder'));
+});
+
+test('a start sends the proof chosen for its grant, and a JOSE choice keeps identity and push off', async () => {
+  const lab = page();
+  lab.answer(0, { state: 'new', trace: { attempts: [], dropped: 0 } });
+  await settle();
+  assert.equal(lab.nodes.get('[data-action="start-identity"]').disabled, false);
+  lab.nodes.get('#proof-jwsd').checked = true;
+  const started = lab.nodes.get('[data-action="start"]').click();
+  const request = lab.requests[lab.requests.length - 1];
+  assert.equal(request.url, '/api/start');
+  assert.deepEqual(JSON.parse(request.options.body), { proof: 'jwsd' });
+  assert.equal(request.options.headers['content-type'], 'application/json');
+  lab.answer(lab.requests.length - 1, { state: 'failed', proof: { method: 'jwsd', alg: 'EdDSA' }, trace: { attempts: [], dropped: 0 } });
+  await started;
+  assert.equal(lab.nodes.get('#proof').textContent, 'Detached JWS, EdDSA');
+  assert.equal(lab.nodes.get('[data-action="start-identity"]').disabled, true, 'identity uses HTTP message signatures only');
+  assert.equal(lab.nodes.get('[data-action="start-push"]').disabled, true);
+});
+
+test('the proof shown comes from the page tables, never from the answer', async () => {
+  const lab = page();
+  lab.answer(0, { state: 'approved', proof: { method: CANARY, alg: CANARY }, trace: { attempts: [], dropped: 0 } });
+  await settle();
+  assert.equal(lab.nodes.get('#proof').textContent, 'None yet');
+  const other = page();
+  other.answer(0, { state: 'approved', proof: { method: 'jws', alg: CANARY }, trace: { attempts: [], dropped: 0 } });
+  await settle();
+  assert.equal(other.nodes.get('#proof').textContent, 'JWS in the body, Unknown');
 });
 

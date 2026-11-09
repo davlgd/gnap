@@ -266,3 +266,8 @@ details > summary { cursor: pointer; color: var(--accent); margin-top: 1rem; }
   /* As specific as the lane rules above, and later, so it wins over them. */
   .exchanges .exchange .call, .exchanges .exchange .reply { margin: 0; border: 0; padding: 0; text-align: left; }
 }
+
+/* A choice that applies to what comes next. */
+.proofs { border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.75rem 1rem; margin: 1rem 0 0; }
+.proofs legend { font-weight: 600; padding: 0 0.25rem; }
+.proofs label.inline { margin: 0.4rem 0; }
