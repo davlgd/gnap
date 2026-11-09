@@ -1562,22 +1562,17 @@ fn the_grant_endpoint_accepts_json_post_and_advertises_options() {
     assert_eq!(response.status, 405);
     assert_eq!(response.header_value("allow"), Some("POST, OPTIONS"));
 
-    let response = as_.handle(
-        &HttpRequest::new("POST", GRANT)
-            .header("Content-Type", "text/plain")
-            .json_body(br#"{"client":"client-541-ab"}"#.to_vec()),
-        1_000,
-    );
+    let mut text = HttpRequest::new("POST", GRANT).header("Content-Type", "text/plain");
+    text.body = Some(br#"{"client":"client-541-ab"}"#.to_vec());
+    let response = as_.handle(&text, 1_000);
     assert_eq!(response.status, 415);
     assert_eq!(response.header_value("accept"), Some("application/json"));
 
     // The media type may carry parameters; only the type itself is compared.
-    let response = as_.handle(
-        &HttpRequest::new("POST", GRANT)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .json_body(br#"{"client":"stranger"}"#.to_vec()),
-        1_000,
-    );
+    let mut charset =
+        HttpRequest::new("POST", GRANT).header("Content-Type", "application/json; charset=utf-8");
+    charset.body = Some(br#"{"client":"stranger"}"#.to_vec());
+    let response = as_.handle(&charset, 1_000);
     assert_eq!(response.status, 400, "{}", body_of(&response));
     assert!(body_of(&response).contains("invalid_client"));
 
@@ -1586,13 +1581,11 @@ fn the_grant_endpoint_accepts_json_post_and_advertises_options() {
         ["application/json", "text/html"],
         ["text/html", "application/json"],
     ] {
-        let response = as_.handle(
-            &HttpRequest::new("POST", GRANT)
-                .header("Content-Type", types[0])
-                .header("Content-Type", types[1])
-                .json_body(br#"{"client":"stranger"}"#.to_vec()),
-            1_000,
-        );
+        let mut ambiguous = HttpRequest::new("POST", GRANT)
+            .header("Content-Type", types[0])
+            .header("Content-Type", types[1]);
+        ambiguous.body = Some(br#"{"client":"stranger"}"#.to_vec());
+        let response = as_.handle(&ambiguous, 1_000);
         assert_eq!(response.status, 415, "{types:?}");
     }
 }

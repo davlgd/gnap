@@ -36,13 +36,16 @@ impl HttpRequest {
         self
     }
 
-    /// Sets a JSON body and its `Content-Type`.
+    /// Sets a JSON body, and makes `application/json` its only `Content-Type`.
+    ///
+    /// Any `Content-Type` field set before is replaced. To build a message whose
+    /// media type disagrees with its body, set [`Self::body`] directly.
     #[must_use]
     pub fn json_body(mut self, body: Vec<u8>) -> Self {
-        if self.header_value("content-type").is_none() {
-            self.headers
-                .push(("Content-Type".into(), "application/json".into()));
-        }
+        self.headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
+        self.headers
+            .push(("Content-Type".into(), "application/json".into()));
         self.body = Some(body);
         self
     }
