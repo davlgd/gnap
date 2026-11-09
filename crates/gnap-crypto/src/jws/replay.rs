@@ -135,10 +135,15 @@ impl ReplayCache {
     }
 
     /// How many identifiers the cache holds, expired ones included until the
-    /// next reservation forgets them.
+    /// next reservation forgets them. A poisoned lock still reports what the
+    /// cache holds, while [`JwsReplayMemory::reserve`] refuses everything.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.state.lock().map_or(0, |state| state.held.len())
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .held
+            .len()
     }
 
     /// Whether the cache holds no identifier.
