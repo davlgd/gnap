@@ -42,7 +42,7 @@
 <h3>Check what was retired</h3>
 <div class="actions"><button data-action="check-retired">Present the retired token</button><button data-action="check-old-key">Sign with the previous key</button></div>
 <p class="hint">A key change proves the old and new keys together, and the new key stays in the client process. A session makes three key-generation attempts at most, failed ones included, and the client process four per minute across sessions.</p>
-<p class="hint">On each request, the file server asks the authorization server about the token's authority and reserves the request's nonce once for its presentation key. No positive decision is cached. This channel is the example's own, not GNAP introspection, and a single block can't be revoked.</p>
+<p class="hint">After it verifies the proof and finds the right in the token, the file server asks the authorization server about the request's authority, and the authorization server reserves the request's nonce once for the token's presentation key. A request that fails the proof or the local rights stops before that check. No positive decision is cached. This channel is the example's own, not GNAP introspection, and a single block can't be revoked.</p>
 <p><a class="to-report" href="#session">Go to the session</a></p>
 </section>
 
