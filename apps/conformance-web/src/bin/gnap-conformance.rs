@@ -168,7 +168,12 @@ impl Default for Lifecycle {
 }
 
 /// The scenario's clock: the system's, with waits the operator can cut.
-struct SystemClock(std::sync::Arc<std::sync::atomic::AtomicBool>);
+/// The system's clocks: the wall clock for the protocol's times, and a
+/// monotonic origin for the scenario's deadlines.
+struct SystemClock(
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::time::Instant,
+);
 
 impl scenario::Clock for SystemClock {
     fn now(&self) -> u64 {
@@ -188,6 +193,9 @@ impl scenario::Clock for SystemClock {
     }
     fn interrupted(&self) -> bool {
         self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn elapsed(&self) -> u64 {
+        self.1.elapsed().as_secs()
     }
     fn pause(&self, at: u64) {
         let until = self.deadline(at, scenario::CLEANUP_WAIT);
@@ -289,7 +297,7 @@ fn lifecycle(endpoint: &str, options: &Lifecycle, local: bool, json: bool) -> Re
         admitted: &admitted,
         transport: &transport,
     };
-    let clock = SystemClock(interrupted);
+    let clock = SystemClock(interrupted, std::time::Instant::now());
     let notify = |message: &str| eprintln!("gnap-conformance: {message}");
     let report = scenario::lifecycle(&transport, &admission, &clock, &notify, &plan, local);
     // As for the other commands, a late resolution doesn't hold the process.
@@ -313,7 +321,7 @@ mod tests {
     /// the wall clock asks for.
     #[test]
     fn a_wait_is_capped_on_the_monotonic_clock() {
-        let clock = SystemClock(std::sync::Arc::default());
+        let clock = SystemClock(std::sync::Arc::default(), Instant::now());
         let now = gnap_conformance_web::scenario::Clock::now(&clock);
         let before = Instant::now();
         let far = clock.deadline(now + 100_000, 5);

@@ -107,6 +107,9 @@ impl Clock for Virtual {
     fn pause(&self, at: u64) {
         self.0.set(self.0.get().max(at));
     }
+    fn elapsed(&self) -> u64 {
+        self.0.get()
+    }
 }
 
 /// Sends what the admissions permit to the AS, or to a resource that
@@ -114,7 +117,7 @@ impl Clock for Virtual {
 /// the scenario's own logic is under test here.
 struct InMemory<'a> {
     server: &'a Server,
-    clock: &'a Virtual,
+    clock: &'a dyn Clock,
     admitted: &'a Admitted,
     sent: RefCell<Vec<(String, String, u64)>>,
     /// The resource's answer to a token, live at the AS or not; `None`
@@ -205,7 +208,27 @@ fn run_with(
     gnap_conformance_web::cli::Report,
     Vec<(String, String, u64)>,
 ) {
-    let clock = Virtual(Cell::new(1_700_000_000));
+    run_on(
+        &Virtual(Cell::new(1_700_000_000)),
+        server,
+        plan,
+        notify,
+        resource,
+        tamper,
+    )
+}
+
+fn run_on(
+    clock: &dyn Clock,
+    server: &Server,
+    plan: &Plan,
+    notify: &dyn Fn(&str),
+    resource: fn(&str, bool) -> Option<u16>,
+    tamper: Tamper,
+) -> (
+    gnap_conformance_web::cli::Report,
+    Vec<(String, String, u64)>,
+) {
     let admitted = Admitted::new(GRANT, false).unwrap();
     admitted.allow("POST", GRANT);
     admitted.allow("OPTIONS", GRANT);
@@ -214,13 +237,13 @@ fn run_with(
     }
     let transport = InMemory {
         server,
-        clock: &clock,
+        clock,
         admitted: &admitted,
         sent: RefCell::new(Vec::new()),
         resource,
         tamper,
     };
-    let report = scenario::lifecycle(&transport, &Admit(&admitted), &clock, notify, plan, false);
+    let report = scenario::lifecycle(&transport, &Admit(&admitted), clock, notify, plan, false);
     let sent = transport.sent.into_inner();
     (report, sent)
 }
@@ -585,6 +608,10 @@ fn cleanup_revokes_a_token_the_scenario_still_holds() {
         .map(|(_, _, at)| *at)
         .collect();
     assert_eq!(cleanup[0], cleanup[1], "{sent:?}");
+    // A retried revocation is signed at a later second than the refused
+    // one, so that it carries its own replay identity.
+    let first = sent.iter().find(|(m, _, _)| m == "DELETE").unwrap().2;
+    assert!(cleanup[0] > first, "{sent:?}");
 }
 
 /// Without a continuation API, which RFC 9635 allows, there is no grant to
@@ -789,4 +816,321 @@ fn the_report_carries_the_plan_profile() {
         "the resource URI stays out"
     );
     assert_eq!(outcome(&report, "key-rotation"), Some(Outcome::Skipped));
+}
+
+fn json_answer(status: u16, body: &serde_json::Value) -> HttpResponse {
+    HttpResponse {
+        status,
+        headers: vec![
+            ("Content-Type".into(), "application/json".into()),
+            ("Cache-Control".into(), "no-store".into()),
+        ],
+        body: serde_json::to_vec(body).unwrap(),
+    }
+}
+
+/// Rewrites the token lifetime the AS's first answer gives.
+fn with_lifetime(response: HttpResponse, seconds: u64) -> HttpResponse {
+    let mut body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+    body["access_token"]["expires_in"] = seconds.into();
+    HttpResponse {
+        body: serde_json::to_vec(&body).unwrap(),
+        ..response
+    }
+}
+
+/// A GNAP error to a revocation is the AS's refusal, which decides
+/// nothing: the check is inconclusive, never failed.
+#[test]
+fn a_refused_revocation_is_inconclusive() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static REFUSED: AtomicBool = AtomicBool::new(false);
+    fn refuse(request: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+        if request.method == "DELETE"
+            && request.url.starts_with("https://as.example/manage")
+            && !REFUSED.swap(true, Ordering::SeqCst)
+        {
+            return json_answer(400, &serde_json::json!({"error": "invalid_client"}));
+        }
+        forward()
+    }
+    let server = server(false, false);
+    let (report, _) = run_with(
+        &server,
+        &plan("jwsd", "ES256", false, false),
+        &|_| {},
+        live_tokens,
+        refuse,
+    );
+    assert_eq!(
+        outcome(&report, "token-revocation"),
+        Some(Outcome::Inconclusive),
+        "{}",
+        report.text()
+    );
+    assert_eq!(outcome(&report, "token-cleanup"), Some(Outcome::Passed));
+    assert_eq!(report.exit_code(), 2);
+}
+
+/// A token that expires during the scenario's wait is never presented: a
+/// read after its lifetime decides nothing.
+#[test]
+fn an_expired_token_is_never_presented() {
+    fn one_second(request: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+        if request.method == "POST" && request.url == GRANT {
+            return with_lifetime(forward(), 1);
+        }
+        forward()
+    }
+    let server = server(false, false);
+    let (report, sent) = run_with(
+        &server,
+        &plan("httpsig", "EdDSA", true, false),
+        &|_| {},
+        live_tokens,
+        one_second,
+    );
+    assert_eq!(
+        outcome(&report, "resource-access"),
+        Some(Outcome::Inconclusive),
+        "{}",
+        report.text()
+    );
+    // The token with its one second is never sent; the rotated one is.
+    let rotation = sent
+        .iter()
+        .position(|(m, u, _)| m == "POST" && u.starts_with("https://as.example/manage"))
+        .unwrap();
+    assert!(
+        sent[..rotation].iter().all(|(m, _, _)| m != "GET"),
+        "{sent:?}"
+    );
+    assert_ne!(report.exit_code(), 0);
+}
+
+/// An approved token already past its lifetime is not "no token": the
+/// scenario couldn't run, which is inconclusive.
+#[test]
+fn an_approved_but_expired_token_is_inconclusive() {
+    fn expired(request: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+        if request.method == "POST" && request.url == GRANT {
+            return with_lifetime(forward(), 0);
+        }
+        forward()
+    }
+    let server = server(false, false);
+    let (report, _) = run_with(
+        &server,
+        &plan("httpsig", "ES256", false, false),
+        &|_| {},
+        live_tokens,
+        expired,
+    );
+    assert_eq!(
+        outcome(&report, "token-issued"),
+        Some(Outcome::Inconclusive),
+        "{}",
+        report.text()
+    );
+    assert_eq!(report.exit_code(), 2);
+}
+
+thread_local! {
+    /// The continuation of the grant's first answer.
+    static CONTINUATION: std::cell::RefCell<serde_json::Value> = const { std::cell::RefCell::new(serde_json::Value::Null) };
+}
+
+/// A GNAP error with a new continuation, such as too_fast after the
+/// scenario waited as asked, is followed and recorded as inconclusive.
+#[test]
+fn a_recoverable_error_while_polling_is_inconclusive() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static ANSWERED: AtomicBool = AtomicBool::new(false);
+    fn too_fast_once(request: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+        if request.method == "POST" && request.url == GRANT {
+            let response = forward();
+            let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+            CONTINUATION.with(|cell| *cell.borrow_mut() = body["continue"].clone());
+            return response;
+        }
+        if request.method == "POST"
+            && request.url.starts_with("https://as.example/continue")
+            && !ANSWERED.swap(true, Ordering::SeqCst)
+        {
+            let continuation = CONTINUATION.with(|cell| cell.borrow().clone());
+            return json_answer(
+                400,
+                &serde_json::json!({"error": "too_fast", "continue": continuation}),
+            );
+        }
+        forward()
+    }
+    let server = server(true, false);
+    let notify = |message: &str| {
+        let handle = message.rsplit('/').next().unwrap();
+        server.complete_interaction(handle, 1_700_000_000).unwrap();
+    };
+    let (report, _) = run_with(
+        &server,
+        &plan("httpsig", "ES256", false, false),
+        &notify,
+        live_tokens,
+        too_fast_once,
+    );
+    assert_eq!(
+        outcome(&report, "continuation-error"),
+        Some(Outcome::Inconclusive),
+        "{}",
+        report.text()
+    );
+    assert_eq!(outcome(&report, "token-issued"), Some(Outcome::Passed));
+    assert_eq!(report.exit_code(), 2);
+}
+
+/// An interrupt before the first request, as during key generation, sends
+/// nothing at all.
+#[test]
+fn an_interrupt_before_the_first_request_sends_nothing() {
+    INTERRUPTED.with(|flag| flag.set(true));
+    let server = server(false, false);
+    let (report, sent) = run(&server, &plan("jws", "RS256", true, true), &|_| {});
+    INTERRUPTED.with(|flag| flag.set(false));
+    assert!(sent.is_empty(), "{sent:?}");
+    assert_eq!(report.exit_code(), 2);
+}
+
+/// Without a continuation to wait for, a retried revocation still waits for
+/// a later second than the refused one, so that its proof is new.
+#[test]
+fn a_retried_revocation_is_signed_at_a_later_second() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static REFUSED: AtomicBool = AtomicBool::new(false);
+    thread_local! {
+        /// The `created` parameter of each revocation's HTTP signature.
+        static SIGNED: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    }
+    fn refuse_once_without_continuation(
+        request: &HttpRequest,
+        forward: &dyn Fn() -> HttpResponse,
+    ) -> HttpResponse {
+        if request.method == "DELETE" && request.url.starts_with("https://as.example/manage") {
+            let created = request
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("signature-input"))
+                .and_then(|(_, value)| value.split("created=").nth(1))
+                .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+                .and_then(|digits| digits.parse().ok())
+                .unwrap();
+            SIGNED.with(|signed| signed.borrow_mut().push(created));
+        }
+        if request.method == "DELETE"
+            && request.url.starts_with("https://as.example/manage")
+            && !REFUSED.swap(true, Ordering::SeqCst)
+        {
+            return HttpResponse {
+                status: 500,
+                headers: vec![],
+                body: vec![],
+            };
+        }
+        let mut response = forward();
+        if request.method == "POST" && request.url == GRANT {
+            let mut body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+            body.as_object_mut().unwrap().remove("continue");
+            response.body = serde_json::to_vec(&body).unwrap();
+        }
+        response
+    }
+    let server = server(false, false);
+    let (report, sent) = run_with(
+        &server,
+        &plan("httpsig", "ES256", false, false),
+        &|_| {},
+        live_tokens,
+        refuse_once_without_continuation,
+    );
+    assert_eq!(
+        outcome(&report, "token-cleanup"),
+        Some(Outcome::Passed),
+        "{}",
+        report.text()
+    );
+    let deletes: Vec<u64> = sent
+        .iter()
+        .filter(|(m, _, _)| m == "DELETE")
+        .map(|(_, _, at)| *at)
+        .collect();
+    assert_eq!(deletes.len(), 2, "{sent:?}");
+    assert!(deletes[1] > deletes[0], "{sent:?}");
+    let signed = SIGNED.with(|signed| signed.borrow().clone());
+    assert_eq!(signed.len(), 2);
+    assert!(
+        signed[1] > signed[0],
+        "the retry's proof is new: {signed:?}"
+    );
+}
+
+/// A clock whose wall time goes back by twenty seconds after its first wait,
+/// within the AS's tolerance of clock skew, while elapsed time keeps going.
+struct SetBack {
+    now: Cell<u64>,
+    elapsed: Cell<u64>,
+    set_back: Cell<bool>,
+}
+impl Clock for SetBack {
+    fn now(&self) -> u64 {
+        self.now.get()
+    }
+    fn sleep_until(&self, at: u64) -> bool {
+        self.pause(at);
+        true
+    }
+    fn interrupted(&self) -> bool {
+        false
+    }
+    fn pause(&self, at: u64) {
+        let step = at.saturating_sub(self.now.get());
+        self.now.set(self.now.get() + step);
+        self.elapsed.set(self.elapsed.get() + step);
+        if !self.set_back.replace(true) {
+            self.now.set(self.now.get() - 20);
+        }
+    }
+    fn elapsed(&self) -> u64 {
+        self.elapsed.get()
+    }
+}
+
+/// Setting the wall clock back doesn't let the scenario run beyond its wait
+/// and cleanup's. The session itself refuses a poll before the
+/// continuation's wait on the wall clock, so this run ends early either way:
+/// it bounds the run, and doesn't single out the scenario's elapsed-time
+/// deadline.
+#[test]
+fn the_interaction_wait_ignores_a_wall_clock_set_back() {
+    let clock = SetBack {
+        now: Cell::new(1_700_000_000),
+        elapsed: Cell::new(0),
+        set_back: Cell::new(false),
+    };
+    let server = server(true, false);
+    let (report, _) = run_on(
+        &clock,
+        &server,
+        &plan("httpsig", "ES256", false, false),
+        &|_| {},
+        live_tokens,
+        untouched,
+    );
+    assert_eq!(
+        outcome(&report, "interaction-outcome"),
+        Some(Outcome::Inconclusive)
+    );
+    // The 30-second wait, then cleanup's own bounded wait.
+    assert!(
+        clock.elapsed.get() <= 30 + gnap_conformance_web::scenario::CLEANUP_WAIT,
+        "{} seconds",
+        clock.elapsed.get()
+    );
 }

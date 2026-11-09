@@ -139,6 +139,9 @@ pub trait Clock {
     /// Waits until `at`, even after an interruption: cleanup needs it, and
     /// its caller bounds it.
     fn pause(&self, at: u64);
+    /// Seconds elapsed since an origin of the clock's choosing, which a
+    /// change of the wall clock doesn't move: deadlines use it.
+    fn elapsed(&self) -> u64;
 }
 
 /// What the scenario may add to the requests its transport sends.
@@ -252,6 +255,9 @@ fn showable(link: &str, local: bool) -> bool {
         && (url.scheme() == "https" || loopback)
 }
 
+/// A token the scenario holds: its value, its key, and when it expires.
+type Held = (TokenValue, Key, Option<u64>);
+
 /// What a resource read observed.
 enum Read {
     NotRequested,
@@ -267,7 +273,7 @@ struct Run<'a, T: HttpTransport> {
     clock: &'a dyn Clock,
     findings: Vec<Finding>,
     /// The token the scenario presents, and the key that presents it.
-    token: Option<(TokenValue, Key, Option<u64>)>,
+    token: Option<Held>,
     /// When the last continuation answer arrived, which its wait counts from.
     continued_at: u64,
     /// Whether the AS answered the grant request, so that it may hold state
@@ -339,7 +345,7 @@ impl<T: HttpTransport> Run<'_, T> {
 
     /// A resource request proven with `key`, once the clock moved past
     /// `after`, so that the proof is fresh.
-    fn present(&self, transport: &T, token: &TokenValue, key: &Key, after: u64) -> Read {
+    fn present(&self, transport: &T, (token, key, expires_at): &Held, after: u64) -> Read {
         let Some(resource) = self.plan.resource.as_ref() else {
             return Read::NotRequested;
         };
@@ -347,8 +353,9 @@ impl<T: HttpTransport> Run<'_, T> {
             return Read::Unavailable;
         }
         let now = self.clock.now();
-        // A wall clock set back would repeat a second the resource saw.
-        if now <= after {
+        // A wall clock set back would repeat a second the resource saw, and
+        // the wait may outlast the token.
+        if now <= after || expires_at.is_some_and(|at| now >= at) {
             return Read::Unavailable;
         }
         let request = HttpRequest::new("GET", resource.as_str());
@@ -366,8 +373,8 @@ impl<T: HttpTransport> Run<'_, T> {
 
     /// Reads the resource with `token` and `key`, expecting it accepted, and
     /// records the finding; returns whether it was accepted.
-    fn witness(&mut self, transport: &T, id: &'static str, token: &TokenValue, key: &Key) -> bool {
-        let read = self.present(transport, token, key, self.clock.now());
+    fn witness(&mut self, transport: &T, id: &'static str, held: &Held) -> bool {
+        let read = self.present(transport, held, self.clock.now());
         let (outcome, accepted) = match read {
             Read::NotRequested => (Outcome::Skipped, false),
             Read::Unavailable => (Outcome::Inconclusive, false),
@@ -433,6 +440,9 @@ pub fn lifecycle<T: HttpTransport>(
         current: Arc::clone(&key),
     };
 
+    if run.clock.interrupted() {
+        return finish(run, transport, started);
+    }
     // §9 — a key change is tried only when the AS announces it, or when the
     // operator asks for it regardless.
     let announces_rotation = plan.rotate_key.then(|| {
@@ -468,8 +478,12 @@ pub fn lifecycle<T: HttpTransport>(
     run.obtained = result.is_ok();
     run.admit_held();
     let mut approved_at = clock.now();
+    let mut issued = false;
     let mut approved = match &result {
-        Ok(Step::Approved(_)) => true,
+        Ok(Step::Approved(response)) => {
+            issued = response.access_token.is_some();
+            true
+        }
         Ok(Step::Pending(response)) => {
             let link = response
                 .interact
@@ -503,7 +517,7 @@ pub fn lifecycle<T: HttpTransport>(
     }
 
     // §5.2 — poll until approved, denied, or out of time.
-    let deadline = clock.now().saturating_add(plan.wait);
+    let deadline = clock.elapsed().saturating_add(plan.wait);
     while !approved {
         let Some(wait) = run
             .session
@@ -518,8 +532,7 @@ pub fn lifecycle<T: HttpTransport>(
             );
             return finish(run, transport, started);
         };
-        let next = clock.now().saturating_add(wait.max(1));
-        if next > deadline {
+        if clock.elapsed().saturating_add(wait.max(1)) > deadline {
             run.push(
                 "interaction-outcome",
                 Outcome::Inconclusive,
@@ -528,18 +541,33 @@ pub fn lifecycle<T: HttpTransport>(
             );
             return finish(run, transport, started);
         }
-        if !clock.sleep_until(next) {
+        if !clock.sleep_until(clock.now().saturating_add(wait.max(1))) {
             return finish(run, transport, started);
         }
         let polled = run.session.continue_grant(clock.now());
         run.continued_at = clock.now();
         run.admit_held();
         match polled {
-            Ok(Step::Approved(_)) => {
+            Ok(Step::Approved(response)) => {
+                issued = response.access_token.is_some();
                 approved = true;
                 approved_at = clock.now();
             }
-            Ok(Step::Pending(_) | Step::Recoverable(_)) => {}
+            Ok(Step::Pending(_)) => {}
+            Ok(Step::Recoverable(_)) => {
+                // §3.6 — such as too_fast, though the scenario waited as
+                // asked: the scenario follows the new continuation, and the
+                // interaction's outcome can't be read as clean.
+                if run.findings.iter().all(|f| f.id != "continuation-error") {
+                    run.push(
+                        "continuation-error",
+                        Outcome::Inconclusive,
+                        CONTINUATION,
+                        "The AS answered a poll with a GNAP error and a new continuation, \
+                         after the scenario waited as asked; it followed the new continuation.",
+                    );
+                }
+            }
             Err(ClientError::Server(error)) if error.code == ErrorCode::UserDenied => {
                 run.push(
                     "interaction-outcome",
@@ -573,13 +601,23 @@ pub fn lifecycle<T: HttpTransport>(
         }
     }
     run.hold_token(approved_at);
-    let Some((token, holder, _)) = run.token.clone() else {
-        run.push(
-            "token-issued",
-            Outcome::NotApplicable,
-            GRANT,
-            "The approved grant carries no access token the scenario can use.",
-        );
+    let Some(held) = run.token.clone() else {
+        if issued {
+            run.push(
+                "token-issued",
+                Outcome::Inconclusive,
+                GRANT,
+                "The approved grant carries an access token that expired before the scenario \
+                 could use it.",
+            );
+        } else {
+            run.push(
+                "token-issued",
+                Outcome::NotApplicable,
+                GRANT,
+                "The approved grant carries no access token the scenario can use.",
+            );
+        }
         return finish(run, transport, started);
     };
     run.push(
@@ -593,7 +631,7 @@ pub fn lifecycle<T: HttpTransport>(
         return finish(run, transport, started);
     }
     // §7.2 — the resource accepts the token, proven with its key.
-    run.witness(transport, "resource-access", &token, &holder);
+    run.witness(transport, "resource-access", &held);
 
     if run.clock.interrupted() {
         return finish(run, transport, started);
@@ -634,6 +672,10 @@ pub fn lifecycle<T: HttpTransport>(
                  scenario didn't try it.",
             );
         } else if let Ok(replacement) = generate(plan.alg, &format!("{kid}-next")) {
+            // Generating an RSA key takes long enough for an interrupt.
+            if run.clock.interrupted() {
+                return finish(run, transport, started);
+            }
             let presented = serde_json::from_value(json!({
                 "proof": method_name(plan.proof),
                 "jwk": replacement.public_jwk().unwrap_or_default()
@@ -682,10 +724,9 @@ pub fn lifecycle<T: HttpTransport>(
     // token, with the last key, has to be accepted first, or a refusal after
     // revocation could come from anything else.
     let last = run.token.clone();
-    let accepted = last.as_ref().is_some_and(|(value, key, _)| {
-        let (value, key) = (value.clone(), Arc::clone(key));
-        run.witness(transport, "resource-access-before-revocation", &value, &key)
-    });
+    let accepted = last
+        .as_ref()
+        .is_some_and(|held| run.witness(transport, "resource-access-before-revocation", held));
     if run.clock.interrupted() {
         return finish(run, transport, started);
     }
@@ -697,9 +738,9 @@ pub fn lifecycle<T: HttpTransport>(
         "The AS revoked the token through its management API with 204. A refusal leaves the \
          check inconclusive.",
     );
-    if let (Ok(()), Some((value, key, expires_at))) = (&revoked, last) {
-        let read = run.present(transport, &value, &key, clock.now());
-        let expired = expires_at.is_some_and(|at| at <= clock.now());
+    if let (Ok(()), Some(held)) = (&revoked, last) {
+        let read = run.present(transport, &held, clock.now());
+        let expired = held.2.is_some_and(|at| at <= clock.now());
         let outcome = match read {
             Read::NotRequested => Outcome::Skipped,
             _ if !accepted || expired => Outcome::Inconclusive,
@@ -742,21 +783,6 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
             );
         }
     }
-    // §5 — the continuation API is called again only after its wait. Cleanup
-    // waits it out first, for at most CLEANUP_WAIT, so that the wait never
-    // spends the network budget, which starts at cleanup's first request.
-    if let Some(wait) = run
-        .session
-        .continuation()
-        .map(gnap_types::message::Continue::effective_wait)
-    {
-        let now = run.clock.now();
-        run.clock.pause(
-            run.continued_at
-                .saturating_add(wait)
-                .min(now.saturating_add(CLEANUP_WAIT)),
-        );
-    }
     // A revoked token leaves the session, so a managed token it still holds
     // is one the scenario didn't revoke.
     let now = run.clock.now();
@@ -765,8 +791,24 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
         .usable_tokens(now)
         .and_then(|tokens| tokens.first().map(|token| token.manage.is_some()))
         .unwrap_or(false);
+    let continuation = run
+        .session
+        .continuation()
+        .map(gnap_types::message::Continue::effective_wait);
+    if managed || continuation.is_some() {
+        // Cleanup waits before its first request, for at most CLEANUP_WAIT,
+        // so that the wait never spends its network budget: until a second
+        // no earlier request was signed at, so that a retried revocation
+        // has its own replay identity, and (§5) until the continuation's
+        // wait has passed.
+        let fresh = now.saturating_add(1);
+        let ready = continuation.map_or(fresh, |wait| {
+            fresh.max(run.continued_at.saturating_add(wait))
+        });
+        run.clock.pause(ready.min(now.saturating_add(CLEANUP_WAIT)));
+    }
     if managed {
-        let revoked = run.session.revoke_token(None, now);
+        let revoked = run.session.revoke_token(None, run.clock.now());
         run.push(
             "token-cleanup",
             judged(&revoked),
