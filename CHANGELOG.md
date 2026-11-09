@@ -16,7 +16,7 @@ This file lists the changes to the published crates that affect their users, cra
 
 ### gnap-as
 
-**Breaking:** `Nonces::next` returns `Result<String, NonceError>`, so an implementation wraps its value in `Ok`. When a draw fails, the operation publishes nothing and fails with a 500, or a 503 for a resource registration, and `OsNonces` no longer panics.
+**Breaking:** `Nonces::next` returns `Result<String, NonceError>`, so an implementation wraps its value in `Ok`. When a draw fails, no partial grant or token state is published: grant, continuation, and management requests get a 500, a resource registration a 503, and an interaction completion an `InteractionError`. `OsNonces` no longer panics.
 
 **Breaking:** `Decision::Approve` applies to a request for one token or for none. When the request holds several, the server refuses it as a configuration fault: select them with `Decision::ApproveTokens`. A request for no token, which asks only for subject information, gets no token, and an approval that grants it rights is refused too.
 
