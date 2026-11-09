@@ -1,3 +1,25 @@
+[tools]
+# Documentation and commit checks, pinned so every contributor and CI run the same rules
+lychee = "0.24.2"
+node = "26.13.0"
+"npm:@commitlint/cli" = "21.2.4"
+"npm:markdownlint-cli2" = "0.23.2"
+
+[tasks."lint:docs"]
+description = "Lint the tracked Markdown files and check their internal links and anchors"
+dir = "{{ config_root }}"
+# Links to this repository on github.com resolve against the working tree, so a
+# moved or renamed file breaks the check before it breaks a published README
+run = [
+  "git ls-files -z '*.md' | xargs -0 markdownlint-cli2",
+  "git ls-files -z '*.md' | xargs -0 lychee --offline --include-fragments --no-progress --remap 'https://github.com/davlgd/gnap/(blob|tree)/main/ file://{{ config_root }}/'",
+]
+
+[tasks."lint:commits"]
+description = "Check the subjects of the commits that are not on main yet"
+dir = "{{ config_root }}"
+run = "commitlint --from origin/main --to HEAD --verbose"
+
 [tasks."publish:dry-run"]
 description = "Verify workspace publication without uploading crates"
 dir = "{{ config_root }}"

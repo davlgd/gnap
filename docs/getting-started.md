@@ -62,7 +62,6 @@ an in-memory transport, and demonstration policies and keys. Reading
 [that example](../crates/gnap-as/examples/flow.rs) top to bottom is the fastest way
 to see what the protocol looks like.
 
-
 ## Explore smaller examples
 
 Run each independently:
