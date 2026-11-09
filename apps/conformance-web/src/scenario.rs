@@ -231,6 +231,9 @@ struct Run<'a, T: HttpTransport> {
     token: Option<(TokenValue, Key, Option<u64>)>,
     /// When the last continuation answer arrived, which its wait counts from.
     continued_at: u64,
+    /// Whether the AS answered the grant request, so that it may hold state
+    /// the scenario has to clean up.
+    obtained: bool,
     current: Key,
 }
 
@@ -305,6 +308,10 @@ impl<T: HttpTransport> Run<'_, T> {
             return Read::Unavailable;
         }
         let now = self.clock.now();
+        // A wall clock set back would repeat a second the resource saw.
+        if now <= after {
+            return Read::Unavailable;
+        }
         let request = HttpRequest::new("GET", resource.as_str());
         let signed = match self.plan.proof {
             Proof::Httpsig => sign_request(request, key.as_ref(), Some(token), now),
@@ -382,6 +389,7 @@ pub fn lifecycle<T: HttpTransport>(
         findings: Vec::new(),
         token: None,
         continued_at: started,
+        obtained: false,
         current: Arc::clone(&key),
     };
 
@@ -414,6 +422,7 @@ pub fn lifecycle<T: HttpTransport>(
     let issued_at = clock.now();
     let result = run.session.start(&request, issued_at);
     run.continued_at = clock.now();
+    run.obtained = result.is_ok();
     run.admit_held();
     let mut approved_at = clock.now();
     let mut approved = match &result {
@@ -628,7 +637,8 @@ pub fn lifecycle<T: HttpTransport>(
     finish(run, transport, started)
 }
 
-/// Revokes the grant with the reserved budget, and builds the report.
+/// Revokes what the scenario still holds, with the reserved budget: the
+/// token, if the scenario didn't revoke it, then the grant. Builds the report.
 fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report {
     run.admission.clean_up();
     if run.clock.interrupted() {
@@ -637,6 +647,24 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
             Outcome::Inconclusive,
             RFC,
             "The operator interrupted the scenario; its findings so far are kept.",
+        );
+    }
+    // A revoked token leaves the session, so a managed token it still holds
+    // is one the scenario didn't revoke.
+    let now = run.clock.now();
+    let managed = run
+        .session
+        .usable_tokens(now)
+        .and_then(|tokens| tokens.first().map(|token| token.manage.is_some()))
+        .unwrap_or(false);
+    if managed {
+        let revoked = run.session.revoke_token(None, now);
+        run.push(
+            "token-cleanup",
+            judged(&revoked),
+            REVOCATION,
+            "The scenario revoked the token it still held through its management API with 204, \
+             within the budget reserved for cleanup.",
         );
     }
     if let Some(wait) = run
@@ -659,6 +687,14 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
             GRANT_REVOCATION,
             "The scenario revoked its grant through the continuation API with 204, within a \
              budget reserved for cleanup. If an answer was lost, the grant may remain at the AS.",
+        );
+    } else if run.obtained {
+        run.push(
+            "grant-revocation",
+            Outcome::NotApplicable,
+            GRANT_REVOCATION,
+            "The AS gave no continuation API for the grant, which RFC 9635 allows, so the \
+             scenario had no grant to revoke.",
         );
     }
     Report::scenario(&run.plan.endpoint, started, run.findings)

@@ -177,11 +177,12 @@ impl scenario::Clock for SystemClock {
             .map_or(0, |elapsed| elapsed.as_secs())
     }
     fn sleep_until(&self, at: u64) -> bool {
-        while self.now() < at {
-            if self.interrupted() {
-                return false;
+        let until = self.deadline(at, scenario::MAX_WAIT);
+        while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+            if left.is_zero() || self.interrupted() {
+                break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            std::thread::sleep(left.min(TICK));
         }
         !self.interrupted()
     }
@@ -189,9 +190,26 @@ impl scenario::Clock for SystemClock {
         self.0.load(std::sync::atomic::Ordering::SeqCst)
     }
     fn pause(&self, at: u64) {
-        while self.now() < at {
-            std::thread::sleep(std::time::Duration::from_millis(200));
+        let until = self.deadline(at, scenario::CLEANUP_WAIT);
+        while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+            if left.is_zero() {
+                break;
+            }
+            std::thread::sleep(left.min(TICK));
         }
+    }
+}
+
+/// How often a wait looks for an interrupt.
+const TICK: std::time::Duration = std::time::Duration::from_millis(200);
+
+impl SystemClock {
+    /// The monotonic instant a wait for the wall-clock second `at` ends,
+    /// at most `cap` seconds away: setting the wall clock back doesn't
+    /// lengthen a wait.
+    fn deadline(&self, at: u64, cap: u64) -> std::time::Instant {
+        let seconds = at.saturating_sub(scenario::Clock::now(self)).min(cap);
+        std::time::Instant::now() + std::time::Duration::from_secs(seconds)
     }
 }
 
@@ -284,4 +302,23 @@ fn lifecycle(endpoint: &str, options: &Lifecycle, local: bool, json: bool) -> Re
         print!("{}", report.text());
     }
     Ok(report.exit_code())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SystemClock;
+    use std::time::{Duration, Instant};
+
+    /// A wait ends on a monotonic instant, within its cap, whatever second
+    /// the wall clock asks for.
+    #[test]
+    fn a_wait_is_capped_on_the_monotonic_clock() {
+        let clock = SystemClock(std::sync::Arc::default());
+        let now = gnap_conformance_web::scenario::Clock::now(&clock);
+        let before = Instant::now();
+        let far = clock.deadline(now + 100_000, 5);
+        assert!(far <= Instant::now() + Duration::from_secs(5));
+        assert!(far >= before + Duration::from_secs(4));
+        assert!(clock.deadline(now.saturating_sub(100), 5) <= Instant::now());
+    }
 }

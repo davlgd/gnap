@@ -20,7 +20,8 @@ use std::{
 pub struct Limits {
     /// Most requests the transport sends.
     pub calls: usize,
-    /// Total time the transport may spend, from its creation.
+    /// Total time the transport may spend, from its first request, so that
+    /// a transport created ahead of its phase keeps its whole budget.
     pub budget: Duration,
     /// Longest exchange: resolution, connection, TLS, and response read.
     pub exchange: Duration,
@@ -228,7 +229,7 @@ pub struct Bounded<D> {
     limits: Limits,
     runtime: tokio::runtime::Handle,
     local: bool,
-    started: Instant,
+    started: std::sync::OnceLock<Instant>,
     calls: Mutex<usize>,
     pub observed: Mutex<Vec<HttpResponse>>,
 }
@@ -247,7 +248,7 @@ impl<D: Destinations> Bounded<D> {
             limits,
             local,
             runtime,
-            started: Instant::now(),
+            started: std::sync::OnceLock::new(),
             calls: Mutex::new(0),
             observed: Mutex::new(Vec::new()),
         }
@@ -344,13 +345,14 @@ impl<D: Destinations> HttpTransport for Bounded<D> {
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
         const ERROR: &str = "Lifecycle network operation unavailable";
         let limits = self.limits;
+        let started = *self.started.get_or_init(Instant::now);
         self.observed.lock().map_err(|_| ERROR)?.clear();
         if !self.target.permits(&request.method, &request.url)
             || request
                 .body
                 .as_ref()
                 .is_some_and(|b| b.len() > limits.request_body)
-            || self.started.elapsed() >= limits.budget
+            || started.elapsed() >= limits.budget
         {
             return Err(ERROR);
         }
@@ -363,7 +365,7 @@ impl<D: Destinations> HttpTransport for Bounded<D> {
         }
         let remaining = limits
             .budget
-            .checked_sub(self.started.elapsed())
+            .checked_sub(started.elapsed())
             .filter(|remaining| !remaining.is_zero())
             .ok_or(ERROR)?;
         let response = self
@@ -457,6 +459,49 @@ mod tests {
             );
         }
         assert!(transport.last().is_none(), "nothing was sent");
+    }
+
+    /// A cleanup transport is created with the scenario, and used after it:
+    /// its budget counts from its first request.
+    #[test]
+    fn the_budget_counts_from_the_first_request() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://127.0.0.1:{}/x",
+            listener.local_addr().unwrap().port()
+        );
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let transport = Bounded::with_limits(
+            Exact {
+                method: "DELETE",
+                url: url.clone(),
+            },
+            Limits {
+                budget: Duration::from_millis(300),
+                ..Limits::CLEANUP
+            },
+            true,
+            runtime.handle().clone(),
+        );
+        std::thread::sleep(Duration::from_millis(400));
+        let response = transport.send(HttpRequest::new("DELETE", &url)).unwrap();
+        assert_eq!(response.status, 204);
+        server.join().unwrap();
     }
 
     #[test]

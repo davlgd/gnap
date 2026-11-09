@@ -112,6 +112,15 @@ struct InMemory<'a> {
     /// The resource's answer to a token, live at the AS or not; `None`
     /// fails the exchange.
     resource: fn(&str, bool) -> Option<u16>,
+    /// Stands between the scenario and the AS, to stage a fault: it may
+    /// forward the request, change the answer, or answer in its place.
+    tamper: Tamper,
+}
+
+type Tamper = fn(&HttpRequest, &dyn Fn() -> HttpResponse) -> HttpResponse;
+
+fn untouched(_: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+    forward()
 }
 
 /// A resource that accepts the tokens the AS still holds.
@@ -153,7 +162,9 @@ impl HttpTransport for InMemory<'_> {
                 body: vec![],
             });
         }
-        Ok(self.server.handle(&request, self.clock.now()))
+        Ok((self.tamper)(&request, &|| {
+            self.server.handle(&request, self.clock.now())
+        }))
     }
 }
 
@@ -173,7 +184,7 @@ fn run(
     gnap_conformance_web::cli::Report,
     Vec<(String, String, u64)>,
 ) {
-    run_with(server, plan, notify, live_tokens)
+    run_with(server, plan, notify, live_tokens, untouched)
 }
 
 fn run_with(
@@ -181,6 +192,7 @@ fn run_with(
     plan: &Plan,
     notify: &dyn Fn(&str),
     resource: fn(&str, bool) -> Option<u16>,
+    tamper: Tamper,
 ) -> (
     gnap_conformance_web::cli::Report,
     Vec<(String, String, u64)>,
@@ -198,6 +210,7 @@ fn run_with(
         admitted: &admitted,
         sent: RefCell::new(Vec::new()),
         resource,
+        tamper,
     };
     let report = scenario::lifecycle(&transport, &Admit(&admitted), &clock, notify, plan, false);
     let sent = transport.sent.into_inner();
@@ -464,6 +477,7 @@ fn an_unreachable_resource_is_inconclusive() {
         &plan("jwsd", "ES256", true, false),
         &|_| {},
         |_, _| None,
+        untouched,
     );
     assert_eq!(
         outcome(&report, "resource-access"),
@@ -490,6 +504,7 @@ fn a_refusal_after_revocation_needs_an_acceptance_before() {
         &plan("httpsig", "ES256", true, false),
         &|_| {},
         first_only,
+        untouched,
     );
     assert_eq!(outcome(&report, "resource-access"), Some(Outcome::Passed));
     assert_eq!(
@@ -502,4 +517,91 @@ fn a_refusal_after_revocation_needs_an_acceptance_before() {
         "{}",
         report.text()
     );
+}
+
+/// A token whose revocation the AS refused is revoked again at cleanup,
+/// before the grant, within the reserved budget.
+#[test]
+fn cleanup_revokes_a_token_the_scenario_still_holds() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static REFUSED: AtomicBool = AtomicBool::new(false);
+    // The AS never sees the first revocation, as if it failed before it.
+    fn refuse_first_token_delete(
+        request: &HttpRequest,
+        forward: &dyn Fn() -> HttpResponse,
+    ) -> HttpResponse {
+        if request.method == "DELETE"
+            && request.url.starts_with("https://as.example/manage")
+            && !REFUSED.swap(true, Ordering::SeqCst)
+        {
+            return HttpResponse {
+                status: 500,
+                headers: vec![],
+                body: vec![],
+            };
+        }
+        forward()
+    }
+    let server = server(false, false);
+    let (report, sent) = run_with(
+        &server,
+        &plan("httpsig", "ES256", false, false),
+        &|_| {},
+        live_tokens,
+        refuse_first_token_delete,
+    );
+    assert_ne!(outcome(&report, "token-revocation"), Some(Outcome::Passed));
+    assert_eq!(
+        outcome(&report, "token-cleanup"),
+        Some(Outcome::Passed),
+        "{}",
+        report.text()
+    );
+    assert_eq!(outcome(&report, "grant-revocation"), Some(Outcome::Passed));
+    let deletes: Vec<&str> = sent
+        .iter()
+        .filter(|(method, _, _)| method == "DELETE")
+        .map(|(_, url, _)| url.as_str())
+        .collect();
+    assert_eq!(deletes.len(), 3, "{deletes:?}");
+    assert!(
+        deletes[2].starts_with("https://as.example/continue"),
+        "{deletes:?}"
+    );
+}
+
+/// Without a continuation API, which RFC 9635 allows, there is no grant to
+/// revoke: the scenario says so without failing or turning inconclusive.
+#[test]
+fn a_grant_without_continuation_needs_no_revocation() {
+    fn drop_continuation(_: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
+        let mut response = forward();
+        if let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&response.body) {
+            if body.get("continue").is_some() && body.get("access_token").is_some() {
+                body.as_object_mut().unwrap().remove("continue");
+                response.body = serde_json::to_vec(&body).unwrap();
+            }
+        }
+        response
+    }
+    let server = server(false, false);
+    let (report, sent) = run_with(
+        &server,
+        &plan("jwsd", "EdDSA", false, false),
+        &|_| {},
+        live_tokens,
+        drop_continuation,
+    );
+    assert_eq!(
+        outcome(&report, "grant-revocation"),
+        Some(Outcome::NotApplicable),
+        "{}",
+        report.text()
+    );
+    assert_eq!(outcome(&report, "token-cleanup"), None);
+    assert!(
+        sent.iter().all(|(_, url, _)| !url.contains("/continue")),
+        "{sent:?}"
+    );
+    assert_eq!(report.exit_code(), 0, "{}", report.text());
 }
