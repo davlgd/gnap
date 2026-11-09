@@ -353,11 +353,19 @@ fn as_response_checks(
             v.as_object()
                 .is_some_and(|o| o.keys().all(|k| matches!(k.as_str(), "error" | "continue")))
         });
+    // An unknown code may be a registration newer than this build's snapshot:
+    // undecided, not a deviation.
+    let registered = error.as_ref().map(|e| e.code.is_registered());
+    let mut known = check("known-error-code", registered.filter(|registered| *registered), "Error code membership in this build's vendored IANA registry snapshot only. An unknown code requires checking the current registry before asserting a normative failure.", "https://www.rfc-editor.org/rfc/rfc9635.html#section-3.6");
+    if registered == Some(false) {
+        known.undecided = true;
+        known.remediation = Some("Compare the code with the current IANA GNAP Error Codes registry; this build's vendored snapshot may lag a new registration.");
+    }
     vec![
         check("malformed-request-gnap-error-only", Some(error.is_some() && only_error_fields), "The malformed initial request returned a GNAP error without success fields. Only error and continue may appear; whether any continuation belongs to a pending grant remains untested.", "https://www.rfc-editor.org/rfc/rfc9635.html#section-3.6"),
         check("malformed-request-http-4xx", Some(status.is_client_error()), "Deployment policy: prefer HTTP 4xx for this client error. RFC 9635 does not prescribe this status class; HTTP 200 with a GNAP error is not by itself a GNAP conformance failure. Redirects are not followed.", "https://www.rfc-editor.org/rfc/rfc9110.html#section-15.5"),
         check("error-response-json", Some(media && error.is_some()), "Response media type must be application/json and the parsed GNAP response must contain an error field. Does not determine whether the chosen error code is appropriate.", "https://www.rfc-editor.org/rfc/rfc9635.html#section-3"),
-        check("known-error-code", error.as_ref().map(|e| e.code.is_registered()), "Error code membership in this build's vendored IANA registry snapshot only. An unknown code requires checking the current registry before asserting a normative failure.", "https://www.rfc-editor.org/rfc/rfc9635.html#section-3.6"),
+        known,
         check("error-response-no-store", Some(no_store), "Error response must include Cache-Control: no-store.", "https://www.rfc-editor.org/rfc/rfc9635.html#section-3"),
         check("authenticated-flow", None, "No authenticated request was sent. Signature rejection, grant creation, RS access and stateful lifecycle remain untested.", "https://www.rfc-editor.org/rfc/rfc9635.html"),
     ]

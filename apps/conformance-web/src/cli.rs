@@ -370,6 +370,27 @@ mod tests {
         assert_eq!(report.exit_code(), 1);
     }
 
+    /// A code the registry snapshot doesn't know may be newer than it: the
+    /// refusal check is undecided, not failed.
+    #[test]
+    fn an_unregistered_error_code_is_undecided() {
+        let report = probe(
+            &json(
+                400,
+                &serde_json::json!({"error": {"code": "synthetic_future_code"}}),
+            ),
+            ENDPOINT,
+            1,
+        );
+        let known = report
+            .findings
+            .iter()
+            .find(|f| f.id == "known-error-code")
+            .unwrap();
+        assert_eq!(known.outcome, Outcome::Inconclusive, "{}", report.text());
+        assert_eq!(report.exit_code(), 2);
+    }
+
     #[test]
     fn no_passing_check_is_never_a_success() {
         let report = Report::new(
