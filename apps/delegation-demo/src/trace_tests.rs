@@ -485,6 +485,7 @@ fn a_full_trace_at_every_bound_stays_within_its_budget() {
             alg: Some(SignatureAlg::EcdsaP256Sha256),
             gnap_authorization: true,
             digests: vec![DigestAlg::Sha256, DigestAlg::Sha512],
+            digest_unparsable: true,
             body: body.clone(),
         },
         outcome: Outcome::Response {
@@ -649,4 +650,48 @@ fn the_pages_tables_match_the_records_names() {
             "the page has no label for {value}"
         );
     }
+}
+
+/// A key inside a string member isn't a key: the field is read as the SDK
+/// reads it, and one it can't read names no algorithm.
+#[test]
+fn a_content_digest_is_read_as_a_dictionary() {
+    let digest = |value: &str| {
+        let mut request = request("POST", "/gnap");
+        request.headers = vec![("content-digest".into(), value.into())];
+        let summary = summarize_request(&request, ORIGIN);
+        (summary.digests, summary.digest_unparsable)
+    };
+    assert_eq!(digest("sha-256=:AAAA:"), (vec![DigestAlg::Sha256], false));
+    assert_eq!(
+        digest("sha-512=:AAAA:, sha-256=:AAAA:"),
+        (vec![DigestAlg::Sha512, DigestAlg::Sha256], false)
+    );
+    assert_eq!(digest("unknown=:AAAA:"), (vec![], false));
+    assert_eq!(digest(r#"other="x,sha-256=:AAAA:""#), (vec![], true));
+    assert_eq!(digest("sha-256=:AAAA:,"), (vec![], true));
+    let mut twice = request("POST", "/gnap");
+    twice.headers = vec![("content-digest".into(), "sha-256=:AAAA:".into()); 2];
+    assert!(summarize_request(&twice, ORIGIN).digest_unparsable);
+    assert!(!summarize_request(&request("GET", "/gnap"), ORIGIN).digest_unparsable);
+}
+
+/// Several media types, one of them JOSE, may hide an attached proof: the
+/// record calls that ambiguous, never absent.
+#[test]
+fn several_media_types_with_jose_are_ambiguous() {
+    let mut request = request("POST", "/gnap");
+    request.headers = vec![
+        ("content-type".into(), "application/jose".into()),
+        ("content-type".into(), "application/jose".into()),
+    ];
+    assert_eq!(
+        summarize_request(&request, ORIGIN).proof,
+        AnnouncedProof::Ambiguous
+    );
+    request.headers[1].1 = "application/json".into();
+    assert_eq!(
+        summarize_request(&request, ORIGIN).proof,
+        AnnouncedProof::Ambiguous
+    );
 }

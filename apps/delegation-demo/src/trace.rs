@@ -228,6 +228,9 @@ pub(super) struct RequestSummary {
     pub alg: Option<SignatureAlg>,
     pub gnap_authorization: bool,
     pub digests: Vec<DigestAlg>,
+    /// A `Content-Digest` field that doesn't parse as a Dictionary of Byte
+    /// Sequences, so no algorithm is named from it.
+    pub digest_unparsable: bool,
     pub body: Shape,
 }
 
@@ -328,6 +331,11 @@ pub(super) fn summarize_request(request: &HttpRequest, origin: &str) -> RequestS
     let headers = Headers::of(&request.headers);
     let (proof, covered, other_components, alg) = announced_proof(&headers);
     let jose = headers.media() == Some(MediaType::Jose);
+    let digest = match headers.all("content-digest").as_deref() {
+        Some([]) => Ok(Vec::new()),
+        Some([value]) => digests(value),
+        None | Some(_) => Err(()),
+    };
     RequestSummary {
         to,
         route,
@@ -337,10 +345,8 @@ pub(super) fn summarize_request(request: &HttpRequest, origin: &str) -> RequestS
         other_components,
         alg,
         gnap_authorization: headers.one("authorization").is_some_and(gnap_scheme),
-        digests: headers
-            .one("content-digest")
-            .map(digests)
-            .unwrap_or_default(),
+        digests: digest.clone().unwrap_or_default(),
+        digest_unparsable: digest.is_err(),
         body: shape(request.body.as_deref(), jose),
     }
 }
@@ -464,7 +470,24 @@ fn announced_proof(headers: &Headers<'_>) -> Proof {
     ) else {
         return unparsable;
     };
-    let attached = headers.media() == Some(MediaType::Jose);
+    let Some(types) = headers.all("content-type") else {
+        return unparsable;
+    };
+    let jose = types
+        .iter()
+        .filter(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case("application/jose")
+        })
+        .count();
+    if jose > 0 && types.len() > 1 {
+        return (AnnouncedProof::Ambiguous, Vec::new(), 0, None);
+    }
+    let attached = jose == 1;
     let kinds = usize::from(!inputs.is_empty() || !signatures.is_empty())
         + usize::from(!detached.is_empty())
         + usize::from(attached);
@@ -533,21 +556,22 @@ fn gnap_scheme(value: &str) -> bool {
         .is_some_and(|(scheme, credential)| scheme == "GNAP" && !credential.trim().is_empty())
 }
 
-/// The digest algorithms a `Content-Digest` dictionary names, by key.
-fn digests(value: &str) -> Vec<DigestAlg> {
+/// The digest algorithms a `Content-Digest` field names, read with the SDK's
+/// own Dictionary parser.
+fn digests(value: &str) -> Result<Vec<DigestAlg>, ()> {
+    let named = gnap_crypto::content_digest_algorithms(value).map_err(|_| ())?;
     let mut found = Vec::new();
-    for member in value.split(',') {
-        let key = member.split('=').next().unwrap_or_default().trim();
-        let alg = match key {
-            "sha-256" => Some(DigestAlg::Sha256),
-            "sha-512" => Some(DigestAlg::Sha512),
-            _ => None,
+    for alg in named {
+        let alg = match alg {
+            gnap_crypto::DigestAlgorithm::Sha256 => DigestAlg::Sha256,
+            gnap_crypto::DigestAlgorithm::Sha512 => DigestAlg::Sha512,
+            _ => continue,
         };
-        if let Some(alg) = alg.filter(|alg| !found.contains(alg)) {
+        if !found.contains(&alg) {
             found.push(alg);
         }
     }
-    found
+    Ok(found)
 }
 
 /// A body's structure: the GNAP fields it carries, and its tokens.

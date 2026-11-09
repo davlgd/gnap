@@ -118,6 +118,7 @@ function exchangeRow(attempt) {
   const known = Object.hasOwn(LABELS.party, request.to);
   const row = document.createElement('li');
   row.className = `exchange ${known ? LABELS.lane[request.to] : 'to-unknown'}`;
+  if (Number.isInteger(attempt.seq)) row.dataset.seq = String(attempt.seq);
   const summary = document.createElement('details');
   const head = document.createElement('summary');
   head.append(
@@ -137,7 +138,8 @@ function exchangeRow(attempt) {
   if (request.alg) fact('Signature algorithm', label('alg', request.alg));
   fact('Authorization', request.gnap_authorization ? 'GNAP token presented' : 'none');
   const digests = (Array.isArray(request.digests) ? request.digests : []).map(item => label('digest', item));
-  if (digests.length) fact('Content digest', digests.join(', '));
+  if (request.digest_unparsable === true) fact('Content digest', 'Present but unparsable');
+  else if (digests.length) fact('Content digest', digests.join(', '));
   fact('Request body', describeBody(request.body));
   fact('Response', outcome.kind === 'response' ? describeBody(outcome.body) : 'None observed: whether the request even left isn\'t known here');
   summary.append(head, facts);
@@ -145,10 +147,20 @@ function exchangeRow(attempt) {
   return row;
 }
 
+// The status refreshes while a grant waits: an unchanged trace keeps its rows,
+// so an open row stays open and keeps the focus; a changed one reopens the
+// rows that were open.
+let renderedTrace = '';
 function renderTrace(trace) {
+  const key = JSON.stringify(trace ?? null);
+  if (key === renderedTrace) return;
+  renderedTrace = key;
   const list = document.querySelector('#trace');
+  const open = new Set([...list.children].filter(item => item.children[0]?.open).map(item => item.dataset.seq));
   const attempts = trace && Array.isArray(trace.attempts) ? trace.attempts : [];
-  list.replaceChildren(...attempts.map(exchangeRow));
+  const rows = attempts.map(exchangeRow);
+  for (const row of rows) if (open.has(row.dataset.seq)) row.children[0].open = true;
+  list.replaceChildren(...rows);
   const dropped = document.querySelector('#trace-dropped');
   dropped.hidden = !(trace && count(trace.dropped));
   dropped.textContent = dropped.hidden ? '' : `${count(trace.dropped)} later exchange(s) not kept: the record keeps the first 64.`;

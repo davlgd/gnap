@@ -10,8 +10,8 @@ const script = readFileSync(new URL('../../static/app.js', import.meta.url), 'ut
 
 function renderSnapshot(data, timers) {
   const element = () => ({
-    textContent: '', dataset: {},
-    replaceChildren() {}, append() {}, addEventListener() {},
+    textContent: '', dataset: {}, children: [],
+    replaceChildren(...nodes) { this.children = nodes; }, append() {}, addEventListener() {},
   });
   const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [`#${id}`, element()]));
   const buttons = [...html.matchAll(/data-action="([^"]+)"/g)].map(([, action]) => {

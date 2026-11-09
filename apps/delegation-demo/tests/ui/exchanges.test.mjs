@@ -100,3 +100,24 @@ test('an absent or malformed trace renders an empty list', () => {
     assert.equal(nodes.get('#trace-dropped').hidden, true);
   }
 });
+
+test('a refresh with the same trace keeps the rows, and a new attempt keeps the open one open', () => {
+  const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [`#${id}`, element('')]));
+  const context = {
+    document: { querySelector: selector => nodes.get(selector), querySelectorAll: () => [], createElement: element },
+    fetch: () => new Promise(() => {}), setTimeout: () => {},
+  };
+  runInNewContext(script, context, { timeout: 1000 });
+  const trace = { attempts: [known], dropped: 0 };
+  context.renderTrace(trace);
+  const first = nodes.get('#trace').children[0];
+  first.children[0].open = true;
+  context.renderTrace(JSON.parse(JSON.stringify(trace)));
+  assert.equal(nodes.get('#trace').children[0], first, 'an unchanged trace keeps its rows');
+  context.renderTrace({ attempts: [known, { ...known, seq: 1 }], dropped: 0 });
+  const rows = nodes.get('#trace').children;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].children[0].open, true, 'the row that was open stays open');
+  assert.notEqual(rows[1].children[0].open, true);
+});
+
