@@ -27,7 +27,10 @@
 //!     fn send(&self, _request: HttpRequest) -> Result<HttpResponse, Self::Error> {
 //!         Ok(HttpResponse {
 //!             status: 200,
-//!             headers: vec![("Cache-Control".into(), "no-store".into())],
+//!             headers: vec![
+//!                 ("Content-Type".into(), "application/json".into()),
+//!                 ("Cache-Control".into(), "no-store".into()),
+//!             ],
 //!             body: br#"{"access_token":{"value":"OS9M2PMHKUR64TB8","access":["read"]}}"#
 //!                 .to_vec(),
 //!         })

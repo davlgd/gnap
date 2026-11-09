@@ -76,6 +76,8 @@ fn unusable_responses() -> Vec<Result<HttpResponse, String>> {
     duplicate_type
         .headers
         .push(("content-type".into(), "application/json".into()));
+    let mut missing_type = response(200, APPROVED);
+    missing_type.headers.clear();
     vec![
         Err("connection lost".into()),
         Ok(response(503, "")),
@@ -84,6 +86,7 @@ fn unusable_responses() -> Vec<Result<HttpResponse, String>> {
         Ok(response(502, "<html>upstream unavailable</html>")),
         Ok(wrong_type),
         Ok(duplicate_type),
+        Ok(missing_type),
         Ok(response(200, "{invalid")),
         Ok(response(200, "[]")),
         Ok(response(503, APPROVED)),

@@ -334,20 +334,7 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
         {
             return rs_error(RsErrorCode::InvalidRequest);
         }
-        let content_types: Vec<_> = request
-            .headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-            .collect();
-        if content_types.len() != 1
-            || !content_types[0]
-                .1
-                .split(';')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .eq_ignore_ascii_case("application/json")
-        {
+        if !request.has_json_content_type() {
             return rs_error(RsErrorCode::InvalidRequest);
         }
         let Some(bytes) = request
@@ -509,18 +496,7 @@ fn json_request(request: &HttpRequest, max_bytes: usize) -> Option<&[u8]> {
     {
         return None;
     }
-    let mut types = request
-        .headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"));
-    let (_, value) = types.next()?;
-    if types.next().is_some()
-        || !value
-            .split(';')
-            .next()?
-            .trim()
-            .eq_ignore_ascii_case("application/json")
-    {
+    if !request.has_json_content_type() {
         return None;
     }
     request

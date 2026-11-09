@@ -1572,6 +1572,21 @@ fn the_grant_endpoint_accepts_json_post_and_advertises_options() {
     );
     assert_eq!(response.status, 400, "{}", body_of(&response));
     assert!(body_of(&response).contains("invalid_client"));
+
+    // Two Content-Type fields leave the media type ambiguous, whatever their order.
+    for types in [
+        ["application/json", "text/html"],
+        ["text/html", "application/json"],
+    ] {
+        let response = as_.handle(
+            &HttpRequest::new("POST", GRANT)
+                .header("Content-Type", types[0])
+                .header("Content-Type", types[1])
+                .json_body(br#"{"client":"stranger"}"#.to_vec()),
+            1_000,
+        );
+        assert_eq!(response.status, 415, "{types:?}");
+    }
 }
 
 /// GNAP-9635-§4.2-M05 — a refused continuation must not spend the reference.

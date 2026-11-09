@@ -27,7 +27,10 @@ impl FakeAs {
                     .into_iter()
                     .map(|b| HttpResponse {
                         status: if b.is_empty() { 204 } else { 200 },
-                        headers: vec![("Cache-Control".into(), "no-store".into())],
+                        headers: vec![
+                            ("Content-Type".into(), "application/json".into()),
+                            ("Cache-Control".into(), "no-store".into()),
+                        ],
                         body: b.as_bytes().to_vec(),
                     })
                     .rev()

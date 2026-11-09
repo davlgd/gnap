@@ -26,9 +26,8 @@
 //! grant in a new `Session`. Valid GNAP errors are absorbed, including a
 //! replacement continuation.
 //!
-//! On these exchanges, explicit incompatible or repeated `Content-Type` fields are
-//! rejected. Missing fields remain accepted for compatibility; this is not a
-//! complete MIME validator.
+//! On these exchanges, a response must carry exactly one `Content-Type` field
+//! naming `application/json`; this is not a complete MIME validator.
 
 use crate::error::ClientError;
 use crate::rotation;
@@ -1517,20 +1516,12 @@ fn grant_response(http: &HttpResponse) -> Result<GrantResponse, ClientError> {
         ));
     }
 
-    let mut content_types = http.header_values("content-type");
-    if let Some(content_type) = content_types.next() {
-        if content_types.next().is_some()
-            || !content_type
-                .split(';')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .eq_ignore_ascii_case("application/json")
-        {
-            return Err(ClientError::Protocol(
-                "the response has an incompatible or repeated Content-Type".into(),
-            ));
-        }
+    // §3: the response "MUST be sent as a JSON object in the content of the
+    // HTTP response with Content-Type application/json".
+    if !http.has_json_content_type() {
+        return Err(ClientError::Protocol(
+            "the response doesn't carry exactly one application/json Content-Type".into(),
+        ));
     }
 
     let response: GrantResponse =

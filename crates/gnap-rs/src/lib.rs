@@ -266,20 +266,9 @@ fn presented_token(request: &HttpRequest) -> Result<TokenValue, AuthorizationErr
 fn decode<D: serde::de::DeserializeOwned>(
     response: &HttpResponse,
 ) -> Result<D, AuthorizationError> {
-    let mut types = response
-        .headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"));
-    let mime = types.next().map(|(_, value)| value);
     if response.status != 200
         || response.body.len() > MAX_RESPONSE_BYTES
-        || types.next().is_some()
-        || !mime.is_some_and(|value| {
-            value
-                .split(';')
-                .next()
-                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json"))
-        })
+        || !response.has_json_content_type()
     {
         return Err(AuthorizationError::Unavailable);
     }

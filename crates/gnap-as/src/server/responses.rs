@@ -74,11 +74,7 @@ pub(super) fn require_json_content(request: &HttpRequest) -> Result<(), HttpResp
         return Ok(());
     }
 
-    // The media type may carry parameters, `; charset=utf-8` being the common
-    // one, so only the type itself is compared.
-    let content_type = request.header_value("content-type").unwrap_or_default();
-    let media_type = content_type.split(';').next().unwrap_or_default().trim();
-    if media_type.eq_ignore_ascii_case("application/json") {
+    if request.has_json_content_type() {
         Ok(())
     } else {
         Err(unsupported_media_type())

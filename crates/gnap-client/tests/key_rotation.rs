@@ -41,7 +41,10 @@ impl FakeAs {
                     .into_iter()
                     .map(|b| HttpResponse {
                         status: if b.is_empty() { 204 } else { 200 },
-                        headers: vec![("Cache-Control".into(), "no-store".into())],
+                        headers: vec![
+                            ("Content-Type".into(), "application/json".into()),
+                            ("Cache-Control".into(), "no-store".into()),
+                        ],
                         body: b.as_bytes().to_vec(),
                     })
                     .rev()
@@ -53,8 +56,15 @@ impl FakeAs {
     fn sent(&self) -> usize {
         self.seen.borrow().len()
     }
-    /// Queues a reply with an arbitrary status and headers.
-    fn push(&self, status: u16, headers: Vec<(&str, &str)>, body: &str) {
+    /// Queues a reply with an arbitrary status and headers. A JSON
+    /// `Content-Type` is added when the headers name none.
+    fn push(&self, status: u16, mut headers: Vec<(&str, &str)>, body: &str) {
+        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        {
+            headers.push(("Content-Type", "application/json"));
+        }
         self.replies.borrow_mut().insert(
             0,
             HttpResponse {
