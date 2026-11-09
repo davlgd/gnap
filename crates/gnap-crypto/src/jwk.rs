@@ -80,11 +80,13 @@ impl PublicKey {
         }
     }
 
-    /// Whether the JWK names a combination of `kty` and `alg` that this crate
+    /// Whether the JWK is a candidate for the built-in validation: its `kty`,
+    /// `alg`, and, for `EdDSA`, its curve name an algorithm this crate
     /// implements, so that [`Self::from_jwk`] is the import to apply.
     ///
-    /// A JWK of another algorithm isn't refused by this check: a deployment
-    /// may verify it through its own key resolver.
+    /// `true` doesn't mean the key is valid, only that [`Self::from_jwk`]
+    /// decides. A JWK of another algorithm or curve isn't refused by this
+    /// check: a deployment may verify it through its own key resolver.
     #[must_use]
     pub fn is_builtin(jwk: &Map<String, Value>) -> bool {
         let kty = jwk.get("kty").and_then(Value::as_str);
