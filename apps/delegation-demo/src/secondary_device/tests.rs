@@ -531,6 +531,7 @@ async fn two_independent_http_sessions_decide_then_poll_and_read_the_resource() 
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let (sender, receiver) = mpsc::sync_channel(8);
     app.commands = sender;

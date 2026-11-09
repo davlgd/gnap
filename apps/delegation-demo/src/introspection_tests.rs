@@ -10,11 +10,16 @@ fn invalid_rs_api_configuration_is_non_gnap_noncacheable_and_redacted() {
         let mut app = fixture.clone();
         if invalid_grant {
             app.server = Arc::new(AuthorizationServer::new(
-                ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone()),
+                ConsentPolicy(
+                    app.decisions.clone(),
+                    app.rs_registration.resources.clone(),
+                    app.storage.lab.clone(),
+                ),
                 KnownKeys {
                     signer: app.signer.clone(),
                     rs_key: app.rs_registration.key.clone(),
                     decisions: app.decisions.clone(),
+                    lab: app.storage.lab.clone(),
                 },
                 app.storage.clone(),
                 OsNonces,
@@ -158,6 +163,7 @@ async fn real_http_introspection_authenticates_rs_and_protects_resource_lifecycl
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -209,6 +215,7 @@ async fn real_http_introspection_authenticates_rs_and_protects_resource_lifecycl
             signer: app.signer.clone(),
             rs_key: app.rs_registration.key.clone(),
             decisions: app.decisions.clone(),
+            lab: app.storage.lab.clone(),
         };
         let resolved = client_resolver
             .resolve(&snapshot.aggregate.tokens["handle"].client)
@@ -397,6 +404,7 @@ fn remote_metadata_and_responses_cannot_remove_local_proof_or_deadline_policy() 
                 response,
                 calls: calls.clone(),
             }),
+            jose_replay: introspection::jose_replay(),
         });
         assert!(matches!(
             read_resource(
@@ -438,6 +446,7 @@ fn remote_metadata_and_responses_cannot_remove_local_proof_or_deadline_policy() 
                 response: Some(response),
                 calls: Arc::default(),
             }),
+            jose_replay: introspection::jose_replay(),
         });
         assert!(
             read_resource(

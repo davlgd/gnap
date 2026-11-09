@@ -34,7 +34,7 @@ fn scenario(app: App, origin: String) {
                 origin.clone(),
                 crate::trace::SharedTrace::default(),
             ),
-            app.signer.as_ref(),
+            crate::lab::LabSigner::Shared(app.signer.as_ref()),
             &origin,
         );
         let request: GrantRequest = serde_json::from_value(json!({

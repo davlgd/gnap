@@ -54,6 +54,7 @@ fn script(app: &mut App, replies: Vec<Reply>) -> Arc<Script> {
         signer: app.resource_client.signer.clone(),
         transport: transport.clone(),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     transport
 }
@@ -312,6 +313,7 @@ async fn real_http_bootstrap_gates_start_and_formats_then_publishes_only_local_s
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());
     let response = router

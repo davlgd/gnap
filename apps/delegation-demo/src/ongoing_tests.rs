@@ -95,6 +95,7 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let (sender, receiver) = mpsc::sync_channel(8);
     app.commands = sender;
@@ -267,8 +268,10 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
             == grant_ids
     );
     {
+        let lab = app.storage.lab.lock().unwrap();
+        assert!(identities.iter().all(|id| lab.holds(id)));
+        drop(lab);
         let choices = app.decisions.lock().unwrap();
-        assert!(identities.iter().all(|id| choices.clients.contains(id)));
         assert_eq!(choices.grants.len(), consent_before.len());
         assert!(consent_before
             .iter()
@@ -393,11 +396,15 @@ fn ongoing_grant_polls_downscopes_reconsents_and_revokes_all_tokens() {
         token.issued_at = 0;
     }
     assert_eq!(
-        ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone())
-            .evaluate_context(
-                &request(&[&references.folder]),
-                EvaluationContext::Modification(&expired_context)
-            ),
+        ConsentPolicy(
+            app.decisions.clone(),
+            app.rs_registration.resources.clone(),
+            app.storage.lab.clone()
+        )
+        .evaluate_context(
+            &request(&[&references.folder]),
+            EvaluationContext::Modification(&expired_context)
+        ),
         Decision::RequireInteraction
     );
     wait(&reduced);
@@ -552,7 +559,11 @@ fn consent_cannot_cross_grants_clients_requests_or_interaction_references() {
         .lookup(GrantSelector::Id(snapshot.id))
         .unwrap()
         .unwrap();
-    let policy = ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone());
+    let policy = ConsentPolicy(
+        app.decisions.clone(),
+        app.rs_registration.resources.clone(),
+        app.storage.lab.clone(),
+    );
     assert!(matches!(
         policy.evaluate_context(
             &snapshot.aggregate.record.request,
