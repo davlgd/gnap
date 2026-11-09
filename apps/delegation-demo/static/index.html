@@ -66,7 +66,7 @@
 <div id="push-finish" class="note" hidden><p id="push-status"></p><p class="hint">This page refreshes the client's own status only. Continuing becomes possible once the client validates the callback and the wait period has passed. Approval closes the continuation after the token is issued: the token still works and can be revoked, but the grant can no longer be changed or polled. There is one delivery attempt, with no retry and no fallback to polling: a lost callback needs a fresh request.</p></div>
 <p id="error" class="error" role="alert"></p>
 <h3>Recorded steps</h3>
-<p class="hint">The application's record of the exchanges it completed, in order. It isn't an exhaustive trace: a failed exchange may leave no entry, and refreshing this page's status isn't a GNAP poll.</p>
+<p class="hint">The application's record of events, in order: your choices, its local checks, and the exchanges it completed. It isn't an exhaustive trace: a failed exchange may leave no entry, and refreshing this page's status isn't a GNAP poll.</p>
 <ol id="events" class="timeline"></ol>
 <p class="fine">An in-memory sandbox: a restart ends every session and token. Only this application's own endpoints are called.</p>
 </aside>
