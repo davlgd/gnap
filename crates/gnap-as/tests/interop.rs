@@ -691,50 +691,59 @@ fn a_broken_nonce_source_is_reported_not_fatal() {
     );
 }
 
+/// Counts draws, and fails the draw that the shared countdown names.
+struct Failing {
+    draws: Cell<u32>,
+    fail_at: Rc<Cell<Option<u32>>>,
+}
+
+impl Nonces for Failing {
+    fn next(&self) -> Result<String, gnap_as::NonceError> {
+        self.draws.set(self.draws.get() + 1);
+        if let Some(remaining) = self.fail_at.get() {
+            if remaining == 1 {
+                self.fail_at.set(None);
+                return Err(gnap_as::NonceError);
+            }
+            self.fail_at.set(Some(remaining - 1));
+        }
+        Ok(format!("nonce{:04}", self.draws.get()))
+    }
+}
+
+/// A server whose random source fails on the draw `fail_at` counts down to.
+fn failing_server(
+    interacted: bool,
+    fail_at: &Rc<Cell<Option<u32>>>,
+) -> AuthorizationServer<AlwaysInteract, OneKey, MemoryStorage, Failing> {
+    AuthorizationServer::new(
+        AlwaysInteract {
+            interacted: Cell::new(interacted),
+        },
+        OneKey(RSA_SPKI),
+        MemoryStorage::new(),
+        Failing {
+            draws: Cell::new(0),
+            fail_at: Rc::clone(fail_at),
+        },
+        Endpoints {
+            grant: GRANT.into(),
+            continuation: CONTINUE.into(),
+            interaction: "https://as.example/i".into(),
+            token_management: "https://as.example/token".into(),
+        },
+    )
+}
+
 /// A random source that stops working fails the request with a 500 and
 /// publishes nothing, whichever draw fails: the grant isn't created, and a
 /// refused rotation leaves the token and its credential in place.
 #[test]
 fn an_unavailable_nonce_source_fails_without_publishing() {
-    /// Counts draws, and fails the draw that the shared countdown names.
-    struct Failing {
-        draws: Cell<u32>,
-        fail_at: Rc<Cell<Option<u32>>>,
-    }
-    impl Nonces for Failing {
-        fn next(&self) -> Result<String, gnap_as::NonceError> {
-            self.draws.set(self.draws.get() + 1);
-            if let Some(remaining) = self.fail_at.get() {
-                if remaining == 1 {
-                    self.fail_at.set(None);
-                    return Err(gnap_as::NonceError);
-                }
-                self.fail_at.set(Some(remaining - 1));
-            }
-            Ok(format!("nonce{:04}", self.draws.get()))
-        }
-    }
-
     let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
     for position in 1..=3 {
         let fail_at = Rc::new(Cell::new(None));
-        let as_ = AuthorizationServer::new(
-            AlwaysInteract {
-                interacted: Cell::new(true),
-            },
-            OneKey(RSA_SPKI),
-            MemoryStorage::new(),
-            Failing {
-                draws: Cell::new(0),
-                fail_at: Rc::clone(&fail_at),
-            },
-            Endpoints {
-                grant: GRANT.into(),
-                continuation: CONTINUE.into(),
-                interaction: "https://as.example/i".into(),
-                token_management: "https://as.example/token".into(),
-            },
-        );
+        let as_ = failing_server(true, &fail_at);
         let transport = Direct::wrapping(&as_);
 
         fail_at.set(Some(position));
@@ -759,6 +768,72 @@ fn an_unavailable_nonce_source_fails_without_publishing() {
 
         // Nothing was published: the same credential rotates once the source works.
         client.rotate_token(None, 1_002).unwrap();
+    }
+}
+
+/// A random source that fails while an interaction completes leaves the
+/// pending grant as it was, and so does one that fails while the grant is
+/// then issued: both can be retried.
+#[test]
+fn an_unavailable_nonce_source_during_interaction_leaves_the_grant_pending() {
+    use gnap_as::{GrantSelector, GrantStore, InteractionError};
+
+    let signer = Ps256Signer::from_pkcs1_pem(RSA_PKCS1, "gnap-demo").unwrap();
+    for position in 1..=3 {
+        let fail_at = Rc::new(Cell::new(None));
+        let as_ = failing_server(false, &fail_at);
+        let transport = Direct::wrapping(&as_);
+        let mut client = Session::new(&transport, &signer, GRANT);
+        let step = client.start(&request(), 1_000).unwrap();
+        let redirect = step.response().interact.clone().unwrap().redirect.unwrap();
+        let handle = redirect.rsplit('/').next().unwrap();
+        let pending = |as_: &AuthorizationServer<_, _, MemoryStorage, _>| {
+            as_.storage()
+                .lookup(GrantSelector::Interaction(handle))
+                .unwrap()
+                .unwrap()
+        };
+        let before = pending(&as_);
+
+        // The completion draws the interaction reference first.
+        fail_at.set(Some(1));
+        assert!(matches!(
+            as_.complete_interaction(handle, 1_005),
+            Err(InteractionError::Misconfigured(_))
+        ));
+        let after = pending(&as_);
+        assert_eq!(after.revision, before.revision);
+        assert!(after.aggregate.record.interact_ref.is_none());
+
+        let Finish::Redirect { uri } = as_.complete_interaction(handle, 1_005).unwrap() else {
+            panic!("the client asked for the redirect finish method");
+        };
+        client
+            .accept_callback(&InteractCallback::from_redirect(&uri).unwrap(), 1_005)
+            .unwrap();
+        let completed = as_
+            .storage()
+            .lookup(GrantSelector::Id(before.id))
+            .unwrap()
+            .unwrap();
+
+        // Issuing the token then fails at one of its draws, and changes nothing.
+        transport.now.set(1_010);
+        fail_at.set(Some(position));
+        assert!(client.continue_grant(1_010).is_err(), "draw {position}");
+        let refused = as_
+            .storage()
+            .lookup(GrantSelector::Id(before.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(refused.revision, completed.revision, "draw {position}");
+        assert!(refused.aggregate.tokens.is_empty(), "draw {position}");
+
+        let step = client.continue_grant(1_010).unwrap();
+        assert!(
+            matches!(step, Step::Approved(_)),
+            "draw {position}: {step:?}"
+        );
     }
 }
 
