@@ -227,6 +227,21 @@ const REVOCATION: &str = "https://www.rfc-editor.org/rfc/rfc9635.html#section-6.
 const GRANT_REVOCATION: &str = "https://www.rfc-editor.org/rfc/rfc9635.html#section-5.4";
 const PRESENTATION: &str = "https://www.rfc-editor.org/rfc/rfc9635.html#section-7.2";
 
+/// Reports each step the scenario didn't reach as skipped, so that every run
+/// lists the same checks.
+fn skip_unreached(findings: &mut Vec<Finding>) {
+    for id in STEPS {
+        if findings.iter().all(|finding| finding.id != id) {
+            findings.push(finding(
+                id,
+                Outcome::Skipped,
+                RFC,
+                "The scenario ended before this step, as an earlier finding explains.",
+            ));
+        }
+    }
+}
+
 const fn finding(
     id: &'static str,
     outcome: Outcome,
@@ -462,17 +477,14 @@ pub fn lifecycle<T: HttpTransport>(
         gnap_crypto::httpsig::fresh_nonce().unwrap_or_default()
     );
     let Ok(key) = generate(plan.alg, &kid) else {
-        return Report::scenario(
-            &plan.endpoint,
-            started,
-            plan.profile(),
-            vec![finding(
-                "key-generation",
-                Outcome::Inconclusive,
-                RFC,
-                "The scenario couldn't generate its key: the system's random source is unavailable.",
-            )],
-        );
+        let mut findings = vec![finding(
+            "key-generation",
+            Outcome::Inconclusive,
+            RFC,
+            "The scenario couldn't generate its key: the system's random source is unavailable.",
+        )];
+        skip_unreached(&mut findings);
+        return Report::scenario(&plan.endpoint, started, plan.profile(), findings);
     };
     let mut run = Run {
         session: Session::new(transport, Arc::clone(&key), plan.endpoint.as_str()),
@@ -836,16 +848,7 @@ fn finish<T: HttpTransport>(mut run: Run<'_, T>, _: &T, started: u64) -> Report 
             "The operator interrupted the scenario; its findings so far are kept.",
         );
     }
-    for id in STEPS {
-        if run.findings.iter().all(|finding| finding.id != id) {
-            run.push(
-                id,
-                Outcome::Skipped,
-                RFC,
-                "The scenario ended before this step, as an earlier finding explains.",
-            );
-        }
-    }
+    skip_unreached(&mut run.findings);
     // A revoked token leaves the session, so a managed token it still holds
     // is one the scenario didn't revoke.
     let now = run.clock.now();
