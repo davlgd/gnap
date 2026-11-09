@@ -53,6 +53,17 @@ apps/conformance-web/target/debug/gnap-conformance probe https://as.example/gnap
 
 `discover` sends `OPTIONS` to the grant endpoint and checks its discovery document ([RFC 9635 §9](https://www.rfc-editor.org/rfc/rfc9635.html#section-9)), without fetching any link it announces. `probe` sends the workbench's malformed initial grant request, which carries no client or proof, and checks the refusal ([§3.6](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.6)). Each command sends only that request, through the bounded transport of the workbench: no proxy, redirect, or retry, public addresses pinned, and bounded time and sizes.
 
+`lifecycle` runs one grant from request to revocation with a key it generates in memory, never shown or stored:
+
+```bash
+apps/conformance-web/target/debug/gnap-conformance lifecycle https://as.example/gnap \
+  --proof jwsd --alg EdDSA --access read --resource https://rs.example/files --rotate-key
+```
+
+`--proof` is `httpsig`, `jws`, or `jwsd`, and `--alg` an algorithm the method takes: PS256, ES256, or EdDSA for `httpsig`, and RS256, ES256, or EdDSA for the JOSE proofs. `--access` names a requested right, as a string or a JSON object, up to eight times. The scenario requests a token with a redirect start and no finish. When the grant is pending, it shows the interaction link on standard error, never follows it, and polls for up to `--wait` seconds (120 by default, at most 600). Then it rotates the token's value, changes its key with `--rotate-key` when the AS announces key rotation, revokes the token, and revokes the grant with a budget reserved for cleanup. With `--resource`, it reads the resource with the token, proven with its key, before and after revocation, each time with a fresh proof.
+
+The scenario sends only what it was given, and the exact continuation and management URIs that accepted answers name on the grant endpoint's origin: another origin is reported as outside its profile, never followed. An AS that refuses the client, or a resource owner who denies the request, ends the scenario without a failure: those are policies and results, not deviations. An interrupt stops the scenario and cleans up; a second one quits. If an answer is lost, the grant may remain at the AS.
+
 The endpoint is HTTPS on port 443 with a public DNS name, without credentials, query, or fragment; `--allow-loopback-http` admits a local `http://localhost`, `127.0.0.1`, or `[::1]` server. Each check is `passed`, `failed`, `inconclusive`, `skipped`, or `not_applicable`, with the clause it relies on. `--json` prints the report in the `gnap-conformance/1` schema. The exit code is 0 when every selected check that applied passed, 1 when one failed, and 2 for a usage error or when no check could be decided. Passing selected checks isn't conformance or certification.
 
 ## Tested scope and its limits
