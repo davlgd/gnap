@@ -10,6 +10,8 @@ This file points coding agents to the rules of this repository, which all apply 
 - Define each security bound as a constant of this project
 - Depend on published crate releases only
 - Attribute each measurement, and keep local, CI, and hosted results apart
+- Record each change to a crate's public API in the [changelog](CHANGELOG.md)
+- Compare what a check examined before and after you move code, not only its verdict
 
 A refusal test can contain the very value you think it accepts, and a linter that finds no file, or a tool that isn't installed, can still exit with 0. The generated files are `crates/gnap-registry/src/generated.rs`, `conformance/clauses.json`, and `conformance/REPORT.md`. A bound borrowed from a dependency, such as a key size, changes silently when the dependency does.
 

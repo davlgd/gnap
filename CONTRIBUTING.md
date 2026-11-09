@@ -42,7 +42,7 @@ The code aims for what an experienced Rust reviewer expects to find, so that a r
 
 Comments explain why the code does something non-obvious, not what it does. References to the RFCs, such as `GNAP-9635-§7.3.1`, and the literal quotations next to them, are the project's normative traceability: keep them, and keep the quotations exact, because CI compares them with the vendored RFC text.
 
-Own the security bounds you enforce, such as a key size or a decoded length, as named constants of this project. A limit borrowed from a dependency changes silently when the dependency does. Depend only on published crate releases, never on a Git revision, and explain in the pull request why each new dependency is needed.
+A change to the public API of a crate adds its entry to the [changelog](CHANGELOG.md), with what a user must change. Own the security bounds you enforce, such as a key size or a decoded length, as named constants of this project. A limit borrowed from a dependency changes silently when the dependency does. Depend only on published crate releases, never on a Git revision, and explain in the pull request why each new dependency is needed.
 
 ## Write documentation
 
