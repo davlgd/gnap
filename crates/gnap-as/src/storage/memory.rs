@@ -10,11 +10,12 @@ use crate::derivation::{
 use crate::server::MAX_CLOCK_SKEW;
 use gnap_types::token::TokenValue;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::Mutex;
 
 const NONCE_MEMORY: u64 = 2 * MAX_CLOCK_SKEW;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Indices {
     continuation: HashMap<String, GrantId>,
     interaction: HashMap<String, GrantId>,
@@ -164,7 +165,7 @@ impl Indices {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct State {
     last_id: u64,
     grants: HashMap<GrantId, GrantSnapshot>,
@@ -248,10 +249,27 @@ impl State {
 /// Production stores must define retention and capacity limits. Removed IDs
 /// are never reused. No policy, signature verification or token encoding runs
 /// under this lock; local index hashing and the trusted clock callback do.
-#[derive(Debug, Default)]
+///
+/// Its `Debug` output shows counts only: the indices are keyed by credentials.
+#[derive(Default)]
 pub struct MemoryStorage {
     state: Mutex<State>,
     nonces: Mutex<HashMap<String, u64>>,
+}
+
+impl fmt::Debug for MemoryStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut shown = f.debug_struct("MemoryStorage");
+        match self.state.lock() {
+            Ok(state) => shown.field("grants", &state.grants.len()),
+            Err(_) => shown.field("grants", &"<poisoned>"),
+        };
+        match self.nonces.lock() {
+            Ok(nonces) => shown.field("reserved_nonces", &nonces.len()),
+            Err(_) => shown.field("reserved_nonces", &"<poisoned>"),
+        };
+        shown.finish()
+    }
 }
 
 impl MemoryStorage {
@@ -610,6 +628,15 @@ mod tests {
         let shown = format!("{:?} {record:?}", aggregate.record);
         assert!(!shown.contains("SECRET"), "a credential leaked: {shown}");
         assert!(shown.contains("Some(<redacted>)"));
+
+        // The store indexes those values, and shows none of them.
+        aggregate.record.user_code = None;
+        aggregate.tokens.insert("1".into(), record);
+        let storage = MemoryStorage::new();
+        storage.create(aggregate).unwrap();
+        let shown = format!("{storage:?}");
+        assert!(!shown.contains("SECRET"), "a credential leaked: {shown}");
+        assert!(shown.contains("grants: 1"), "{shown}");
     }
 
     #[test]
