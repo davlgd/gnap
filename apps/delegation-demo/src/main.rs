@@ -868,6 +868,7 @@ fn client_worker(
     decisions: Decisions,
     receiver: mpsc::Receiver<WorkerCommand>,
     references: resource_registration::References,
+    lifetime: Duration,
 ) {
     let transport = Network {
         client: reqwest::blocking::Client::builder()
@@ -880,8 +881,12 @@ fn client_worker(
     };
     let mut sessions: HashMap<String, BrowserSession<'_>> = HashMap::new();
     loop {
+        let received = receiver.recv_timeout(Duration::from_secs(30));
+        // Expiry is checked once the command has arrived, not before the wait:
+        // a session that expired while the worker waited is gone before any
+        // command, a push included, can read or change it.
         sessions.retain(|id, session| {
-            let live = session.born.elapsed() < SESSION_LIFETIME;
+            let live = session.born.elapsed() < lifetime;
             if !live {
                 let mut decisions = decisions.lock().unwrap();
                 decisions.clients.remove(id);
@@ -890,7 +895,7 @@ fn client_worker(
             }
             live
         });
-        let command = match receiver.recv_timeout(Duration::from_secs(30)) {
+        let command = match received {
             Ok(WorkerCommand::Browser(c)) => c,
             Ok(WorkerCommand::Push(incoming)) => {
                 push_finish::process(&mut sessions, &decisions, incoming);
@@ -1884,6 +1889,7 @@ async fn main() {
                 decisions,
                 receiver,
                 references,
+                SESSION_LIFETIME,
             ),
             Err(_) => {
                 eprintln!("Resource registration bootstrap failed");

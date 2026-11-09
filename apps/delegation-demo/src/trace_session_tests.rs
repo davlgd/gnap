@@ -6,12 +6,16 @@ use tower::ServiceExt;
 /// Starts a session through the front door, as a browser would, and returns
 /// the identity its cookie carries.
 async fn start(router: &Router, origin: &str) -> String {
+    start_with(router, origin, "start").await
+}
+
+async fn start_with(router: &Router, origin: &str, action: &str) -> String {
     let response = router
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/start")
+                .uri(format!("/api/{action}"))
                 .header("host", origin.strip_prefix("http://").unwrap())
                 .header("origin", origin)
                 .body(axum::body::Body::empty())
@@ -39,8 +43,9 @@ fn routes(view: &Value) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_sessions_record_their_own_exchanges_and_no_secret() {
+/// A lab served on a loopback port, with its worker, whose sessions last
+/// `lifetime`.
+async fn lab(lifetime: Duration) -> (App, Router, String) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let mut app = tests::test_app_at(&origin);
@@ -71,11 +76,38 @@ async fn two_sessions_record_their_own_exchanges_and_no_secret() {
             decisions,
             receiver,
             references,
+            lifetime,
         )
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());
     let served = router.clone();
     tokio::spawn(async move { axum::serve(listener, served).await.unwrap() });
+    (app, router, origin)
+}
+
+/// The status a browser reads, with the cookie it holds, if any.
+async fn status(router: &Router, origin: &str, cookie: Option<&str>) -> Value {
+    let mut request = Request::builder()
+        .uri("/api/status")
+        .header("host", origin.strip_prefix("http://").unwrap());
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", format!("gnap_demo={cookie}"));
+    }
+    let response = router
+        .clone()
+        .oneshot(request.body(axum::body::Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_sessions_record_their_own_exchanges_and_no_secret() {
+    let (app, router, origin) = lab(SESSION_LIFETIME).await;
 
     // Two browsers, their steps interleaved.
     let (a, b) = (start(&router, &origin).await, start(&router, &origin).await);
@@ -160,5 +192,41 @@ async fn two_sessions_record_their_own_exchanges_and_no_secret() {
                 "a secret reached the record"
             );
         }
+    }
+}
+
+/// Over HTTP, each cookie reads its own session's record and nothing else; no
+/// cookie, or an unknown one, reads none; and a session that expired while
+/// the worker waited serves nothing, whatever the cookie.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_record_is_read_by_its_own_cookie_until_the_session_expires() {
+    let lifetime = Duration::from_secs(3);
+    let (_, router, origin) = lab(lifetime).await;
+    // Two scenarios whose first requests differ: one token, then two labelled ones.
+    let a = start(&router, &origin).await;
+    let b = start_with(&router, &origin, "start-multiple").await;
+    let labels = |view: &Value| {
+        view["trace"]["attempts"][0]["request"]["body"]["tokens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|token| token["label"].clone())
+            .collect::<Vec<_>>()
+    };
+    let view_a = status(&router, &origin, Some(&a)).await;
+    let view_b = status(&router, &origin, Some(&b)).await;
+    assert_eq!(routes(&view_a), ["grant"]);
+    assert_eq!(routes(&view_b), ["grant"]);
+    assert_eq!(labels(&view_a), [Value::Null]);
+    assert_eq!(labels(&view_b), [json!("documents"), json!("reports")]);
+    for cookie in [None, Some("unknownunknownunknown12")] {
+        let view = status(&router, &origin, cookie).await;
+        assert!(view.get("trace").is_none_or(Value::is_null), "{view}");
+    }
+    // The worker now waits for its next command; the sessions expire meanwhile.
+    tokio::time::sleep(lifetime + Duration::from_secs(1)).await;
+    for cookie in [&a, &b] {
+        let view = status(&router, &origin, Some(cookie)).await;
+        assert!(view.get("trace").is_none_or(Value::is_null), "{view}");
     }
 }

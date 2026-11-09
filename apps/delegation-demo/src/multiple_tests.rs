@@ -593,6 +593,7 @@ async fn browser_flow_selects_tokens_by_label_over_http() {
             decisions,
             receiver,
             references,
+            SESSION_LIFETIME,
         )
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());

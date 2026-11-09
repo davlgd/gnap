@@ -115,6 +115,7 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
             decisions,
             receiver,
             references,
+            SESSION_LIFETIME,
         )
     });
     let starts = Arc::new(AtomicUsize::new(0));

@@ -88,6 +88,7 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
             decisions,
             receiver,
             references,
+            SESSION_LIFETIME,
         )
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());

@@ -551,6 +551,7 @@ async fn two_independent_http_sessions_decide_then_poll_and_read_the_resource() 
             decisions,
             receiver,
             references,
+            SESSION_LIFETIME,
         )
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());

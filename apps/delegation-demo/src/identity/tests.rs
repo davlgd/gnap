@@ -267,6 +267,7 @@ fn local_http_worker_refuses_identity_before_creating_client_or_grant() {
             app.decisions,
             receiver,
             references,
+            SESSION_LIFETIME,
         )
     });
     let (reply, received) = tokio::sync::oneshot::channel();
