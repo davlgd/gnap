@@ -354,6 +354,29 @@ pub fn verify_jws_rotation(
     })
 }
 
+/// The payload of a request's attached JWS, decoded WITHOUT verification.
+///
+/// A server needs it for one thing: to find, in a first request, the key that
+/// the proof claims, so that it can resolve that key and verify the proof
+/// with [`verify_jws_request`]. Nothing in it is authenticated: read only the
+/// key from it, and process the content that the verification returns. It
+/// decodes one JWS within the bounds of the verifier, refuses what its
+/// envelope check refuses, and neither verifies, reserves, nor normalizes.
+///
+/// # Errors
+///
+/// [`VerifyError::Unsigned`] when the request carries no attached JWS, and
+/// [`VerifyError::Rejected`] when its envelope or serialization is malformed.
+pub fn unverified_attached_payload(request: &SignedRequest<'_>) -> Result<Vec<u8>, VerifyError> {
+    let envelope = Envelope::of(JwsMethod::Jws, request)?;
+    if !envelope.attached {
+        return Err(VerifyError::Unsigned);
+    }
+    Parsed::new(envelope.compact)
+        .map(|proof| proof.payload)
+        .map_err(VerifyError::Rejected)
+}
+
 /// Where the request carries its JWS.
 struct Envelope<'r> {
     compact: &'r str,

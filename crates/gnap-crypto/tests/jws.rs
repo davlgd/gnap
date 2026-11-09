@@ -5,10 +5,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use gnap_crypto::jws::{DETACHED_JWS_HEADER, JOSE_MEDIA_TYPE, MAX_DETACHED_JWS_BYTES};
 use gnap_crypto::{
-    sign_jws, sign_jws_rotation, verify_jws_request, verify_jws_rotation, Ed25519Signer,
-    Es256Signer, Expectations, JwkSigner, JwsKey, JwsMethod, JwsParams, JwsProof, JwsReplayMemory,
-    Ps256Signer, PublicKey, ReplayCache, ReplayId, Rs256Signer, Rs256Verifier, SignedRequest,
-    Signer, Verifier, VerifyError,
+    sign_jws, sign_jws_rotation, unverified_attached_payload, verify_jws_request,
+    verify_jws_rotation, Ed25519Signer, Es256Signer, Expectations, JwkSigner, JwsKey, JwsMethod,
+    JwsParams, JwsProof, JwsReplayMemory, Ps256Signer, PublicKey, ReplayCache, ReplayId,
+    Rs256Signer, Rs256Verifier, SignedRequest, Signer, Verifier, VerifyError,
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest as _, Sha256};
@@ -1372,4 +1372,54 @@ fn a_signer_without_identifier_signs_without_kid() {
         &forgetful(),
     )
     .expect("a verifier without kid expectation accepts it");
+}
+
+/// The unverified payload is the attached JWS's payload as it travels, and
+/// nothing else: no detached proof, no envelope the verifier refuses, and no
+/// second layer.
+#[test]
+fn the_unverified_payload_reads_one_attached_jws() {
+    let signer = ed25519();
+    let attached = Wire::new(
+        sign_jws(JwsMethod::Jws, &params(None), CONTENT, &signer).unwrap(),
+        CONTENT,
+        None,
+    );
+    assert_eq!(
+        unverified_attached_payload(&attached.request()).unwrap(),
+        CONTENT
+    );
+    let bodyless = Wire::new(
+        sign_jws(JwsMethod::Jws, &params(None), b"", &signer).unwrap(),
+        b"",
+        None,
+    );
+    assert_eq!(
+        unverified_attached_payload(&bodyless.request()),
+        Err(VerifyError::Unsigned),
+        "a jws without content is detached"
+    );
+    let detached = Wire::new(
+        sign_jws(JwsMethod::Jwsd, &params(None), CONTENT, &signer).unwrap(),
+        CONTENT,
+        None,
+    );
+    assert!(unverified_attached_payload(&detached.request()).is_err());
+    let mut mixed = attached;
+    mixed.header("Signature-Input", "sig=()");
+    assert!(matches!(
+        unverified_attached_payload(&mixed.request()),
+        Err(VerifyError::Rejected(_))
+    ));
+    let rotation = Wire::new(
+        sign_jws_rotation(JwsMethod::Jws, &params(None), CONTENT, &signer, &es256()).unwrap(),
+        CONTENT,
+        None,
+    );
+    let outer = unverified_attached_payload(&rotation.request()).unwrap();
+    assert_eq!(
+        outer.split(|b| *b == b'.').count(),
+        3,
+        "only the outer layer"
+    );
 }
