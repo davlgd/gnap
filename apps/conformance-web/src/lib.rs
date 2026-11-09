@@ -17,6 +17,7 @@ use tokio::sync::Semaphore;
 
 pub mod discovery;
 pub mod lifecycle;
+pub mod net;
 pub mod probe;
 mod rs_import;
 mod token_exchange;
