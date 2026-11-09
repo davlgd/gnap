@@ -79,7 +79,9 @@ main > section, main > .panel, main > .bench { margin-top: 2.5rem; }
 main.wide { max-width: 82rem; }
 
 /* A bench: tools on the left, their report beside them on a wide screen. */
-.bench { display: grid; gap: 1.5rem; align-items: start; }
+/* One track that shrinks below its content's width: a long option or
+   command must not widen the page. */
+.bench { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; align-items: start; }
 .bench-tools { display: grid; gap: 1.5rem; min-width: 0; }
 @media (min-width: 64rem) {
   .bench { grid-template-columns: minmax(0, 1fr) minmax(22rem, 30rem); }
