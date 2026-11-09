@@ -2,17 +2,19 @@
 const error = document.querySelector('#error');
 let identityExpiryTimer;
 let statusTimer;
-// The view moves to a new generation when an action starts and again when it
-// settles: a status read that overlaps an action, from a timer, the first
-// load or a refused action, may carry the old session, so its answer and its
-// failure are both dropped. Only the latest action may render.
+// One action runs at a time: the commands are locked until it settles, so two
+// starts can never race their session cookies. A status read, from a timer,
+// the first load or a refused action, applies only while no action runs and
+// if none settled since it left: otherwise it may carry the old session, and
+// its answer and its failure are both dropped.
+let busy = false;
 let generation = 0;
-let latestAction = 0;
 function refreshStatus(apply) {
   const mine = generation;
+  const current = () => !busy && mine === generation;
   fetch('/api/status', {credentials: 'same-origin'})
     .then(r => r.json())
-    .then(view => { if (mine === generation) apply(view); }, e => { if (mine === generation) error.textContent = e.message; });
+    .then(view => { if (current()) apply(view); }, e => { if (current()) error.textContent = e.message; });
 }
 function render(data) {
   if (data.error) { error.textContent = data.error; return; }
@@ -65,25 +67,36 @@ function render(data) {
   // This refreshes only this client's view. It never polls GNAP continuation.
   if (data.state === 'starting' || (data.continuation_open && wait > 0) || (push && !push.expired && (data.state === 'awaiting_push' || push.delivery === 'queued'))) statusTimer = setTimeout(() => refreshStatus(render), 1000);
 }
-for (const button of document.querySelectorAll('[data-action]')) button.addEventListener('click', async () => {
-  button.disabled = true;
-  const mine = ++latestAction;
-  generation += 1;
+const actionButtons = [...document.querySelectorAll('[data-action]')];
+for (const button of actionButtons) button.addEventListener('click', async () => {
+  if (busy) return;
+  busy = true;
+  const before = actionButtons.map(item => item.disabled);
+  for (const item of actionButtons) item.disabled = true;
+  // The buttons as they were, for an action that renders no new state.
+  const unlock = () => actionButtons.forEach((item, i) => { item.disabled = before[i]; });
   // A new grant starts a new record.
   if (button.dataset.action.startsWith('start')) { shownAttempts = []; document.querySelector('#trace').replaceChildren(); }
   try {
     const response = await fetch(`/api/${button.dataset.action}`, {method: 'POST', credentials: 'same-origin'});
     const data = await response.json();
-    if (mine !== latestAction) return;
+    busy = false;
     generation += 1;
     if (['start', 'start-identity', 'start-push', 'start-multiple', 'expand', 'downscope'].includes(button.dataset.action) && data.state === 'pending' && data.interaction_uri) { const target = new URL(data.interaction_uri); if (target.origin !== location.origin) throw new Error('Unexpected interaction origin'); location.assign(target.href); return; }
     if (data.redirect) { const target = new URL(data.redirect); if (target.origin !== location.origin) throw new Error('Unexpected callback origin'); location.assign(target.href); return; }
     render(data);
-    // A refused action answers with its error only: read the record again, so
-    // the attempt it made shows, without sending the action twice.
-    if (data.error) refreshStatus(view => renderTrace(view.trace));
-  } catch (e) { if (mine === latestAction) error.textContent = e.message; }
-  finally { if (error.textContent) button.disabled = false; }
+    if (data.error) {
+      unlock();
+      // A refused action answers with its error only: read the record again,
+      // so the attempt it made shows, without sending the action twice.
+      refreshStatus(view => renderTrace(view.trace));
+    }
+  } catch (e) {
+    busy = false;
+    generation += 1;
+    unlock();
+    error.textContent = e.message;
+  }
 });
 refreshStatus(render);
 

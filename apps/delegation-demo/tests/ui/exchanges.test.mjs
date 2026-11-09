@@ -197,18 +197,22 @@ test('a status read a timer started before an action never renders over it', asy
   assert.ok(lab.routes().includes('/gnap'));
 });
 
-test('an action answered after a newer one never renders over it', async () => {
+test('one action runs at a time: a click while one is in flight sends nothing', async () => {
   const lab = page();
-  lab.answer(0, { state: 'approved', trace: { attempts: [attempt('grant')], dropped: 0 } });
+  lab.answer(0, { state: 'approved', token_present: true, trace: { attempts: [attempt('grant')], dropped: 0 } });
   await settle();
-  const reading = lab.nodes.get('[data-action="read"]').click();
-  const starting = lab.nodes.get('[data-action="start-code"]').click();
-  lab.answer(2, { state: 'pending', trace: { attempts: [attempt('continue')], dropped: 0 } });
-  await starting;
-  lab.answer(1, { state: 'approved', trace: { attempts: [attempt('grant'), attempt('folder')], dropped: 0 } });
+  const read = lab.nodes.get('[data-action="read"]');
+  const start = lab.nodes.get('[data-action="start-code"]');
+  assert.equal(read.disabled, false);
+  const reading = read.click();
+  assert.ok([...lab.nodes.values()].filter(node => node.dataset.action).every(node => node.disabled), 'every command is locked');
+  const sent = lab.requests.length;
+  await start.click();
+  assert.equal(lab.requests.length, sent, 'the second click sent nothing');
+  lab.answer(sent - 1, { state: 'approved', token_present: true, trace: { attempts: [attempt('grant'), attempt('folder')], dropped: 0 } });
   await reading;
-  assert.ok(lab.routes().includes('/continue'));
-  assert.ok(!lab.routes().includes('/resource/folder'), 'the older action is dropped');
+  assert.equal(read.disabled, false, 'the state after the action sets the commands again');
+  assert.ok(lab.routes().includes('/resource/folder'));
 });
 
 test('a new start clears the record before the new grant answers', async () => {
@@ -249,14 +253,14 @@ test('a failure that predates an action never shows as its error', async () => {
   await settle();
   assert.equal(lab.nodes.get('#error').textContent, '', 'the first load failed before the start');
 
-  const older = lab.nodes.get('[data-action="read"]').click();
-  const newer = lab.nodes.get('[data-action="rotate"]').click();
-  const [readAt, rotateAt] = [lab.requests.length - 2, lab.requests.length - 1];
-  lab.answer(rotateAt, { state: 'approved', trace: { attempts: [attempt('token_management')], dropped: 0 } });
-  await newer;
-  lab.requests[readAt].resolve({ json: async () => { throw new Error('obsolete action failure'); } });
-  await older;
-  assert.equal(lab.nodes.get('#error').textContent, '', 'the older action failed after the newer one');
+  // An action whose answer can't be read shows why, and gives the commands back.
+  const read = lab.nodes.get('[data-action="read"]');
+  read.disabled = false;
+  const failing = read.click();
+  lab.requests[lab.requests.length - 1].resolve({ json: async () => { throw new Error('unreadable answer'); } });
+  await failing;
+  assert.equal(lab.nodes.get('#error').textContent, 'unreadable answer');
+  assert.equal(read.disabled, false);
 });
 
 test('a status read answered while an action is in flight is dropped too', async () => {
@@ -269,3 +273,21 @@ test('a status read answered while an action is in flight is dropped too', async
   await started;
   assert.ok(lab.routes().includes('/gnap'));
 });
+
+test('a status read that leaves and answers while an action runs is dropped', async () => {
+  const lab = page();
+  lab.answer(0, { state: 'starting', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await settle();
+  const started = lab.nodes.get('[data-action="start"]').click();
+  const action = lab.requests.length - 1;
+  lab.timers[0]();
+  const read = lab.requests.length - 1;
+  lab.answer(read, { state: 'approved', trace: { attempts: [attempt('folder')], dropped: 0 } });
+  await settle();
+  assert.equal(lab.nodes.get('#trace').children.length, 0, 'nothing renders while the start runs');
+  lab.answer(action, { state: 'pending', trace: { attempts: [attempt('grant')], dropped: 0 } });
+  await started;
+  assert.ok(lab.routes().includes('/gnap'));
+  assert.ok(!lab.routes().includes('/resource/folder'));
+});
+
