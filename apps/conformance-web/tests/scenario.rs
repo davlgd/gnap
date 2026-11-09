@@ -109,7 +109,17 @@ struct InMemory<'a> {
     clock: &'a Virtual,
     admitted: &'a Admitted,
     sent: RefCell<Vec<(String, String, u64)>>,
+    /// The resource's answer to a token, live at the AS or not; `None`
+    /// fails the exchange.
+    resource: fn(&str, bool) -> Option<u16>,
 }
+
+/// A resource that accepts the tokens the AS still holds.
+#[allow(clippy::unnecessary_wraps)]
+const fn live_tokens(_: &str, live: bool) -> Option<u16> {
+    Some(if live { 200 } else { 401 })
+}
+
 impl HttpTransport for InMemory<'_> {
     type Error = &'static str;
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
@@ -136,8 +146,9 @@ impl HttpTransport for InMemory<'_> {
                 .ok()
                 .flatten()
                 .is_some();
+            let status = (self.resource)(&token, live).ok_or("unreachable resource")?;
             return Ok(HttpResponse {
-                status: if live { 200 } else { 401 },
+                status,
                 headers: vec![],
                 body: vec![],
             });
@@ -162,6 +173,18 @@ fn run(
     gnap_conformance_web::cli::Report,
     Vec<(String, String, u64)>,
 ) {
+    run_with(server, plan, notify, live_tokens)
+}
+
+fn run_with(
+    server: &Server,
+    plan: &Plan,
+    notify: &dyn Fn(&str),
+    resource: fn(&str, bool) -> Option<u16>,
+) -> (
+    gnap_conformance_web::cli::Report,
+    Vec<(String, String, u64)>,
+) {
     let clock = Virtual(Cell::new(1_700_000_000));
     let admitted = Admitted::new(GRANT, false).unwrap();
     admitted.allow("POST", GRANT);
@@ -174,6 +197,7 @@ fn run(
         clock: &clock,
         admitted: &admitted,
         sent: RefCell::new(Vec::new()),
+        resource,
     };
     let report = scenario::lifecycle(&transport, &Admit(&admitted), &clock, notify, plan, false);
     let sent = transport.sent.into_inner();
@@ -219,6 +243,7 @@ fn the_whole_lifecycle_passes_for_every_method() {
             "resource-access",
             "token-rotation",
             "key-rotation",
+            "resource-access-before-revocation",
             "token-revocation",
             "revoked-token-refused",
             "grant-revocation",
@@ -391,8 +416,8 @@ fn the_scenario_stays_within_its_admissions() {
         .filter(|(_, url, _)| url == RESOURCE)
         .map(|(_, _, at)| *at)
         .collect();
-    assert_eq!(reads.len(), 2);
-    assert!(reads[1] > reads[0], "{reads:?}");
+    assert_eq!(reads.len(), 3);
+    assert!(reads.windows(2).all(|pair| pair[1] > pair[0]), "{reads:?}");
 }
 
 /// A continuation on another origin is outside the scenario's profile: it
@@ -427,4 +452,54 @@ fn another_origin_is_never_followed() {
         "{sent:?}"
     );
     assert_eq!(report.exit_code(), 2);
+}
+
+/// A resource the scenario was asked to read but couldn't reach decides
+/// nothing: the run can't succeed.
+#[test]
+fn an_unreachable_resource_is_inconclusive() {
+    let server = server(false, false);
+    let (report, _) = run_with(
+        &server,
+        &plan("jwsd", "ES256", true, false),
+        &|_| {},
+        |_, _| None,
+    );
+    assert_eq!(
+        outcome(&report, "resource-access"),
+        Some(Outcome::Inconclusive)
+    );
+    assert_eq!(report.exit_code(), 2, "{}", report.text());
+}
+
+/// When the resource doesn't accept the last token before revocation, its
+/// refusal afterwards says nothing about revocation.
+#[test]
+fn a_refusal_after_revocation_needs_an_acceptance_before() {
+    use std::sync::OnceLock;
+    static FIRST: OnceLock<String> = OnceLock::new();
+    // Accepts only the first token it sees, as if the rotated value weren't
+    // bound to the right key.
+    fn first_only(token: &str, live: bool) -> Option<u16> {
+        let first = FIRST.get_or_init(|| token.to_owned());
+        Some(if live && first == token { 200 } else { 401 })
+    }
+    let server = server(false, false);
+    let (report, _) = run_with(
+        &server,
+        &plan("httpsig", "ES256", true, false),
+        &|_| {},
+        first_only,
+    );
+    assert_eq!(outcome(&report, "resource-access"), Some(Outcome::Passed));
+    assert_eq!(
+        outcome(&report, "resource-access-before-revocation"),
+        Some(Outcome::Inconclusive)
+    );
+    assert_eq!(
+        outcome(&report, "revoked-token-refused"),
+        Some(Outcome::Inconclusive),
+        "{}",
+        report.text()
+    );
 }

@@ -213,6 +213,13 @@ fn showable(link: &str, local: bool) -> bool {
         && (url.scheme() == "https" || loopback)
 }
 
+/// What a resource read observed.
+enum Read {
+    NotRequested,
+    Unavailable,
+    Status(u16),
+}
+
 /// The state the scenario keeps besides the session.
 struct Run<'a, T: HttpTransport> {
     session: Session<&'a T, Key>,
@@ -288,12 +295,14 @@ impl<T: HttpTransport> Run<'_, T> {
             });
     }
 
-    /// A resource request proven with the current token's key, after the
-    /// clock moved past `after`, so that the proof is fresh.
-    fn present(&self, transport: &T, token: &TokenValue, key: &Key, after: u64) -> Option<u16> {
-        let resource = self.plan.resource.as_ref()?;
+    /// A resource request proven with `key`, once the clock moved past
+    /// `after`, so that the proof is fresh.
+    fn present(&self, transport: &T, token: &TokenValue, key: &Key, after: u64) -> Read {
+        let Some(resource) = self.plan.resource.as_ref() else {
+            return Read::NotRequested;
+        };
         if !self.clock.sleep_until(after.saturating_add(1)) {
-            return None;
+            return Read::Unavailable;
         }
         let now = self.clock.now();
         let request = HttpRequest::new("GET", resource.as_str());
@@ -302,9 +311,33 @@ impl<T: HttpTransport> Run<'_, T> {
             Proof::Jose(method) => {
                 sign_jose_request(request, method, key.as_ref(), Some(token), now)
             }
-        }
-        .ok()?;
-        transport.send(signed).ok().map(|response| response.status)
+        };
+        signed
+            .ok()
+            .and_then(|signed| transport.send(signed).ok())
+            .map_or(Read::Unavailable, |response| Read::Status(response.status))
+    }
+
+    /// Reads the resource with `token` and `key`, expecting it accepted, and
+    /// records the finding; returns whether it was accepted.
+    fn witness(&mut self, transport: &T, id: &'static str, token: &TokenValue, key: &Key) -> bool {
+        let read = self.present(transport, token, key, self.clock.now());
+        let (outcome, accepted) = match read {
+            Read::NotRequested => (Outcome::Skipped, false),
+            Read::Unavailable => (Outcome::Inconclusive, false),
+            Read::Status(status) if (200..300).contains(&status) => (Outcome::Passed, true),
+            Read::Status(_) => (Outcome::Inconclusive, false),
+        };
+        self.push(
+            id,
+            outcome,
+            PRESENTATION,
+            "The resource answered 2xx to the token, proven with its key. Another status may \
+             come from the resource's own rights, and a request that couldn't be signed or \
+             sent decides nothing: both leave the check inconclusive. Without --resource, it \
+             is skipped.",
+        );
+        accepted
     }
 }
 
@@ -382,6 +415,7 @@ pub fn lifecycle<T: HttpTransport>(
     let result = run.session.start(&request, issued_at);
     run.continued_at = clock.now();
     run.admit_held();
+    let mut approved_at = clock.now();
     let mut approved = match &result {
         Ok(Step::Approved(_)) => true,
         Ok(Step::Pending(response)) => {
@@ -449,7 +483,10 @@ pub fn lifecycle<T: HttpTransport>(
         run.continued_at = clock.now();
         run.admit_held();
         match polled {
-            Ok(Step::Approved(_)) => approved = true,
+            Ok(Step::Approved(_)) => {
+                approved = true;
+                approved_at = clock.now();
+            }
             Ok(Step::Pending(_) | Step::Recoverable(_)) => {}
             Err(ClientError::Server(_)) => {
                 run.push(
@@ -473,7 +510,7 @@ pub fn lifecycle<T: HttpTransport>(
             }
         }
     }
-    run.hold_token(issued_at);
+    run.hold_token(approved_at);
     let Some((token, holder, _)) = run.token.clone() else {
         run.push(
             "token-issued",
@@ -491,20 +528,7 @@ pub fn lifecycle<T: HttpTransport>(
     );
 
     // §7.2 — the resource accepts the token, proven with its key.
-    if let Some(status) = run.present(transport, &token, &holder, clock.now()) {
-        let outcome = if (200..300).contains(&status) {
-            Outcome::Passed
-        } else {
-            Outcome::Inconclusive
-        };
-        run.push(
-            "resource-access",
-            outcome,
-            PRESENTATION,
-            "The resource answered 2xx to the token, proven with its key. Another status may \
-             come from the resource's own rights, so it leaves the check inconclusive.",
-        );
-    }
+    run.witness(transport, "resource-access", &token, &holder);
 
     // §6.1 — the token's value changes; the rights don't.
     let rotated = run.session.rotate_token(None, clock.now());
@@ -516,7 +540,10 @@ pub fn lifecycle<T: HttpTransport>(
          Without a management API, or after a refusal, the check is inconclusive.",
     );
     run.admit_held();
-    run.hold_token(clock.now());
+    // A failed rotation keeps the token and the lifetime it had.
+    if rotated.is_ok() {
+        run.hold_token(clock.now());
+    }
 
     // §6.1.1 — the token's key changes, when asked for.
     if plan.rotate_key {
@@ -544,7 +571,8 @@ pub fn lifecycle<T: HttpTransport>(
                     )
                 },
             );
-            if changed.is_ok() {
+            let adopted = changed.is_ok();
+            if adopted {
                 run.current = replacement;
             }
             run.push(
@@ -555,12 +583,20 @@ pub fn lifecycle<T: HttpTransport>(
                  by both keys. A refusal leaves the check inconclusive.",
             );
             run.admit_held();
-            run.hold_token(clock.now());
+            if adopted {
+                run.hold_token(clock.now());
+            }
         }
     }
 
-    // §6.2 — the token is revoked, and the resource refuses it.
+    // §6.2 — the token is revoked, and the resource refuses it. The last
+    // token, with the last key, has to be accepted first, or a refusal after
+    // revocation could come from anything else.
     let last = run.token.clone();
+    let accepted = last.as_ref().is_some_and(|(value, key, _)| {
+        let (value, key) = (value.clone(), Arc::clone(key));
+        run.witness(transport, "resource-access-before-revocation", &value, &key)
+    });
     let revoked = run.session.revoke_token(None, clock.now());
     run.push(
         "token-revocation",
@@ -570,24 +606,24 @@ pub fn lifecycle<T: HttpTransport>(
          check inconclusive.",
     );
     if let (Ok(()), Some((value, key, expires_at))) = (&revoked, last) {
-        let checked_at = clock.now();
-        if let Some(status) = run.present(transport, &value, &key, checked_at) {
-            let expired = expires_at.is_some_and(|at| at <= clock.now());
-            let outcome = match status {
-                _ if expired => Outcome::Inconclusive,
-                401 | 403 => Outcome::Passed,
-                200..=299 => Outcome::Failed,
-                _ => Outcome::Inconclusive,
-            };
-            run.push(
-                "revoked-token-refused",
-                outcome,
-                REVOCATION,
-                "The resource refused the revoked token with 401 or 403, to a fresh proof that \
-                 was never presented before. A token already past its lifetime leaves the \
-                 check inconclusive, since expiry could explain the refusal.",
-            );
-        }
+        let read = run.present(transport, &value, &key, clock.now());
+        let expired = expires_at.is_some_and(|at| at <= clock.now());
+        let outcome = match read {
+            Read::NotRequested => Outcome::Skipped,
+            _ if !accepted || expired => Outcome::Inconclusive,
+            Read::Status(401 | 403) => Outcome::Passed,
+            Read::Status(200..=299) => Outcome::Failed,
+            Read::Status(_) | Read::Unavailable => Outcome::Inconclusive,
+        };
+        run.push(
+            "revoked-token-refused",
+            outcome,
+            REVOCATION,
+            "The resource refused the revoked token with 401 or 403, to a fresh proof that was \
+             never presented before, after it accepted the same token and key. Without that \
+             acceptance, or with a token already past its lifetime, the check is inconclusive: \
+             something else could explain the refusal.",
+        );
     }
     finish(run, transport, started)
 }
