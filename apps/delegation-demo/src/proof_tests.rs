@@ -246,11 +246,18 @@ async fn a_start_body_is_read_strictly() {
             "{action} is refused for its proof, before anything else"
         );
     }
-    let response = send("status", r#"{"proof":"jwsd"}"#.into()).await;
-    assert!(
-        response.status().is_client_error(),
-        "a body on another action"
-    );
+    // Any other action carries no body, whatever it says.
+    for action in ["continue", "read"] {
+        let response = send(action, r#"{"proof":"jwsd"}"#.into()).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{action}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&body).contains("Unexpected request body"),
+            "{action} is refused for its body"
+        );
+    }
     assert_eq!(app.storage.lab.lock().unwrap().count(), before);
     assert!(
         app.storage
