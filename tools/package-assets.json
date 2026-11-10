@@ -18,5 +18,6 @@
   "crates/gnap-as/LICENSE": "LICENSE",
   "crates/gnap-rs/LICENSE": "LICENSE",
   "crates/gnap-biscuit/LICENSE": "LICENSE",
-  "crates/gnap-net/LICENSE": "LICENSE"
+  "crates/gnap-net/LICENSE": "LICENSE",
+  "crates/gnap-conformance/LICENSE": "LICENSE"
 }

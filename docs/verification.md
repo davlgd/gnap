@@ -71,7 +71,7 @@ done
 
 CI then starts the applications on the loopback interface and drives them with [`smoke_ecosystem.py`](../tools/smoke_ecosystem.py), [`smoke_lifecycle.py`](../tools/smoke_lifecycle.py), and [`smoke_biscuit.py`](../tools/smoke_biscuit.py). These scenarios use plain HTTP, so they don't exercise certificate validation.
 
-The applications make HTTPS requests through rustls, which loads the certificate authorities of the system on Linux and fails if it finds none. Install the system CA bundle in a deployment image, and a C compiler, which the AWS-LC cryptographic backend needs to build. Check an outbound HTTPS request from the target image before you deploy. The SDK crates don't depend on this stack.
+The applications and `gnap-conformance` make HTTPS requests through rustls, which loads the certificate authorities of the system on Linux and fails if it finds none. Install the system CA bundle in a deployment image, and a C compiler, which the AWS-LC backend needs to build. Check an outbound HTTPS request from the target image before you deploy. The other SDK crates don't depend on this stack.
 
 ## IANA registries
 

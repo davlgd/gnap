@@ -3,13 +3,13 @@ name = "gnap-conformance-web"
 version = "0.1.0"
 edition = "2024"
 publish = false
-# The web workbench; `gnap-conformance` is the command line.
-default-run = "gnap-conformance-web"
 
 # Independently deployable consumer of the SDK, not a seventh SDK crate.
 [workspace]
 
 [dependencies]
+# The checks, the bounded transport and the lifecycle scenario.
+gnap-conformance = { path = "../../crates/gnap-conformance" }
 gnap-net = { path = "../../crates/gnap-net" }
 gnap-client = { path = "../../crates/gnap-client" }
 axum = "0.8.9"

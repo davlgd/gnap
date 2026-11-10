@@ -18,7 +18,7 @@ fn issued(label: &str) -> Value {
     json!({"label":label,"value":"synthetic-only","access":[]})
 }
 fn raw(body: &str) -> Report {
-    analyze(serde_json::from_value(json!({"kind":"token_exchange","body":body})).unwrap()).unwrap()
+    analyze(&serde_json::from_value(json!({"kind":"token_exchange","body":body})).unwrap()).unwrap()
 }
 fn report(body: Value) -> Report {
     raw(&body.to_string())
@@ -220,11 +220,11 @@ fn envelope_constraints_and_reports_do_not_echo_submitted_values() {
             .as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
-        assert!(analyze(serde_json::from_value(envelope).unwrap()).is_err());
+        assert!(analyze(&serde_json::from_value(envelope).unwrap()).is_err());
     }
     assert!(
         analyze(
-            serde_json::from_value(
+            &serde_json::from_value(
                 json!({"kind":"token_exchange","body":" ".repeat(MAX_MESSAGE+1)})
             )
             .unwrap()
@@ -291,7 +291,7 @@ fn fixtures_and_browser_help_name_the_local_pair_and_its_limits() {
             Status::Fail,
         ),
     ] {
-        let report = analyze(serde_json::from_str(fixture).unwrap()).unwrap();
+        let report = analyze(&serde_json::from_str(fixture).unwrap()).unwrap();
         assert_eq!(
             status(&report, "token-exchange-label-correspondence"),
             expected

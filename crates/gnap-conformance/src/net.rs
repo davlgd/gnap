@@ -78,12 +78,14 @@ impl Limits {
     };
 
     /// A command-line scenario that waits up to `wait` for an operator:
-    /// `wait` plus two minutes of exchanges, within at most 32 calls.
+    /// `wait` plus two minutes of exchanges, within at most 32 calls. The
+    /// budget saturates rather than overflow for an unbounded `wait`, which
+    /// [`crate::scenario::Plan::new`] refuses beyond its own bound.
     #[must_use]
     pub const fn scenario(wait: Duration) -> Self {
         Self {
             calls: 32,
-            budget: Duration::from_secs(wait.as_secs() + 120),
+            budget: Duration::from_secs(wait.as_secs().saturating_add(120)),
             ..Self::LIFECYCLE
         }
     }
@@ -114,7 +116,9 @@ pub trait Destinations {
 /// Exactly one request: one method to one URL, compared byte for byte.
 #[derive(Debug, Clone)]
 pub struct Exact {
+    /// The HTTP method.
     pub method: &'static str,
+    /// The exact URL.
     pub url: String,
 }
 
@@ -193,6 +197,8 @@ pub struct Phased<A, B> {
 }
 
 impl<A, B> Phased<A, B> {
+    /// Destinations that permit `scenario`'s requests until cleanup starts,
+    /// then only `cleanup`'s.
     pub const fn new(scenario: A, cleanup: B) -> Self {
         Self {
             scenario,
@@ -227,19 +233,22 @@ where
 ///
 /// Used from a dedicated thread: each call blocks on `runtime`.
 pub struct Bounded<D> {
+    /// The requests this transport may send.
     pub target: D,
     limits: Limits,
     runtime: tokio::runtime::Handle,
     local: bool,
     started: std::sync::OnceLock<Instant>,
     calls: Mutex<usize>,
+    /// The response to the last request, for assertions only: it is cleared
+    /// before each request, so a failed request leaves it empty.
     pub observed: Mutex<Vec<HttpResponse>>,
 }
 
 impl<D: Destinations> Bounded<D> {
     /// A transport for `target`, within `limits`; `local` admits explicit
     /// HTTP loopback endpoints.
-    pub fn with_limits(
+    pub const fn with_limits(
         target: D,
         limits: Limits,
         local: bool,
@@ -261,6 +270,10 @@ impl<D: Destinations> Bounded<D> {
         self.observed.lock().ok()?.last().cloned()
     }
 
+    #[allow(
+        clippy::future_not_send,
+        reason = "`block_on` runs this future on the calling thread; it is never spawned"
+    )]
     async fn request(&self, request: HttpRequest) -> Result<HttpResponse, ()> {
         let limits = self.limits;
         let url = endpoint(&request.url, self.local).map_err(|_| ())?;
@@ -277,7 +290,7 @@ impl<D: Destinations> Bounded<D> {
             let addresses: Vec<_> = tokio::net::lookup_host((host, port))
                 .await
                 .map_err(|_| ())?
-                .take(limits.addresses + 1)
+                .take(limits.addresses.saturating_add(1))
                 .collect();
             if addresses.is_empty()
                 || addresses.len() > limits.addresses
@@ -377,18 +390,24 @@ impl<D: Destinations> HttpTransport for Bounded<D> {
                     .await
                     .map_err(|_| ())?
             })
-            .map_err(|_| ERROR)?;
+            .map_err(|()| ERROR)?;
         // Keep only the most recent bounded response for the independent
         // assertion layer. It is never part of a downloadable report.
-        let mut observed = self.observed.lock().map_err(|_| ERROR)?;
-        observed.clear();
-        observed.push(response.clone());
+        {
+            let mut observed = self.observed.lock().map_err(|_| ERROR)?;
+            observed.clear();
+            observed.push(response.clone());
+        }
         Ok(response)
     }
 }
 
 /// A canonical endpoint: no credentials, query, or fragment, and HTTPS on
 /// port 443 to a public DNS name, or HTTP loopback when `local` allows it.
+///
+/// # Errors
+///
+/// Refuses any other URL, with a reason that doesn't repeat it.
 pub fn endpoint(raw: &str, local: bool) -> Result<Url, &'static str> {
     let url = Url::parse(raw).map_err(|_| "Invalid lifecycle endpoint")?;
     if raw.len() > 2048
@@ -420,6 +439,7 @@ pub fn endpoint(raw: &str, local: bool) -> Result<Url, &'static str> {
 }
 
 /// Whether a URL names the loopback host.
+#[must_use]
 pub fn loopback(url: &Url) -> bool {
     matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
 }
@@ -518,5 +538,18 @@ mod tests {
             "the workbench's bound is kept"
         );
         assert_eq!(Limits::LIFECYCLE.calls, 16);
+    }
+
+    /// A caller's wait can't overflow the scenario's budget.
+    #[test]
+    fn a_scenario_budget_saturates() {
+        assert_eq!(
+            Limits::scenario(Duration::from_secs(600)).budget,
+            Duration::from_mins(12)
+        );
+        assert_eq!(
+            Limits::scenario(Duration::MAX).budget,
+            Duration::from_secs(u64::MAX)
+        );
     }
 }

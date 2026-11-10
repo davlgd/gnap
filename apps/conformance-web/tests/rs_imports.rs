@@ -9,7 +9,7 @@ use tower::ServiceExt;
 
 fn report(kind: &str, body: Value, context: Option<Value>) -> Report {
     let input = json!({"kind":kind, "body":body.to_string(), "rs_context":context});
-    analyze(serde_json::from_value(input).unwrap()).unwrap()
+    analyze(&serde_json::from_value(input).unwrap()).unwrap()
 }
 fn status(report: &Report, id: &str) -> Status {
     report
@@ -32,7 +32,7 @@ fn positive_fixtures_have_scoped_passes_and_never_certify() {
         include_str!("../fixtures/introspection-inactive.json"),
         include_str!("../fixtures/rs-error-response.json"),
     ] {
-        let r = analyze(serde_json::from_str::<Import>(fixture).unwrap()).unwrap();
+        let r = analyze(&serde_json::from_str::<Import>(fixture).unwrap()).unwrap();
         assert!(!r.certification);
         assert_eq!(r.observation.source, "import");
         assert!(r.independence.contains("not gnap-types validators"));
@@ -385,7 +385,7 @@ fn duplicate_members_at_any_depth_are_inconclusive_without_last_wins() {
     ] {
         let input =
             serde_json::from_value(json!({"kind":"introspection_response","body":body})).unwrap();
-        let r = analyze(input).unwrap();
+        let r = analyze(&input).unwrap();
         assert_eq!(status(&r, "rs-json-unambiguous"), Status::NotTested);
         assert!(
             !r.checks
@@ -414,9 +414,9 @@ fn contexts_are_bounded_kind_specific_and_never_hide_invalid_json() {
     ] {
         let input =
             serde_json::from_value(json!({"kind":kind,"body":"{}","rs_context":context})).unwrap();
-        assert!(analyze(input).is_err());
+        assert!(analyze(&input).is_err());
     }
-    let r=analyze(serde_json::from_value(json!({"kind":"rs_discovery","body":"{","rs_context":{"grant_request_endpoint":"https://as.example/gnap"}})).unwrap()).unwrap();
+    let r=analyze(&serde_json::from_value(json!({"kind":"rs_discovery","body":"{","rs_context":{"grant_request_endpoint":"https://as.example/gnap"}})).unwrap()).unwrap();
     assert_eq!(status(&r, "rs-message-json-object"), Status::Fail);
 }
 
@@ -471,7 +471,7 @@ async fn all_import_routes_return_redacted_reports_and_ui_explains_context() {
 #[test]
 fn invalid_fixture_fails_exact_assertions_without_a_global_verdict() {
     let r = analyze(
-        serde_json::from_str(include_str!(
+        &serde_json::from_str(include_str!(
             "../fixtures/invalid-introspection-active.json"
         ))
         .unwrap(),
@@ -490,7 +490,7 @@ fn invalid_fixture_fails_exact_assertions_without_a_global_verdict() {
 #[test]
 fn imported_http_headers_do_not_create_unstated_200_or_single_header_requirements() {
     let input=serde_json::from_value(json!({"kind":"rs_discovery","body":"{\"grant_request_endpoint\":\"https://as.example/gnap\"}","headers":[["content-type","application/json"],["content-type","text/html"]]})).unwrap();
-    let r = analyze(input).unwrap();
+    let r = analyze(&input).unwrap();
     assert!(r.checks.iter().all(|c| c.status != Status::Fail));
     assert_eq!(
         status(&r, "rs-http-and-discovery-publication"),
@@ -505,7 +505,7 @@ fn json_parser_range_and_depth_limits_are_not_normative_shape_failures() {
         format!("{{\"extension\":{}0{}}}", "[".repeat(150), "]".repeat(150)),
     ] {
         let r =
-            analyze(serde_json::from_value(json!({"kind":"rs_discovery","body":body})).unwrap())
+            analyze(&serde_json::from_value(json!({"kind":"rs_discovery","body":body})).unwrap())
                 .unwrap();
         assert_eq!(status(&r, "rs-message-json-object"), Status::NotTested);
         assert!(

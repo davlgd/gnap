@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gnap-registry", "crates/gnap-types", "crates/gnap-crypto", "crates/gnap-core", "crates/gnap-client", "crates/gnap-as", "crates/gnap-biscuit", "crates/gnap-subject", "crates/gnap-net", "crates/gnap-rs"]
+members = ["crates/gnap-registry", "crates/gnap-types", "crates/gnap-crypto", "crates/gnap-core", "crates/gnap-client", "crates/gnap-as", "crates/gnap-biscuit", "crates/gnap-subject", "crates/gnap-net", "crates/gnap-rs", "crates/gnap-conformance"]
 
 # Investigation spikes are kept out of the workspace so their dependencies do
 # not constrain how it resolves. These directories are not part of the
@@ -24,6 +24,7 @@ gnap-core = { path = "crates/gnap-core", version = "0.1.0" }
 gnap-subject = { path = "crates/gnap-subject", version = "0.1.0" }
 gnap-crypto = { path = "crates/gnap-crypto", version = "0.1.0" }
 gnap-client = { path = "crates/gnap-client", version = "0.1.0" }
+gnap-as = { path = "crates/gnap-as", version = "0.1.0" }
 sha2 = "0.11"
 sha3 = "0.12"
 base64 = "0.23"
@@ -36,6 +37,9 @@ ed25519-dalek = { version = "3.0", default-features = false, features = ["fast",
 p256 = { version = "0.14", default-features = false, features = ["std", "ecdsa", "pem"] }
 zeroize = "1"
 curve25519-dalek = { version = "5.0", default-features = false }
+# The bounded transport of gnap-conformance, with TLS from rustls.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "signal", "time"] }
 
 [workspace.lints.rust]
 missing_docs = "deny"

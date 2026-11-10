@@ -18,7 +18,7 @@ const UNOBSERVABLE: [&str; 6] = [
     "derivation-token-value-encoding",
 ];
 fn raw(kind: &str, body: &str) -> Report {
-    analyze(serde_json::from_value(json!({"kind":kind,"body":body})).unwrap()).unwrap()
+    analyze(&serde_json::from_value(json!({"kind":kind,"body":body})).unwrap()).unwrap()
 }
 fn report(kind: &str, body: Value) -> Report {
     raw(kind, &body.to_string())
@@ -71,7 +71,7 @@ fn positive_fixtures_have_distinct_profiles_and_no_protocol_verdict() {
             ],
         ),
     ] {
-        let r = analyze(serde_json::from_str(fixture).unwrap()).unwrap();
+        let r = analyze(&serde_json::from_str(fixture).unwrap()).unwrap();
         assert_eq!(r.profile, profile);
         assert!(r.independence.contains("not gnap-types validators"));
         for id in ids {
@@ -425,7 +425,7 @@ fn ambiguity_limits_and_context_do_not_smuggle_evidence_or_echo_values() {
         ] {
             assert!(
                 analyze(
-                    serde_json::from_value(json!({"kind":kind,"body":"{}","rs_context":context}))
+                    &serde_json::from_value(json!({"kind":kind,"body":"{}","rs_context":context}))
                         .unwrap()
                 )
                 .is_err()
@@ -433,7 +433,7 @@ fn ambiguity_limits_and_context_do_not_smuggle_evidence_or_echo_values() {
         }
         assert!(
             analyze(
-                serde_json::from_value(json!({"kind":kind,"body":"x".repeat(MAX_MESSAGE + 1)}))
+                &serde_json::from_value(json!({"kind":kind,"body":"x".repeat(MAX_MESSAGE + 1)}))
                     .unwrap()
             )
             .is_err()
@@ -464,7 +464,7 @@ fn negative_fixtures_fail_precisely_without_certification() {
             ],
         ),
     ] {
-        let r = analyze(serde_json::from_str(fixture).unwrap()).unwrap();
+        let r = analyze(&serde_json::from_str(fixture).unwrap()).unwrap();
         for id in ids {
             assert_eq!(status(&r, id), Status::Fail);
         }
