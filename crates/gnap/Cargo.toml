@@ -1,0 +1,45 @@
+[package]
+name = "gnap"
+version = "0.1.0"
+description = "GNAP (RFC 9635, RFC 9767) in one dependency: the gnap-* crates, re-exported behind a feature per role"
+keywords = ["gnap", "rfc9635", "rfc9767", "oauth", "authorization"]
+categories = ["authentication", "web-programming"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/gnap"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+# Each role brings its own crate; the shared types are always there.
+client = ["dep:gnap-client"]
+server = ["dep:gnap-as"]
+rs = ["dep:gnap-rs"]
+biscuit = ["dep:gnap-biscuit"]
+subject = ["dep:gnap-subject"]
+net = ["dep:gnap-net"]
+conformance = ["dep:gnap-conformance"]
+full = ["client", "server", "rs", "biscuit", "subject", "net", "conformance"]
+
+[dependencies]
+gnap-types = { workspace = true }
+gnap-registry = { workspace = true }
+gnap-crypto = { workspace = true }
+gnap-core = { workspace = true }
+gnap-client = { workspace = true, optional = true }
+gnap-as = { workspace = true, optional = true }
+gnap-rs = { workspace = true, optional = true }
+gnap-biscuit = { workspace = true, optional = true }
+gnap-subject = { workspace = true, optional = true }
+gnap-net = { workspace = true, optional = true }
+gnap-conformance = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

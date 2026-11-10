@@ -1,6 +1,6 @@
 # Releasing the crates
 
-This guide releases a new version of the eleven SDK crates on crates.io, where version 0.1.0 is published. Users add them as registry dependencies, as [Getting started](getting-started.md#add-the-libraries-to-your-application) shows. The HTTP applications are examples, not packages of the release.
+This guide releases a new version of the twelve SDK crates on crates.io, where version 0.1.0 is published. Users add them as registry dependencies, as [Getting started](getting-started.md#add-the-libraries-to-your-application) shows. The HTTP applications are examples, not packages of the release.
 
 Publishing is a separate decision of the maintainer. Don't upload a package, create a release tag, or change registry ownership while you check the packages. A published version is effectively permanent, as Cargo's [publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html) explains.
 
@@ -80,5 +80,6 @@ To publish by hand or to recover, use an order in which each crate's dependencie
 5. `gnap-client`
 6. `gnap-as`, `gnap-rs`, and `gnap-biscuit`
 7. `gnap-conformance`, whose tests run against `gnap-as`
+8. `gnap`, which re-exports all the others
 
 Recompute this order when the dependencies change, and check that each dependency is visible on the registry before you publish a crate that needs it. After the release, verify the versions, the package contents, and the docs.rs builds, then update the installation instructions and the [changelog](../CHANGELOG.md), and publish the release notes and the tag.

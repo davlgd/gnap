@@ -41,19 +41,20 @@ The SDK workspace requires Rust 1.95 or newer. The applications have their own t
 
 Choose the crate for your protocol role. The client and the authorization server impose neither an HTTP framework nor an async runtime: your application supplies the transport, trust decisions, and authorization policy. The in-memory stores serve the examples; persistent storage and user authentication belong to your deployment.
 
-| Crate                                         | Purpose                                                                             |
-| --------------------------------------------- | ----------------------------------------------------------------------------------- |
-| [`gnap-client`](crates/gnap-client)           | Build and sign grant requests, follow interaction and continuation, manage tokens   |
-| [`gnap-as`](crates/gnap-as)                   | Negotiate grants, and expose token management and the opt-in resource-server APIs   |
-| [`gnap-rs`](crates/gnap-rs)                   | Authorize resource requests with authenticated introspection and local proof checks |
-| [`gnap-biscuit`](crates/gnap-biscuit)         | Issue, attenuate, and verify the Biscuit file-access profile                        |
-| [`gnap-subject`](crates/gnap-subject)         | Issue and verify identity assertions bound to an issuer, an audience, and a session |
-| [`gnap-types`](crates/gnap-types)             | Parse and serialize GNAP messages, keeping extension fields                         |
-| [`gnap-crypto`](crates/gnap-crypto)           | Sign and verify request proofs, content digests, and interaction hashes             |
-| [`gnap-core`](crates/gnap-core)               | Apply grant-state transitions and response constraints                              |
-| [`gnap-registry`](crates/gnap-registry)       | Use the 23 GNAP IANA registries, generated from vendored copies                     |
-| [`gnap-net`](crates/gnap-net)                 | Filter public IP addresses at the network boundaries of an application              |
-| [`gnap-conformance`](crates/gnap-conformance) | Check messages and servers, as a library and the `gnap-conformance` command         |
+| Crate                                         | Purpose                                                                              |
+| --------------------------------------------- | ------------------------------------------------------------------------------------ |
+| [`gnap-client`](crates/gnap-client)           | Build and sign grant requests, follow interaction and continuation, manage tokens    |
+| [`gnap-as`](crates/gnap-as)                   | Negotiate grants, and expose token management and the opt-in resource-server APIs    |
+| [`gnap-rs`](crates/gnap-rs)                   | Authorize resource requests with authenticated introspection and local proof checks  |
+| [`gnap-biscuit`](crates/gnap-biscuit)         | Issue, attenuate, and verify the Biscuit file-access profile                         |
+| [`gnap-subject`](crates/gnap-subject)         | Issue and verify identity assertions bound to an issuer, an audience, and a session  |
+| [`gnap-types`](crates/gnap-types)             | Parse and serialize GNAP messages, keeping extension fields                          |
+| [`gnap-crypto`](crates/gnap-crypto)           | Sign and verify request proofs, content digests, and interaction hashes              |
+| [`gnap-core`](crates/gnap-core)               | Apply grant-state transitions and response constraints                               |
+| [`gnap-registry`](crates/gnap-registry)       | Use the 23 GNAP IANA registries, generated from vendored copies                      |
+| [`gnap-net`](crates/gnap-net)                 | Filter public IP addresses at the network boundaries of an application               |
+| [`gnap-conformance`](crates/gnap-conformance) | Check messages and servers, as a library and the `gnap-conformance` command          |
+| [`gnap`](crates/gnap)                         | Reach the libraries through one dependency, with a feature per role, none by default |
 
 The crates are published on crates.io, and their API documentation on docs.rs. Start with the [integration guide](docs/getting-started.md#add-the-libraries-to-your-application) and the [architecture](docs/architecture.md). To read the API documentation locally, run:
 

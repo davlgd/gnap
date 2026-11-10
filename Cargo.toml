@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gnap-registry", "crates/gnap-types", "crates/gnap-crypto", "crates/gnap-core", "crates/gnap-client", "crates/gnap-as", "crates/gnap-biscuit", "crates/gnap-subject", "crates/gnap-net", "crates/gnap-rs", "crates/gnap-conformance"]
+members = ["crates/gnap-registry", "crates/gnap-types", "crates/gnap-crypto", "crates/gnap-core", "crates/gnap-client", "crates/gnap-as", "crates/gnap-biscuit", "crates/gnap-subject", "crates/gnap-net", "crates/gnap-rs", "crates/gnap-conformance", "crates/gnap"]
 
 # Investigation spikes are kept out of the workspace so their dependencies do
 # not constrain how it resolves. These directories are not part of the
@@ -25,6 +25,8 @@ gnap-subject = { path = "crates/gnap-subject", version = "0.1.0" }
 gnap-crypto = { path = "crates/gnap-crypto", version = "0.1.0" }
 gnap-client = { path = "crates/gnap-client", version = "0.1.0" }
 gnap-as = { path = "crates/gnap-as", version = "0.1.0" }
+gnap-biscuit = { path = "crates/gnap-biscuit", version = "0.1.0" }
+gnap-conformance = { path = "crates/gnap-conformance", version = "0.1.0" }
 sha2 = "0.11"
 sha3 = "0.12"
 base64 = "0.23"

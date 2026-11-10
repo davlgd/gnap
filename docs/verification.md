@@ -24,7 +24,7 @@ mise run lint:commits
 ```bash
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
-cargo doc --workspace --no-deps --locked
+cargo doc --workspace --no-deps --all-features --locked
 ```
 
 The workspace turns on clippy's `pedantic` and `nursery` groups, and CI fails on any warning. The tests read the [protocol vectors](../vectors) and the [state-machine model](../vectors/state-machine.json): exploring a finite set of sequences checks the chosen model and inputs, not every possible history. CI also runs every example, because they document the libraries as much as they test them.
