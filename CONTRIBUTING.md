@@ -40,6 +40,8 @@ The code aims for what an experienced Rust reviewer expects to find, so that a r
 - The smallest public API that serves the use case, every public item documented
 - A test for each behavior, with the refusal cases next to the successful ones
 
+The pages of the applications build their nodes with the DOM APIs and render every string from a response as text, without parsing HTML, under a content security policy that allows no inline code. Words for closed values come from the page's own tables, looked up as own properties, and a value the page doesn't know shows as unknown. A page runs one action at a time, never polls in a way that exhausts a session's quota, and tells a refusal of access from a server failure.
+
 Comments explain why the code does something non-obvious, not what it does. References to the RFCs, such as `GNAP-9635-§7.3.1`, and the literal quotations next to them, are the project's normative traceability: keep them, and keep the quotations exact, because CI compares them with the vendored RFC text.
 
 A change to the public API of a crate adds its entry to the [changelog](CHANGELOG.md), with what a user must change. Own the security bounds you enforce, such as a key size or a decoded length, as named constants of this project. A limit borrowed from a dependency changes silently when the dependency does. Depend only on published crate releases, never on a Git revision, and explain in the pull request why each new dependency is needed.

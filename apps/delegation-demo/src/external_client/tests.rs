@@ -637,6 +637,7 @@ async fn real_http_manual_consent_rotation_revocation_and_denial() {
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());
     let server = tokio::spawn(async move {

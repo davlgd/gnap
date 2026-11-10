@@ -1,16 +1,34 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GNAP authenticated lifecycle test</title><link rel="stylesheet" href="/style.css"><script src="/lifecycle.js" defer></script></head>
-<body><main><h1>Authenticated GNAP lifecycle test</h1>
-<p><a href="/">Back to message diagnostics</a></p>
-<p>This workbench uses its own test-client key. You decide on the authorization server's page whether it may read a synthetic resource. After approval, it tests successful access, replay rejection, a different signing key, rotation and revocation. Denial tests only the refusal path.</p>
-<aside>No production data or private key input. Only operator-approved targets are offered. A report describes this bounded scenario, not complete GNAP conformance or an independent protocol implementation. The client SDK supplies messages and finish verification; the HTTP/JSON outcome checks are separate.</aside>
-<p>The operator must approve the workbench's <a href="/api/lifecycle/key">current public key</a> at the AS. It changes on restart; access remains refused until the new key is approved. No key is approved automatically.</p>
-<label for="lifecycle-target">Operator-approved AS/RS pair</label><select id="lifecycle-target" disabled><option>No targets configured</option></select>
-<label><input type="checkbox" id="lifecycle-consent"> I authorize this complete synthetic test, including negative requests, rotation and revocation.</label>
-<button type="button" id="lifecycle-start" disabled>Start and decide on the AS</button>
-<p id="lifecycle-status" role="status" aria-live="polite"></p>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signed lifecycle · GNAP workbench</title><link rel="stylesheet" href="/assets/gnap.css"><script src="/assets/gnap.js" defer></script><script src="/lifecycle.js" defer></script></head>
+<body>
+<header class="site-header">
+<a class="wordmark" href="/">GNAP workbench<small>for authorization servers, resource servers and clients</small></a>
+<nav class="site-nav" aria-label="Workbench"><a href="/inspect">Inspect a message</a><a href="/probe">Probe an endpoint</a><a href="/lifecycle" aria-current="page">Run a lifecycle</a><a href="/#cli">Command line</a></nav>
+</header>
+<main>
+<h1>Run a signed grant from request to revocation</h1>
+<p class="lede">The workbench requests access to a synthetic resource with its own key, and you decide at the authorization server. After an approval, it reads the resource, then checks replay rejection, a foreign key, rotation, and revocation. A denial checks the refusal path only.</p>
+
+<section class="panel" aria-labelledby="start-title">
+<h2 id="start-title">Start a run</h2>
+<div class="note"><p>The operator has to approve the workbench's <a href="/api/lifecycle/key">current public key</a> at the authorization server first. The key changes on every restart, and nothing approves it automatically. Only operator-approved targets are offered, and no production data or private key is ever asked for.</p></div>
+<label for="lifecycle-target">Authorization server and resource</label><select id="lifecycle-target" disabled><option>No targets configured</option></select>
+<label class="inline"><input type="checkbox" id="lifecycle-consent"> I authorize this whole synthetic run, including its refused requests, its rotation, and its revocation.</label>
+<div class="actions"><button type="button" id="lifecycle-start" class="primary" disabled>Start, then decide at the authorization server</button></div>
+<p id="lifecycle-status" class="summary" role="status" aria-live="polite"></p>
 <p><a id="lifecycle-redirect" hidden rel="noreferrer">Continue to the authorization server</a></p>
-<button type="button" id="lifecycle-download" disabled>Download redacted report</button>
-<section id="lifecycle-report" aria-label="Observed checks"></section>
-<p>One start per 60 seconds, shared with the other live probes. At most four active workers and eight retained reports. Consent and network work expire after five minutes; reports expire after ten. Closing this page does not cancel a test already authorized. Network failures are inconclusive, and cleanup cannot be guaranteed during an outage.</p>
-</main></body></html>
+</section>
+
+<section class="panel" aria-labelledby="report-title">
+<h2 id="report-title">Observed checks</h2>
+<p class="hint">These checks describe this bounded run, not GNAP conformance as a whole. The client SDK builds the messages and verifies the finish; the HTTP and JSON outcome checks are separate from it.</p>
+<section id="lifecycle-report" class="checks" aria-label="Observed checks"></section>
+<div class="actions"><button type="button" id="lifecycle-download" disabled>Download the redacted report</button></div>
+</section>
+
+<section aria-labelledby="limits-title">
+<h2 id="limits-title">Limits of a run</h2>
+<p>One run starts every 60 seconds, shared with the probes, with at most four running and eight reports kept. Consent and network work expire after five minutes, and reports after ten. Closing this page doesn't cancel a run you already authorized. Network failures leave a check inconclusive, and cleanup can't be guaranteed during an outage.</p>
+</section>
+</main>
+</body></html>

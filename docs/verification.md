@@ -62,7 +62,7 @@ These tools need Python 3.11 or newer, and no third-party package.
 Each application is a separate workspace with its own lockfile and tested toolchain, documented in its guide. Biscuit files needs Rust 1.98 and Unix, because its key files rely on Unix permission modes.
 
 ```bash
-node --test apps/conformance-web/tests/ui/*.test.mjs apps/delegation-demo/tests/ui/*.test.mjs
+node --test apps/ui/tests/*.test.mjs apps/conformance-web/tests/ui/*.test.mjs apps/delegation-demo/tests/ui/*.test.mjs apps/biscuit-files/tests/ui/*.test.mjs
 for app in delegation-demo conformance-web biscuit-files; do
   cargo clippy --manifest-path "apps/$app/Cargo.toml" --all-targets --locked -- -D warnings
   cargo test --manifest-path "apps/$app/Cargo.toml" --locked

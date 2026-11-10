@@ -5,7 +5,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const html = readFileSync(new URL('../../static/lifecycle.html', import.meta.url), 'utf8');
-const script = readFileSync(new URL('../../static/lifecycle.js', import.meta.url), 'utf8');
+// The page loads the suite's shared helpers first, as its script tags do.
+const script = [
+  readFileSync(new URL('../../../ui/gnap.js', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../static/lifecycle.js', import.meta.url), 'utf8'),
+].join('\n');
 const response = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -19,7 +23,7 @@ function node(tag, attributes = '') {
   const data = {
     value: '', checked: false, hidden: /\bhidden\b/.test(attributes),
     disabled: /\bdisabled\b/.test(attributes), textContent: '', href: '', download: '',
-    children: [], clicks: 0,
+    children: [], clicks: 0, className: '', dataset: {}, title: '', rel: '', ariaHidden: null,
   };
   const listeners = new Map();
   const api = {
@@ -140,7 +144,10 @@ test('checks render as text and download contains only the report, not the redir
   const { el, take, blobs, created, timers, revoked } = await loadApp();
   take('/api/lifecycle/status').resolve(response(200, state('pending', { redirect: 'https://as.example/interact/private-handle' })));
   await flush();
-  assert.equal(el('report').children[0].children[1].textContent, sampleReport.checks[0].detail);
+  // The detail, markup included, is the text of one node: never parsed.
+  const row = el('report').children[0];
+  assert.equal(row.dataset.status, 'pass');
+  assert.ok(row.children.some(child => child.textContent === sampleReport.checks[0].detail));
   await el('download').emit('click');
   assert.equal(blobs.length, 1);
   assert.equal(blobs[0].type, 'application/json');
@@ -157,7 +164,9 @@ test('a terminal result retains failed checks and does not advertise certificati
   take('/api/lifecycle/status').resolve(response(200, state('complete', { report: { ...sampleReport, checks: [{ id: 'negative-control', status: 'fail', detail: 'Synthetic failure' }] } })));
   await flush();
   assert.match(el('status').textContent, /completed scenario can still contain failed checks/);
-  assert.match(el('report').children[0].children[0].textContent, /^FAIL/);
+  const row = el('report').children[0];
+  assert.equal(row.dataset.status, 'fail');
+  assert.ok(row.children.some(child => child.textContent === 'Failed'));
   assert.equal(el('start').disabled, false);
   assert.equal(el('download').disabled, false);
   assert.equal(el('redirect').hidden, true);

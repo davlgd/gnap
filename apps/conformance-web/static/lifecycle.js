@@ -26,14 +26,7 @@ async function refresh() {
     }
     report = state.report;
     element('lifecycle-report').replaceChildren();
-    for (const check of report.checks) {
-      const item = document.createElement('article');
-      const heading = document.createElement('h3');
-      heading.textContent = `${check.status.toUpperCase()} — ${check.id}`;
-      const detail = document.createElement('p'); detail.textContent = check.detail;
-      item.append(heading, detail);
-      element('lifecycle-report').append(item);
-    }
+    for (const check of report.checks) element('lifecycle-report').append(GNAP.checkRow(check));
     element('lifecycle-download').disabled = false;
     if (['pending', 'running'].includes(state.status)) setTimeout(refresh, 1000);
   } catch (error) {

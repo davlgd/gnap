@@ -318,6 +318,9 @@ fn owner_cookie(headers: &HeaderMap) -> Option<&str> {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'))
     .then_some(value)
 }
+/// Whether an interaction belongs to an external client's grant. A grant the
+/// lab created for one of its own sessions isn't, even when that session
+/// presents its key by value; the page then checks the session itself.
 pub(super) fn is_external(app: &App, handle: &str) -> bool {
     app.storage
         .lookup(GrantSelector::Interaction(handle))
@@ -331,6 +334,7 @@ pub(super) fn is_external(app: &App, handle: &str) -> bool {
                 .client
                 .as_value()
                 .is_some()
+                && !app.storage.is_lab_grant(snapshot.id)
         })
 }
 pub(super) fn entry(app: &App, handle: &str, headers: &HeaderMap) -> Response {
@@ -379,7 +383,7 @@ pub(super) fn entry(app: &App, handle: &str, headers: &HeaderMap) -> Response {
             },
         },
     );
-    let page=format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>External GNAP client consent</title><h1>Authorize a synthetic test client?</h1><p>This external workbench client requests <code>synthetic-folder:read</code>. No real owner account or private document is involved.</p><p>Consent must be completed within five minutes of the initial grant. Reloading does not extend this limit.</p><form method=\"post\"><input type=\"hidden\" name=\"ticket\" value=\"{ticket}\"><button name=\"choice\" value=\"allow\">Allow synthetic folder read</button><button name=\"choice\" value=\"deny\">Deny</button></form></html>");
+    let page=format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/assets/gnap.css\"><title>External GNAP client consent</title><main><h1>Authorize a synthetic test client?</h1><p>This external workbench client requests <code>synthetic-folder:read</code>. No real owner account or private document is involved.</p><p>Consent must be completed within five minutes of the initial grant. Reloading does not extend this limit.</p><form method=\"post\" class=\"actions\"><input type=\"hidden\" name=\"ticket\" value=\"{ticket}\"><button name=\"choice\" value=\"allow\" class=\"primary\">Allow synthetic folder read</button><button name=\"choice\" value=\"deny\">Deny</button></form></main></html>");
     let mut response = Html(page).into_response();
     let secure = if app.origin.starts_with("https:") {
         "; Secure"

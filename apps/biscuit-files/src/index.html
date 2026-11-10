@@ -1,8 +1,72 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>GNAP · Biscuit files</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
-<body><main><h1>Biscuit files</h1><p>Three processes: a GNAP authorization server, a file resource server and this client. Only synthetic data is used.</p>
-<p>The AS grants <strong>read notes</strong> and <strong>write draft</strong> for 20 minutes. This fixed demonstration policy does not request resource-owner consent.</p>
-<section><h2>1. Request and use access</h2><button data-action="start">Start a session</button><button data-action="status">Check session state</button><button data-action="read">Read notes</button><button data-action="write">Write draft</button><button data-action="read-draft">Try reading draft</button><button data-action="write-notes">Try writing notes</button></section>
-<section><h2>2. Restrict locally</h2><label>Exact file <select id="file"><option>notes</option><option>draft</option></select></label><label>Lifetime in seconds <input id="seconds" type="number" min="1" max="600" value="120"></label><button data-action="attenuate">Add a restrictive block</button><p>Restrictions accumulate. They never grant new rights or change the client's key. No AS round trip is needed to attenuate.</p></section>
-<section><h2>3. Renew and retire access</h2><button data-action="rotate">Rotate token value</button><button data-action="rotate-key">Rotate presentation key</button><button data-action="check-old-key">Test the previous key</button><button data-action="revoke">Revoke</button><button data-action="check-retired">Test the retired token</button><p>A key change proves the old and new keys together. The new key stays in this client process; read again, then test that the previous key and retired token are refused. This example allows three key-generation attempts per session and four per minute across the client process, including failed attempts.</p><p>After proof verification and local rights checks, the AS checks the request's authority and reserves its nonce once for the token's presentation key. No positive decision is cached. This application channel is not GNAP introspection; selective block revocation is not implemented.</p></section>
-<h2>Observed result</h2><pre id="result" aria-live="polite">Start a session to begin.</pre><p>Private keys and token values remain on the client server. This is a bounded example, not a production storage or identity service.</p></main></body></html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Biscuit files · GNAP</title><link rel="stylesheet" href="/assets/gnap.css"><script src="/app.js" defer></script></head>
+<body>
+<header class="site-header">
+<a class="wordmark" href="/">Biscuit files<small>a GNAP client, an authorization server and a file server, in three processes</small></a>
+<nav class="site-nav" aria-label="Biscuit files"><a href="#access">Access</a><a href="#restrict">Restrict</a><a href="#renew">Renew</a><a href="#session">Session</a></nav>
+</header>
+<main class="wide">
+<h1>Narrow a token yourself, then retire it</h1>
+<p class="lede">The authorization server issues this client a Biscuit access token for two synthetic files. The client can add restrictive blocks to the token on its own, and the file server checks every block on each signed request.</p>
+<div class="note"><p><strong>A public sandbox with synthetic data.</strong> Three processes exchange real signed HTTP requests. The authorization server grants with a fixed demonstration policy and asks no resource owner for consent. This is a bounded example, not complete coverage or a certification.</p></div>
+
+<div class="bench">
+<div class="bench-tools">
+
+<section id="access" class="panel step" aria-labelledby="access-title">
+<h2 id="access-title"><span class="step-number">1</span>Request and use access</h2>
+<p>The authorization server grants <strong>read the notes</strong> and <strong>write the draft</strong> for 20 minutes. Every visitor's session starts with the client's one configured key.</p>
+<div class="actions"><button data-action="start" class="primary">Start a session</button><button data-action="status">Check the session state</button></div>
+<div class="actions"><button data-action="read">Read the notes</button><button data-action="write">Write the draft</button></div>
+<h3>Try what the token doesn't allow</h3>
+<div class="actions"><button data-action="read-draft">Read the draft</button><button data-action="write-notes">Write the notes</button></div>
+<p><a class="to-report" href="#session">Go to the session</a></p>
+</section>
+
+<section id="restrict" class="panel step" aria-labelledby="restrict-title">
+<h2 id="restrict-title"><span class="step-number">2</span>Restrict locally</h2>
+<p>Add a block that limits the token to one file until a given time. The client does it alone, with no round trip to the authorization server, and its key doesn't change.</p>
+<div class="fields">
+<label for="file">File<select id="file"><option value="notes">The notes</option><option value="draft">The draft</option></select></label>
+<label for="seconds">Seconds from now, 1 to 600<input id="seconds" type="number" min="1" max="600" step="1" value="120" inputmode="numeric"></label>
+</div>
+<div class="actions"><button data-action="attenuate">Add a restrictive block</button></div>
+<p class="hint">Each block narrows the token further, and blocks intersect: a block for the notes, then one for the draft, allows neither file. No block grants a new right. A token takes eight blocks at most.</p>
+<p><a class="to-report" href="#session">Go to the session</a></p>
+</section>
+
+<section id="renew" class="panel step" aria-labelledby="renew-title">
+<h2 id="renew-title"><span class="step-number">3</span>Renew and retire access</h2>
+<p>A rotation gives the client a new token with the rights the authorization server approved, without the restrictive blocks. A revocation ends the token.</p>
+<div class="actions"><button data-action="rotate">Rotate the token</button><button data-action="rotate-key">Rotate the presentation key</button><button data-action="revoke">Revoke the token</button></div>
+<h3>Check what was retired</h3>
+<div class="actions"><button data-action="check-retired">Present the retired token</button><button data-action="check-old-key">Sign with the previous key</button></div>
+<p class="hint">A key change proves the old and new keys together, and the new key stays in the client process. A session makes three key-generation attempts at most, failed ones included, and the client process four per minute across sessions.</p>
+<p class="hint">After it verifies the proof and finds the right in the token, the file server asks the authorization server about the request's authority, and the authorization server reserves the request's nonce once for the token's presentation key. A request that fails the proof or the local rights stops before that check. No positive decision is cached. This channel is the example's own, not GNAP introspection, and a single block can't be revoked.</p>
+<p><a class="to-report" href="#session">Go to the session</a></p>
+</section>
+
+</div>
+
+<aside id="session" class="panel bench-report" aria-labelledby="session-title">
+<h2 id="session-title">Session</h2>
+<dl class="facts">
+<dt>State</dt><dd><strong id="state" class="state" data-state="unknown">Checking…</strong></dd>
+<dt>Next request</dt><dd id="next">Unknown</dd>
+<dt>Restrictive blocks</dt><dd id="restrictions">Unknown</dd>
+<dt>Key</dt><dd id="rotations">Unknown</dd>
+<dt>Retired token</dt><dd id="retired">Unknown</dd>
+<dt>Previous key</dt><dd id="previous">Unknown</dd>
+</dl>
+<p class="hint">What the client holds and will present next, not whether the file server will accept it.</p>
+<p id="error" class="error" role="alert"></p>
+<h3>Last file server answer</h3>
+<p id="outcome" class="outcome" aria-live="polite">No file request yet.</p>
+<pre id="result" class="output"></pre>
+<h3>Events</h3>
+<ol id="events" class="timeline" data-empty="Nothing has happened yet: start a session."></ol>
+<p class="fine">Private keys and token values stay in the client process. Only this application's own endpoints are called from this page.</p>
+</aside>
+</div>
+</main>
+</body></html>

@@ -6,7 +6,7 @@ use axum::{
     extract::{DefaultBodyLimit, Request},
     http::{header, HeaderValue, StatusCode},
     middleware::{self, Next},
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -324,15 +324,28 @@ pub fn app_with_lifecycle(probes: probe::Probes, lifecycle: lifecycle::Lifecycle
                 )
             }),
         )
+        // The suite's shared design, from `apps/ui`.
         .route(
-            "/style.css",
+            "/assets/gnap.css",
             get(|| async {
                 (
                     [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    include_str!("../static/style.css"),
+                    include_str!("../../ui/gnap.css"),
                 )
             }),
         )
+        .route(
+            "/assets/gnap.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    include_str!("../../ui/gnap.js"),
+                )
+            }),
+        )
+        // The workbench is one page: each tool is a section of it.
+        .route("/inspect", get(|| async { Redirect::to("/#inspect") }))
+        .route("/probe", get(|| async { Redirect::to("/#probe-endpoint") }))
         .route("/health", get(|| async { "ok" }))
         .route("/api/analyze", post(import_handler))
         .route("/api/targets", get(probe::targets))
@@ -549,6 +562,74 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    /// Every page loads only same-origin assets that this server serves with
+    /// their exact type, under the workbench's CSP, and carries no inline
+    /// style, script, or handler that the CSP would have to allow.
+    #[tokio::test]
+    async fn pages_load_only_served_assets_without_inline_code() {
+        let get = |uri: &'static str| async move {
+            let lifecycle = lifecycle::Lifecycle::disabled();
+            app_with_lifecycle(probe::Probes::disabled(), lifecycle)
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+        };
+        let csp = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
+        for (page, assets) in [
+            ("/", ["/assets/gnap.css", "/assets/gnap.js", "/app.js"]),
+            (
+                "/lifecycle",
+                ["/assets/gnap.css", "/assets/gnap.js", "/lifecycle.js"],
+            ),
+        ] {
+            let response = get(page).await;
+            assert_eq!(response.status(), StatusCode::OK, "{page}");
+            assert_eq!(response.headers()["content-security-policy"], csp);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let html = String::from_utf8(body.to_vec()).unwrap();
+            for forbidden in [
+                "<style",
+                " style=",
+                "<script>",
+                " onclick=",
+                " onload=",
+                "javascript:",
+            ] {
+                assert!(!html.contains(forbidden), "{page} carries {forbidden}");
+            }
+            for asset in assets {
+                assert!(
+                    html.contains(&format!("\"{asset}\"")),
+                    "{page} loads {asset}"
+                );
+                let response = get(asset).await;
+                assert_eq!(response.status(), StatusCode::OK, "{asset}");
+                let kind = response.headers()["content-type"].to_str().unwrap();
+                let expected = if asset.ends_with(".css") {
+                    "text/css"
+                } else {
+                    "text/javascript"
+                };
+                assert!(kind.starts_with(expected), "{asset}: {kind}");
+                assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+                assert_eq!(response.headers()["content-security-policy"], csp);
+            }
+        }
+        let body = axum::body::to_bytes(get("/").await.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let home = String::from_utf8(body.to_vec()).unwrap();
+        for (alias, section) in [("/inspect", "/#inspect"), ("/probe", "/#probe-endpoint")] {
+            let anchor = format!("id=\"{}\"", &section[2..]);
+            assert_eq!(home.matches(&anchor).count(), 1, "{section}");
+            let response = get(alias).await;
+            assert!(response.status().is_redirection(), "{alias}");
+            assert_eq!(response.headers()["location"], section);
+        }
     }
 
     #[tokio::test]

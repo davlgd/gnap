@@ -63,6 +63,7 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
             origin: origin.clone(),
         }),
         nonces: MemoryStorage::default(),
+        jose_replay: introspection::jose_replay(),
     });
     let (sender, receiver) = mpsc::sync_channel(8);
     app.commands = sender;
@@ -81,13 +82,17 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
     drop(unused_sender);
     let worker = std::thread::spawn(move || {
         client_worker(
-            worker_origin,
-            signer,
-            server,
-            storage,
-            decisions,
+            Worker {
+                origin: worker_origin,
+                signer,
+                server,
+                storage,
+                decisions,
+                references,
+                lifetime: SESSION_LIFETIME,
+                generated: None,
+            },
             receiver,
-            references,
         )
     });
     let router = application_router(app.clone(), CanonicalOrigin::parse(&origin).unwrap());
@@ -138,7 +143,11 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
         .lookup(GrantSelector::Id(grant))
         .unwrap()
         .unwrap();
-    let policy = ConsentPolicy(app.decisions.clone(), app.rs_registration.resources.clone());
+    let policy = ConsentPolicy(
+        app.decisions.clone(),
+        app.rs_registration.resources.clone(),
+        app.storage.lab.clone(),
+    );
     assert!(matches!(
         policy.evaluate(&snapshot.aggregate.record.request),
         Decision::Deny(gnap_registry::ErrorCode::RequestDenied)
@@ -218,6 +227,7 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
     let (reply, received) = tokio::sync::oneshot::channel();
     app.commands
         .send(WorkerCommand::Browser(Command {
+            proof: crate::lab::ProofChoice::default(),
             session: "deny".into(),
             action: "deny".into(),
             reply,
@@ -241,6 +251,7 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
     let (reply, received) = tokio::sync::oneshot::channel();
     app.commands
         .send(WorkerCommand::Browser(Command {
+            proof: crate::lab::ProofChoice::default(),
             session: "other".into(),
             action: "approve".into(),
             reply,

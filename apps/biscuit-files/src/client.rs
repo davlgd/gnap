@@ -3,7 +3,7 @@ use crate::{
     authorization::rights,
     config::Config,
     http::{self, Network, Origin},
-    MAX_RECORDS, TTL,
+    MAX_KEY_ATTEMPTS, MAX_RECORDS, MAX_RESTRICTIONS, TTL,
 };
 use axum::{
     extract::{Path, State},
@@ -41,6 +41,9 @@ struct Command {
 struct Browser<'a> {
     session: Session<&'a Network, &'a Ps256Signer>,
     selected: Option<TokenValue>,
+    /// The restrictive blocks of `selected`, in order: each file and the
+    /// instant written in its block.
+    restrictions: Vec<(&'static str, u64)>,
     retired: Option<TokenValue>,
     current_key: Option<Arc<Ps256Signer>>,
     retired_key: Option<Arc<Ps256Signer>>,
@@ -78,6 +81,36 @@ pub fn grant(signer: &Ps256Signer, rs: &str) -> Result<GrantRequest, String> {
     }))
     .map_err(|_| "grant encoding failed".into())
 }
+/// What the page may know of a session the client holds: closed values only,
+/// never a token, a key or an identifier. It describes what the client will
+/// present next, not whether the file server will accept it.
+fn view(s: &Browser<'_>, now: u64) -> Value {
+    let issued = s
+        .session
+        .usable_tokens(now)
+        .is_some_and(|tokens| !tokens.is_empty());
+    let token = s.selected.is_some() || issued;
+    json!({
+        "restrictions": s
+            .restrictions
+            .iter()
+            .map(|(file, until)| json!({"file": file, "until": until}))
+            .collect::<Vec<_>>(),
+        "next_request_uses": if s.selected.is_some() {
+            "restricted"
+        } else if issued {
+            "issued"
+        } else {
+            "none"
+        },
+        "key_rotations": s.key_rotations,
+        "key_attempts_left": MAX_KEY_ATTEMPTS.saturating_sub(s.key_attempts),
+        // check-old-key needs a rotation and a token to present.
+        "previous_key_testable": s.key_rotations > 0 && token,
+        "retired_token_testable": s.retired.is_some(),
+    })
+}
+
 fn worker(
     config: Config,
     signer: Ps256Signer,
@@ -99,8 +132,10 @@ fn worker(
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(_) => break,
         };
+        // One instant for the action and for the view of its result.
+        let clock = crate::now();
         let result = (|| -> Result<Value, String> {
-            let now = crate::now().ok_or("clock unavailable")?;
+            let now = clock.ok_or("clock unavailable")?;
             if command.action == "start" {
                 if sessions.len() >= MAX_RECORDS {
                     return Err("client busy; try later".into());
@@ -118,6 +153,7 @@ fn worker(
                     Browser {
                         session,
                         selected: None,
+                        restrictions: Vec::new(),
                         retired: None,
                         current_key: None,
                         retired_key: None,
@@ -151,14 +187,20 @@ fn worker(
             };
             match command.action.as_str() {
                 "attenuate" => {
-                    let file = command.args.file.as_deref().unwrap_or("notes");
-                    if !matches!(file, "notes" | "draft") {
-                        return Err("unknown file".into());
+                    let file = match command.args.file.as_deref() {
+                        Some("notes") => "notes",
+                        Some("draft") => "draft",
+                        _ => return Err("choose the notes or the draft".into()),
+                    };
+                    let seconds = command
+                        .args
+                        .seconds
+                        .filter(|seconds| (1..=600).contains(seconds))
+                        .ok_or("attenuation must last 1 to 600 seconds")?;
+                    if s.restrictions.len() >= MAX_RESTRICTIONS {
+                        return Err("this example allows eight restrictive blocks per token".into());
                     }
-                    let seconds = command.args.seconds.unwrap_or(120);
-                    if !(1..=600).contains(&seconds) {
-                        return Err("attenuation must last 1 to 600 seconds".into());
-                    }
+                    let until = now.checked_add(seconds).ok_or("clock overflow")?;
                     let source = s
                         .selected
                         .clone()
@@ -170,10 +212,11 @@ fn worker(
                         token
                             .attenuate(
                                 Some(&format!("{}/files/{file}", config.rs_origin.value)),
-                                Some(now.checked_add(seconds).ok_or("clock overflow")?),
+                                Some(until),
                             )
                             .map_err(|_| "attenuation refused")?,
                     );
+                    s.restrictions.push((file, until));
                     Ok(
                         json!({"event":"Local restrictive block added; client key unchanged.","file":file,"seconds":seconds}),
                     )
@@ -182,7 +225,7 @@ fn worker(
                     let retiring = s.selected.clone().or_else(current);
                     let retiring_key = s.current_key.clone();
                     if action == "rotate-key" {
-                        if s.key_attempts >= 3 {
+                        if s.key_attempts >= MAX_KEY_ATTEMPTS {
                             return Err(
                                 "this example allows three key-generation attempts per session"
                                     .into(),
@@ -216,6 +259,7 @@ fn worker(
                     s.retired = retiring;
                     s.retired_key = retiring_key;
                     s.selected = None;
+                    s.restrictions.clear();
                     Ok(json!({"event": if action == "rotate-key" {
                         "Presentation key and authority replaced. Test the previous key and retired token."
                     } else { "Authority rotated. Old tokens and their descendants should now be denied." },
@@ -229,6 +273,7 @@ fn worker(
                     s.retired = retiring;
                     s.retired_key = s.current_key.take();
                     s.selected = None;
+                    s.restrictions.clear();
                     Ok(
                         json!({"event":"Authority revoked. All its descendants should now be denied."}),
                     )
@@ -286,6 +331,15 @@ fn worker(
                 _ => Err("unknown action".into()),
             }
         })();
+        // Every answer about a session the client holds carries its view,
+        // at the instant the action used.
+        let result = result.and_then(|mut value| {
+            if let (Some(s), Some(object)) = (sessions.get(&command.id), value.as_object_mut()) {
+                let now = clock.ok_or("clock unavailable")?;
+                object.insert("session".into(), view(s, now));
+            }
+            Ok(value)
+        });
         let _ = command.reply.send(result);
     }
 }
@@ -405,9 +459,15 @@ pub fn router(app: App) -> Router {
                     )
                 }),
             )
+            // The suite's shared design.
             .route(
-                "/style.css",
-                get(|| async { ([("content-type", "text/css")], include_str!("style.css")) }),
+                "/assets/gnap.css",
+                get(|| async {
+                    (
+                        [("content-type", "text/css")],
+                        include_str!("../../ui/gnap.css"),
+                    )
+                }),
             )
             .route("/action/{action}", post(action))
             .layer(axum::extract::DefaultBodyLimit::max(512))
