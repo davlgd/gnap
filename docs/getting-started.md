@@ -88,6 +88,8 @@ gnap-types = "0.1"
 serde_json = "1"
 ```
 
+The `gnap` crate gathers the same crates behind a feature per role: `gnap = { version = "0.1", features = ["client"] }` gives `gnap::client`, `gnap::crypto`, and `gnap::types`.
+
 ### Build a client
 
 Implement `HttpTransport::send`, provide a signer, and create a `Session` for the grant endpoint of the authorization server. The [client API documentation](../crates/gnap-client/src/lib.rs) has a compiled example, and the [`jwk_client` example](../crates/gnap-as/examples/jwk_client.rs) connects it to a real authorization server without a network.

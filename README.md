@@ -54,6 +54,7 @@ Choose the crate for your protocol role. The client and the authorization server
 | [`gnap-registry`](crates/gnap-registry)       | Use the 23 GNAP IANA registries, generated from vendored copies                     |
 | [`gnap-net`](crates/gnap-net)                 | Filter public IP addresses at the network boundaries of an application              |
 | [`gnap-conformance`](crates/gnap-conformance) | Check messages and servers, as a library and the `gnap-conformance` command         |
+| [`gnap`](crates/gnap)                         | Depend on all of them at once, with a feature per role                              |
 
 The crates are published on crates.io, and their API documentation on docs.rs. Start with the [integration guide](docs/getting-started.md#add-the-libraries-to-your-application) and the [architecture](docs/architecture.md). To read the API documentation locally, run:
 
