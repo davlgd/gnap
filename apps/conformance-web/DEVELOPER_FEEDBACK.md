@@ -54,7 +54,7 @@ Unknown extensions and resource-type semantics remain untested; membership in a 
 
 Lossy JSON maps and URL normalization can hide ambiguity. Duplicate members and parser limitations remain inconclusive, and identity compares the original strings.
 
-Next evidence needs RS requests signed with the RS's own key, working tokens and negative tests for revocation, audience and rights. An application's `/resource-check` isn't RFC 9767 introspection. This increment adds no private-key upload or public credentialed probe.
+Next evidence needs requests signed with the RS's own key, working tokens and refusal tests for revocation, audience and rights. An application's `/resource-check` isn't by itself RFC 9767 introspection. This work adds no private-key upload or public credentialed probe.
 
 ### Resource registration
 

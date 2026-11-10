@@ -32,7 +32,7 @@ The temporary registry keeps its extracted sources in your Cargo home. Since the
 CARGO_HOME="$(mktemp -d)" cargo package --workspace --locked
 ```
 
-Cargo then downloads the dependencies again, and leaves your usual cache untouched. The same prefix works for `mise run publish:dry-run`.
+Cargo downloads the dependencies again, leaving your cache alone. The prefix also works for `mise run publish:dry-run`.
 
 ## Review before an upload
 

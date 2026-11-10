@@ -17,7 +17,7 @@ mise run lint:docs
 mise run lint:commits
 ```
 
-The three applications are separate Cargo workspaces, which `cargo fmt --all` doesn't reach. `lint:docs` runs markdownlint on the tracked Markdown files, then lychee, offline, on their internal links and anchors: links to this repository on github.com resolve against your working tree. It doesn't check external URLs or the quality of the prose. `lint:commits` checks the commits of your branch against [`commitlint.config.mjs`](../commitlint.config.mjs).
+`cargo fmt --all` doesn't reach the three applications, which are separate workspaces. `lint:docs` runs markdownlint on tracked Markdown files, then lychee, offline, on their internal links and anchors: links to this repository on github.com resolve against your working tree. It checks neither external URLs nor prose quality. `lint:commits` checks your branch's commits against [`commitlint.config.mjs`](../commitlint.config.mjs).
 
 ## Rust lint, tests, and documentation
 

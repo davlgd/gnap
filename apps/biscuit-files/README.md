@@ -59,7 +59,7 @@ For each proved, locally authorized file request, the RS calls the AS's fixed `/
 {"authority":"<native authority signature>","nonce":"<accepted resource nonce>","created":1800000000}
 ```
 
-The RS signs this request with its own PS256 key, through the client's SDK signing helper, without an access token. The AS verifies method, exact URI, body digest, timestamp and a one-use signature nonce against that RS key. The client and RS keys must differ.
+The RS signs this request with its own PS256 key, through the SDK request-signing helper, without an access token. The AS verifies method, exact URI, body digest, timestamp and a one-use signature nonce against that RS key. The client and RS keys must differ.
 
 The response body has just one field:
 
@@ -107,7 +107,7 @@ For Clever Cloud, select `KEY_SOURCE=environment` and omit `KEY_DIRECTORY`. Conf
 | Client | `BISCUIT_CLIENT_PRIVATE_KEY_PEM` | Client private key as PKCS#8 PEM, with real newlines |
 | Client | `BISCUIT_CLIENT_ROOT_PUBLIC_KEY_HEX` | Public Biscuit root in hexadecimal |
 
-Supply these values through private deployment configuration, never repository files, commands containing keys, or build logs. Environment mode keeps the material in memory, never on disk. Required keys are validated before the listener starts, and errors never include PEM, JWK, hex values or parser details. The AS refuses the same RSA key for client and RS, whatever their `kid` labels.
+Supply these values through private deployment configuration, never repository files, commands containing keys, or build logs. Environment mode keeps keys in process memory and writes no key file. Required keys are validated before the listener starts, and errors never include PEM, JWK, hex values or parser details. The AS refuses the same RSA key for client and RS, whatever their `kid` labels.
 
 Private platform variables are still accessible to authorized platform operators and the application process. They aren't a hardware-backed key store. Keep a protected operator backup and use dedicated demonstration keys, never production credentials. The [public delivery guide](../../docs/biscuit-public-delivery.md) describes the three-role configuration and its acceptance checks.
 
