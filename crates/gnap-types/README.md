@@ -2,6 +2,8 @@
 
 Rust types for GNAP requests, responses, access descriptions, tokens and resource-server messages. Use them to parse and serialize protocol messages while retaining extension fields and unregistered values.
 
+Add it with `cargo add gnap-types`. Its [API documentation](https://docs.rs/gnap-types) is on docs.rs.
+
 ## Decode a grant request
 
 ```rust

@@ -2,11 +2,13 @@
 
 The GNAP client role over an application-supplied HTTP transport. A `Session` builds and signs grant requests, checks responses and interaction callbacks, continues a grant, and manages its issued tokens.
 
+Add it with `cargo add gnap-client`. Its [API documentation](https://docs.rs/gnap-client) is on docs.rs.
+
 ## Integrate a client
 
 Implement `HttpTransport::send`, provide a signer and create a `Session` for the authorization server's grant endpoint. Handle the returned `Step`, validate interaction callbacks through the session, and pass consistent timestamps to continue or manage the grant.
 
-Run `cargo doc -p gnap-client --open` for the API documentation, with a compiled example. The [integration guide](https://github.com/davlgd/gnap/blob/main/docs/getting-started.md#build-a-client) connects it to the runnable applications of the repository.
+The API documentation has a compiled example. The [integration guide](https://github.com/davlgd/gnap/blob/main/docs/getting-started.md#build-a-client) connects it to the runnable applications of the repository.
 
 The transport is synchronous and doesn't impose an HTTP framework or async runtime. Your adapter supplies TLS, destination policy, byte preservation and request bounds. Your application owns browser sessions and user-facing interaction.
 

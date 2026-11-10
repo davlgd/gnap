@@ -68,7 +68,7 @@ contains only the public endpoint, the three announced interaction starts
 The 214-byte response has SHA-256
 `40d32b027555b726d87489b785ab738a6be1cad6848012347fc1cff2e9c6fb36`.
 
-The [replay receipt](../conformance/receipts/gnap-delegation-discovery-2026-09-06.json)
+The [replay receipt](../conformance/archive/receipts/gnap-delegation-discovery-2026-09-06.json)
 was generated from clean commit
 [`18987d2`](https://github.com/davlgd/gnap/commit/18987d2dcecb5695b8f947cae5b4aca4c24f0896).
 Its six named cases are the active mappings for the same two section 9 source

@@ -1,6 +1,6 @@
 # Releasing the crates
 
-This guide prepares the ten SDK crates for their first release on crates.io. The crates aren't published: use them as source dependencies, as [Getting started](getting-started.md#add-the-libraries-to-your-application) shows. The HTTP applications are examples, not packages of the release.
+This guide releases a new version of the ten SDK crates on crates.io, where version 0.1.0 is published. Users add them as registry dependencies, as [Getting started](getting-started.md#add-the-libraries-to-your-application) shows. The HTTP applications are examples, not packages of the release.
 
 Publishing is a separate decision of the maintainer. Don't upload a package, create a release tag, or change registry ownership while you check the packages. A published version is effectively permanent, as Cargo's [publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html) explains.
 
@@ -22,7 +22,7 @@ The asset check verifies each crate's README, documentation URL, inherited SPDX 
 
 Review the actual file list, tests and examples included, rather than assuming that the ignore rules of Git make a complete publication policy. The RFC-derived test keys are public fixtures that keep their provenance notices, and must never become deployment credentials.
 
-Cargo writes the archives under `target/package`. In a workspace, it verifies the unpublished crates together through a temporary local registry, without uploading anything; see [`cargo package`](https://doc.rust-lang.org/cargo/commands/cargo-package.html). This verification compiles the libraries, but doesn't run their tests and examples: run those from the unpacked archives, without the sibling source directories, so that a stray reference to another crate's files can't succeed.
+Cargo writes the archives under `target/package`. In a workspace, it verifies the new versions together through a temporary local registry, without uploading anything; see [`cargo package`](https://doc.rust-lang.org/cargo/commands/cargo-package.html). This verification compiles the libraries, but doesn't run their tests and examples: run those from the unpacked archives, without the sibling source directories, so that a stray reference to another crate's files can't succeed.
 
 ### Rerun after a change of code
 
@@ -34,7 +34,7 @@ CARGO_HOME="$(mktemp -d)" cargo package --workspace --locked
 
 Cargo then downloads the dependencies again, and leaves your usual cache untouched. The same prefix works for `mise run publish:dry-run`.
 
-## Review before the first upload
+## Review before an upload
 
 - Check the crate names and the registry owner just before the release
 - Check the package versions and the internal dependency requirements together
@@ -43,7 +43,7 @@ Cargo then downloads the dependencies again, and leaves your usual cache untouch
 - Keep the links of each crate README absolute, so they work from a registry page
 - Check that the public description matches the [support matrix](support-matrix.md)
 
-A missing registry entry isn't a reservation, nor a promise that publication will be accepted, and account details stay out of public files. A path dependency also carries `version = "0.1.0"`, which Cargo uses on the registry, as its [dependency rules](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#multiple-locations) explain.
+Account details stay out of public files. A path dependency also carries the version of the crate it names, such as `version = "0.1.0"`, which Cargo uses on the registry, as its [dependency rules](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#multiple-locations) explain.
 
 The [verification guide](verification.md#dependencies) runs the dependency checks, and states the advisory that remains in the graph of `gnap-biscuit`. The pinned lockfile doesn't validate the dependency resolution of a new consumer, so test a fresh one. Review warnings rather than suppressing them to get a clean release. Version 0.1.0 doesn't mean complete GNAP conformance, nor production-ready identity and storage services. Public release evidence names the reviewed revision and the checks you ran.
 
@@ -55,7 +55,7 @@ Rehearse the whole workspace without uploading:
 mise run publish:dry-run
 ```
 
-This runs `cargo publish --workspace --registry crates-io --locked --dry-run`, which orders the crates by dependency and verifies the unpublished ones together. It builds the archives and can contact the registry, but uploads nothing: it isn't an offline check, nor a guarantee that the registry will accept them. It keeps Cargo's clean-tree and lockfile checks, and reports yanked dependencies and future compiler incompatibilities, which a successful run doesn't resolve. See [`cargo publish`](https://doc.rust-lang.org/cargo/commands/cargo-publish.html).
+This runs `cargo publish --workspace --registry crates-io --locked --dry-run`, which orders the crates by dependency and verifies the new versions together. It builds the archives and can contact the registry, but uploads nothing: it isn't an offline check, nor a guarantee that the registry will accept them. It keeps Cargo's clean-tree and lockfile checks, and reports yanked dependencies and future compiler incompatibilities, which a successful run doesn't resolve. See [`cargo publish`](https://doc.rust-lang.org/cargo/commands/cargo-publish.html).
 
 To print the commands without running even the Cargo dry run, use `mise run --dry-run publish:dry-run`.
 
@@ -80,4 +80,4 @@ To publish by hand or to recover, use an order in which each crate's dependencie
 5. `gnap-client`
 6. `gnap-as`, `gnap-rs`, and `gnap-biscuit`
 
-Recompute this order when the dependencies change, and check that each dependency is visible on the registry before you publish a crate that needs it. After the release, verify the versions, the package contents, and the docs.rs builds, then update the installation instructions, and publish the release notes and the tag.
+Recompute this order when the dependencies change, and check that each dependency is visible on the registry before you publish a crate that needs it. After the release, verify the versions, the package contents, and the docs.rs builds, then update the installation instructions and the [changelog](../CHANGELOG.md), and publish the release notes and the tag.

@@ -78,13 +78,13 @@ This request is refused on purpose: several requested tokens need labels. The sh
 
 ## Add the libraries to your application
 
-The crates aren't on crates.io yet, so depend on a checkout of the repository. With a checkout named `gnap` beside your application, a client needs these entries in its `Cargo.toml`:
+The crates are published on [crates.io](https://crates.io/crates/gnap-client), and their API documentation on [docs.rs](https://docs.rs/gnap-client). A client needs these entries in its `Cargo.toml`:
 
 ```toml
 [dependencies]
-gnap-client = { path = "../gnap/crates/gnap-client" }
-gnap-crypto = { path = "../gnap/crates/gnap-crypto" }
-gnap-types = { path = "../gnap/crates/gnap-types" }
+gnap-client = "0.1"
+gnap-crypto = "0.1"
+gnap-types = "0.1"
 serde_json = "1"
 ```
 

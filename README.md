@@ -9,7 +9,7 @@ GNAP is its own delegated-authorization protocol, not an OAuth-compatible API. T
 
 ## What the libraries support
 
-The libraries sign and verify requests with HTTP Message Signatures (`httpsig`) and PS256, ES256, or Ed25519 keys; `httpsig` with PS256 is what both GNAP conformance profiles require. They issue opaque reference tokens, which a resource server checks through authenticated introspection, and an attenuable Biscuit token profile for file access.
+The libraries sign and verify requests with HTTP Message Signatures, the `httpsig` proof method, with PS256, ES256, or Ed25519 keys, and with the `jws` and `jwsd` proof methods, with RS256, ES256, or EdDSA keys. Both GNAP conformance profiles require `httpsig` with PS256. The libraries issue opaque reference tokens, which a resource server checks through authenticated introspection, and an attenuable Biscuit token profile for file access.
 
 The [support matrix](docs/support-matrix.md) lists each capability with its state, its limits, and the tests that show it, including the proof methods and algorithms the libraries don't implement.
 
@@ -54,7 +54,7 @@ Choose the crate for the protocol role you need. The client and the authorizatio
 | [`gnap-registry`](crates/gnap-registry) | Use the 23 GNAP IANA registries, generated from vendored copies                     |
 | [`gnap-net`](crates/gnap-net)           | Filter public IP addresses at the network boundaries of an application              |
 
-Start with the [integration guide](docs/getting-started.md#add-the-libraries-to-your-application) and the [architecture](docs/architecture.md). To read the API documentation locally, run:
+The crates are published on crates.io, and their API documentation on docs.rs. Start with the [integration guide](docs/getting-started.md#add-the-libraries-to-your-application) and the [architecture](docs/architecture.md). To read the API documentation locally, run:
 
 ```bash
 cargo doc --workspace --no-deps --open --locked

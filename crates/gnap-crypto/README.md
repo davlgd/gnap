@@ -2,6 +2,8 @@
 
 HTTP Message Signature proofs, JOSE proofs, content digests and interaction hashes for GNAP. Use this crate to sign requests and verify the cryptographic binding between a request, its key, its content and any presented token.
 
+Add it with `cargo add gnap-crypto`. Its [API documentation](https://docs.rs/gnap-crypto) is on docs.rs.
+
 The key adapters cover RSA-PSS with SHA-256 (PS256), RSASSA-PKCS1-v1_5 with SHA-256 (RS256), ECDSA on P-256 (ES256), and Ed25519 (EdDSA). Each can generate a key, import PEM material, and export a public JWK, and `PublicKey::from_jwk` builds the verifier that a public JWK's `kty`, `crv`, and `alg` call for. Key possession doesn't establish identity or authorization.
 
 Each proof method takes its own algorithms: `httpsig` takes PS256, ES256, and EdDSA, and the JOSE proofs, `jws` and `jwsd`, take RS256, ES256, and EdDSA. `PublicKey::for_httpsig` and `PublicKey::for_jws` import a key for one of them, and the `jws` module signs and verifies the JOSE proofs and their key rotations, with a replay memory of their own.
