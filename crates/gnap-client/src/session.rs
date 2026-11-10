@@ -350,7 +350,8 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
     /// Sends the initial grant request (§2).
     ///
     /// `now` is the current time in seconds since the Unix epoch; see
-    /// [`unix_now`](gnap_types::unix_now).
+    /// [`unix_now`](gnap_types::unix_now). It is read before the request
+    /// leaves, and the waits and lifetimes of the response count from it.
     ///
     /// # Errors
     ///
@@ -423,7 +424,14 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
     /// Calls the continuation API (§5).
     ///
     /// Sends the validated interaction reference when there is one, and polls
-    /// otherwise. The `wait` period is enforced before anything leaves.
+    /// otherwise. Nothing leaves before the `wait` period has passed since the
+    /// `now` of the call that received the continuation.
+    ///
+    /// That check is no substitute for waiting: §3.1 counts the wait from the
+    /// response's arrival, which can come a second later than that `now`.
+    /// Wait [`Continue::effective_wait`] seconds after the response arrives.
+    /// An AS that still finds the call too early answers `too_fast`, which
+    /// returns as [`Step::Recoverable`] with a new continuation.
     ///
     /// `now` is the current time in seconds since the Unix epoch; see
     /// [`unix_now`](gnap_types::unix_now).

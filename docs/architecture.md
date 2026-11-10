@@ -19,7 +19,7 @@ The [delegation lab](../apps/delegation-demo/README.md) runs its roles in one pr
 
 `gnap-types` represents GNAP's object/reference and single/multiple forms with dedicated types. Its diagnostics name the field and the RFC rule. Checking a message's shape is distinct from verifying its signature, matching a response to its request, and authorizing it.
 
-Continuation credentials use a separate `BoundToken` type that refuses bearer, management and explicit-key fields. Access-token request cardinality and labels are checked when adopting responses. The client validates interaction hashes before using the returned reference and observes the continuation wait period.
+Continuation credentials use a separate `BoundToken` type that refuses bearer, management and explicit-key fields. Access-token request cardinality and labels are checked when adopting responses. The client validates interaction hashes before using the returned reference. It refuses a continuation call made before the wait period, counted from the time passed with the request that received it, but the caller still waits that period after the response arrives.
 
 Unknown message fields and unregistered registry values are retained for extensions. Carrying an extension doesn't implement its meaning or authorize its use: the selected handler and application policy still determine acceptance. The code of the [23 IANA registries](../registries) is generated from vendored CSV files, so that each change can be reproduced and reviewed.
 
