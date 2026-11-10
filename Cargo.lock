@@ -781,6 +781,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gnap"
+version = "0.1.0"
+dependencies = [
+ "gnap-as",
+ "gnap-biscuit",
+ "gnap-client",
+ "gnap-conformance",
+ "gnap-core",
+ "gnap-crypto",
+ "gnap-net",
+ "gnap-registry",
+ "gnap-rs",
+ "gnap-subject",
+ "gnap-types",
+ "serde_json",
+]
+
+[[package]]
 name = "gnap-as"
 version = "0.1.0"
 dependencies = [
