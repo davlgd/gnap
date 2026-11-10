@@ -8,7 +8,7 @@ use gnap_as::{
 };
 use gnap_client::sign_request;
 use gnap_crypto::{
-    httpsig::{sign, Component, Message, SignatureInput, Tag},
+    httpsig::{Component, Message, SignatureInput, Tag, sign},
     proof::{Signer, Verifier},
     ps256::Ps256Signer,
 };
@@ -20,7 +20,7 @@ use gnap_types::{
     message::GrantRequest,
     rs::{IntrospectionResponse, ResourceServer},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     cell::Cell,
     num::NonZeroU64,
@@ -802,9 +802,11 @@ fn discovery_inherits_only_the_explicit_loopback_development_option() {
     let policy = RsPolicy::new();
     let nonces = MemoryStorage::new();
     let endpoint = "http://127.0.0.1:8080/introspect";
-    assert!(server
-        .resource_server_api(&RsKeys, &policy, &nonces, endpoint)
-        .is_err());
+    assert!(
+        server
+            .resource_server_api(&RsKeys, &policy, &nonces, endpoint)
+            .is_err()
+    );
     let server = server.with_development_http_discovery();
     let api = server
         .resource_server_api(&RsKeys, &policy, &nonces, endpoint)
@@ -818,14 +820,16 @@ fn discovery_inherits_only_the_explicit_loopback_development_option() {
         response.header_value("gnap-development-only"),
         Some("insecure-loopback-discovery")
     );
-    assert!(server
-        .resource_server_api(
-            &RsKeys,
-            &policy,
-            &nonces,
-            "http://remote.example/introspect"
-        )
-        .is_err());
+    assert!(
+        server
+            .resource_server_api(
+                &RsKeys,
+                &policy,
+                &nonces,
+                "http://remote.example/introspect"
+            )
+            .is_err()
+    );
 }
 
 /// Resolves the registered resource server to the public key of `0`.

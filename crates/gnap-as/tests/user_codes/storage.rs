@@ -95,20 +95,24 @@ fn a_code_collision_at_create_or_cas_never_partially_publishes_the_candidate() {
         };
         assert!(result.is_err());
         let attempted = store.rejected.lock().unwrap().clone().unwrap();
-        assert!(store
-            .inner
-            .lookup(GrantSelector::Continuation(
-                attempted.record.continuation_token.as_deref().unwrap()
-            ))
-            .unwrap()
-            .is_none());
-        assert!(store
-            .inner
-            .lookup(GrantSelector::Interaction(
-                attempted.record.interact_handle.as_deref().unwrap()
-            ))
-            .unwrap()
-            .is_none());
+        assert!(
+            store
+                .inner
+                .lookup(GrantSelector::Continuation(
+                    attempted.record.continuation_token.as_deref().unwrap()
+                ))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .inner
+                .lookup(GrantSelector::Interaction(
+                    attempted.record.interact_handle.as_deref().unwrap()
+                ))
+                .unwrap()
+                .is_none()
+        );
         let winner = store
             .inner
             .lookup_user_code(attempted.record.user_code.as_deref().unwrap())
@@ -201,9 +205,11 @@ fn unavailable_code_index_does_not_look_like_absence_or_publish_an_offer() {
         server.resolve_user_code(code(&step), 1_001),
         Err(InteractionError::Storage(StoreError::Unavailable))
     ));
-    assert!(Session::new(&direct, &signer, ENDPOINT)
-        .start(&request(&["user_code"], None), 1_000)
-        .is_err());
+    assert!(
+        Session::new(&direct, &signer, ENDPOINT)
+            .start(&request(&["user_code"], None), 1_000)
+            .is_err()
+    );
     assert_eq!(store.inner.len().unwrap(), 1);
 }
 
@@ -242,13 +248,14 @@ fn optional_index_forwarders_invariants_and_revocation_match_the_aggregate() {
     direct.now.set(1_005);
     client.revoke_grant(1_005).unwrap();
     assert!(f.storage.lookup_user_code(code(&step)).unwrap().is_none());
-    assert!(f
-        .storage
-        .lookup(GrantSelector::Id(saved.id))
-        .unwrap()
-        .unwrap()
-        .aggregate
-        .record
-        .user_code
-        .is_none());
+    assert!(
+        f.storage
+            .lookup(GrantSelector::Id(saved.id))
+            .unwrap()
+            .unwrap()
+            .aggregate
+            .record
+            .user_code
+            .is_none()
+    );
 }

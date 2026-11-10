@@ -75,10 +75,12 @@ fn an_expired_value_is_refused_before_value_rotation_permission() {
         let response = server.handle(&request, NOW + 60);
         assert_eq!(error_code(&response), "invalid_rotation");
         let wire: Value = serde_json::from_slice(&response.body).unwrap();
-        assert!(wire["error"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("lifetime"));
+        assert!(
+            wire["error"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("lifetime")
+        );
         unchanged(&server, &tokens[0], &before);
     }
 }

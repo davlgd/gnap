@@ -11,7 +11,7 @@
 
 use crate::cli::{Finding, Outcome, Profile, Report};
 use gnap_client::{
-    sign_jose_request, sign_request, ClientError, HttpRequest, HttpTransport, Session, Step,
+    ClientError, HttpRequest, HttpTransport, Session, Step, sign_jose_request, sign_request,
 };
 use gnap_crypto::jws::JwsMethod;
 use gnap_crypto::{Ed25519Signer, Es256Signer, JwkSigner, Ps256Signer, Rs256Signer};
@@ -729,50 +729,55 @@ pub fn lifecycle<T: HttpTransport>(
                 "The AS doesn't announce key rotation in its discovery document, so the \
                  scenario didn't try it.",
             );
-        } else { match generate(plan.alg, &format!("{kid}-next")) { Ok(replacement) => {
-            // Generating an RSA key takes long enough for an interrupt.
-            if run.clock.interrupted() {
-                return finish(run, transport, started);
-            }
-            let presented = serde_json::from_value(json!({
-                "proof": method_name(plan.proof),
-                "jwk": replacement.public_jwk().unwrap_or_default()
-            }));
-            let changed = presented.map_or_else(
-                |_| Err(ClientError::Usage("the new key".into())),
-                |presented| {
-                    run.session.rotate_key(
-                        None,
-                        Arc::clone(&replacement) as gnap_client::SharedSigner,
-                        &presented,
-                        clock.now(),
-                    )
-                },
-            );
-            let adopted = changed.is_ok();
-            if adopted {
-                run.current = replacement;
-            }
-            run.push(
+        } else {
+            match generate(plan.alg, &format!("{kid}-next")) {
+                Ok(replacement) => {
+                    // Generating an RSA key takes long enough for an interrupt.
+                    if run.clock.interrupted() {
+                        return finish(run, transport, started);
+                    }
+                    let presented = serde_json::from_value(json!({
+                        "proof": method_name(plan.proof),
+                        "jwk": replacement.public_jwk().unwrap_or_default()
+                    }));
+                    let changed = presented.map_or_else(
+                        |_| Err(ClientError::Usage("the new key".into())),
+                        |presented| {
+                            run.session.rotate_key(
+                                None,
+                                Arc::clone(&replacement) as gnap_client::SharedSigner,
+                                &presented,
+                                clock.now(),
+                            )
+                        },
+                    );
+                    let adopted = changed.is_ok();
+                    if adopted {
+                        run.current = replacement;
+                    }
+                    run.push(
                 "key-rotation",
                 judged(&changed),
                 KEY_ROTATION,
                 "The AS bound the token to a new key of the same method and algorithm, proven \
                  by both keys. A refusal leaves the check inconclusive.",
             );
-            run.admit_held();
-            if adopted {
-                run.hold_token(clock.now());
-            }
-        } _ => {
-            run.push(
-                "key-rotation",
-                Outcome::Inconclusive,
-                KEY_ROTATION,
-                "The scenario couldn't generate the new key: the system's random source is \
+                    run.admit_held();
+                    if adopted {
+                        run.hold_token(clock.now());
+                    }
+                }
+                _ => {
+                    run.push(
+                        "key-rotation",
+                        Outcome::Inconclusive,
+                        KEY_ROTATION,
+                        "The scenario couldn't generate the new key: the system's random source is \
                  unavailable.",
-            );
-        }}}
+                    );
+                }
+            }
+        }
     }
 
     if run.clock.interrupted() {

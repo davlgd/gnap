@@ -1,5 +1,5 @@
 //! Bounded application replay reservations, kept with the AS token records.
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use gnap_biscuit::LiveDecision;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};

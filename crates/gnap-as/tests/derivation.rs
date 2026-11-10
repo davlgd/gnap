@@ -17,7 +17,7 @@ use gnap_types::{
     rs::ResourceServer,
     token::{AccessToken, TokenValue},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     cell::Cell,
     num::NonZeroU64,
@@ -200,25 +200,29 @@ fn snapshot(server: &Server, value: &TokenValue) -> GrantSnapshot {
         .unwrap()
 }
 fn absent(server: &Server, token: &AccessToken) {
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::AccessToken(token.value.as_str()))
-        .unwrap()
-        .is_none());
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::Management(
-            token
-                .manage
-                .as_ref()
-                .unwrap()
-                .uri
-                .rsplit('/')
-                .next()
-                .unwrap()
-        ))
-        .unwrap()
-        .is_none());
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::AccessToken(token.value.as_str()))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::Management(
+                token
+                    .manage
+                    .as_ref()
+                    .unwrap()
+                    .uri
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+            ))
+            .unwrap()
+            .is_none()
+    );
 }
 fn manage(
     server: &Server,
@@ -254,15 +258,19 @@ fn distinct_child_is_bound_to_rs_and_does_not_store_parent_secret() {
     let stored = snapshot(&server, &child.value);
     assert_ne!(stored.id, snapshot(&server, &parent.value).id);
     assert!(!format!("{:?}", stored.aggregate.record.request).contains(parent.value.as_str()));
-    assert!(!serde_json::to_string(&stored.aggregate.record.request)
-        .unwrap()
-        .contains(parent.value.as_str()));
-    assert!(stored
-        .aggregate
-        .record
-        .request
-        .existing_access_token
-        .is_none());
+    assert!(
+        !serde_json::to_string(&stored.aggregate.record.request)
+            .unwrap()
+            .contains(parent.value.as_str())
+    );
+    assert!(
+        stored
+            .aggregate
+            .record
+            .request
+            .existing_access_token
+            .is_none()
+    );
     let metadata = stored
         .aggregate
         .tokens
@@ -328,9 +336,11 @@ fn unsupported_parameters_and_explicit_null_never_fall_back_to_ordinary_grant() 
     let mut extension = body(&parent);
     extension["access_token"]["unknown"] = json!(true);
     let parsed: GrantRequest = serde_json::from_value(extension.clone()).unwrap();
-    assert!(parsed.access_token.unwrap().tokens[0]
-        .extra
-        .contains_key("unknown"));
+    assert!(
+        parsed.access_token.unwrap().tokens[0]
+            .extra
+            .contains_key("unknown")
+    );
     assert_eq!(
         server
             .handle_grant_with_derivation(
@@ -612,13 +622,15 @@ fn eight_live_children_limit_does_not_count_expired_index_entries() {
     assert_eq!(fresh.expires_in, Some(60));
     for child in children {
         let retained = snapshot(&server, &child.value);
-        assert!(!retained
-            .aggregate
-            .tokens
-            .values()
-            .next()
-            .unwrap()
-            .is_valid_at(1061));
+        assert!(
+            !retained
+                .aggregate
+                .tokens
+                .values()
+                .next()
+                .unwrap()
+                .is_valid_at(1061)
+        );
     }
 }
 
@@ -638,11 +650,7 @@ fn parent_remaining_lifetime_and_commit_clock_are_enforced() {
         &MemoryStorage::new(),
         &|| {
             times.set(times.get() + 1);
-            if times.get() < 3 {
-                2190
-            } else {
-                2200
-            }
+            if times.get() < 3 { 2190 } else { 2200 }
         },
     );
     assert_eq!(response.status, 400);
@@ -862,11 +870,13 @@ fn store_rejects_cross_grant_collisions_invalid_ttl_and_reparenting() {
             result,
             Err(StoreError::Collision | StoreError::Invalid)
         ));
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::AccessToken("candidate100"))
-            .unwrap()
-            .is_none());
+        assert!(
+            server
+                .storage()
+                .lookup(GrantSelector::AccessToken("candidate100"))
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             snapshot(&server, &parent.value).revision,
             parent_snapshot.revision
@@ -958,22 +968,28 @@ fn total_retained_derived_grants_are_bounded_and_maintenance_releases_capacity()
             &|| now,
         )
         .unwrap();
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::Id(stored.id))
-        .unwrap()
-        .is_none());
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::Id(created.id))
-        .unwrap()
-        .is_some());
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::Id(stored.id))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::Id(created.id))
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(server.storage().len().unwrap(), 1);
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::AccessToken("candidate257"))
-        .unwrap()
-        .is_some());
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::AccessToken("candidate257"))
+            .unwrap()
+            .is_some()
+    );
 }
 
 /// Resolves the client to its PS256 key, and RS1 to the key of `0` both as a

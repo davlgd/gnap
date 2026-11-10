@@ -2,9 +2,9 @@
 
 use crate::storage::StoreError;
 use gnap_registry::ErrorCode;
+use gnap_types::GnapError;
 use gnap_types::http::{HttpRequest, HttpResponse};
 use gnap_types::message::GrantResponse;
-use gnap_types::GnapError;
 
 /// An empty 204, as §5.4 requires of a successful revocation.
 pub(super) fn no_content() -> HttpResponse {

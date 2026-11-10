@@ -3,7 +3,7 @@
 
 use super::{JwsMethod, MAX_JWS_HEADER_BYTES, MAX_JWS_SIGNATURE_BYTES};
 use crate::jwk::MAX_KEY_ID_BYTES;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use core::fmt;
 use serde::de::{Error as _, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};

@@ -78,11 +78,12 @@ fn scenario(app: App, origin: String) {
             assert!(client.continuation().is_some());
             assert!(client.continue_grant(started + offset).is_err());
             // A local refusal is not a remote grant deletion.
-            assert!(app
-                .storage
-                .lookup(GrantSelector::Id(snapshot.id))
-                .unwrap()
-                .is_some());
+            assert!(
+                app.storage
+                    .lookup(GrantSelector::Id(snapshot.id))
+                    .unwrap()
+                    .is_some()
+            );
         }
     }
 }

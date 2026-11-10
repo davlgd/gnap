@@ -9,11 +9,11 @@ use gnap_client::{ClientError, HttpRequest, HttpResponse, HttpTransport, Session
 use gnap_crypto::proof::{Signer, Verifier};
 use gnap_crypto::ps256::{Ps256Signer, Ps256Verifier};
 use gnap_crypto::{
-    verify_key_rotation, verify_request_with_policy, Expectations, RotationProof, SignedRequest,
+    Expectations, RotationProof, SignedRequest, verify_key_rotation, verify_request_with_policy,
 };
 use gnap_types::key::Key;
 use gnap_types::message::{ContinueRequest, GrantRequest};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};

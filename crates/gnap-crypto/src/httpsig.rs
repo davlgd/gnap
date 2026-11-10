@@ -16,8 +16,8 @@
 //! delegated to `httpsig`.
 
 use crate::proof::{ProofError, Signer, Verifier};
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use core::fmt;
 use core::fmt::Write as _;
 use httpsig::prelude::message_component::HttpMessageComponent;
@@ -28,11 +28,11 @@ use httpsig::prelude::message_component::HttpMessageComponent;
 )]
 mod parse;
 
-pub(crate) use parse::{dictionary_members, validate_parameters, SF_BASE64};
 pub use parse::{
-    parse_covered_components, parse_signature_params, parse_signatures, LabelledSignature,
-    ReceivedParams,
+    LabelledSignature, ReceivedParams, parse_covered_components, parse_signature_params,
+    parse_signatures,
 };
+pub(crate) use parse::{SF_BASE64, dictionary_members, validate_parameters};
 
 /// The application tag GNAP mandates for the `tag` parameter (§7.3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

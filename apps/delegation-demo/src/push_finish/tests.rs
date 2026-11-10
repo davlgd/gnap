@@ -125,9 +125,11 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
         .unwrap();
     assert_eq!(start["state"], "pending");
     assert!(!start.to_string().contains("push-callback"));
-    assert!(dispatch(&app, "allow".into(), "continue".into())
-        .await
-        .is_err());
+    assert!(
+        dispatch(&app, "allow".into(), "continue".into())
+            .await
+            .is_err()
+    );
     let (uri, grant) = {
         let choices = app.decisions.lock().unwrap();
         let slot = choices
@@ -213,11 +215,12 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
         serde_json::from_slice::<Value>(&replay.bytes().await.unwrap()).unwrap(),
         json!({"error":"unknown_interaction"})
     );
-    assert!(app
-        .storage
-        .lookup(GrantSelector::Id(grant))
-        .unwrap()
-        .is_some());
+    assert!(
+        app.storage
+            .lookup(GrantSelector::Id(grant))
+            .unwrap()
+            .is_some()
+    );
 
     // Hold the reply ourselves to inspect and deliver the SDK's exact outbox
     // bytes. Invalid callbacks must not consume the valid pending reference.
@@ -355,9 +358,11 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
         .unwrap();
     assert_eq!(failed["push_finish"]["delivery"], "refused_before_send");
     assert_eq!(failed["push_finish"]["received"], false);
-    assert!(dispatch(&app, "capacity".into(), "continue".into())
-        .await
-        .is_err());
+    assert!(
+        dispatch(&app, "capacity".into(), "continue".into())
+            .await
+            .is_err()
+    );
     {
         let choices = app.decisions.lock().unwrap();
         let slot = choices
@@ -390,9 +395,11 @@ async fn real_push_approves_denies_and_rejects_invalid_replayed_and_expired_call
         slot.registration.status.lock().unwrap().created = Instant::now() - CALLBACK_WINDOW;
         slot.registration.uri.clone()
     };
-    assert!(dispatch(&app, "expired".into(), "approve".into())
-        .await
-        .is_err());
+    assert!(
+        dispatch(&app, "expired".into(), "approve".into())
+            .await
+            .is_err()
+    );
     assert_eq!(
         http.post(&uri)
             .header("content-type", "application/json")

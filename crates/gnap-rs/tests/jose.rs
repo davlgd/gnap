@@ -1,9 +1,9 @@
 //! Resource requests proven with `jws` or `jwsd` (RFC 9635 §7.3.3, §7.3.4),
 //! against independently scripted AS responses.
 
-use gnap_client::{sign_jose_request, sign_request, HttpTransport};
-use gnap_crypto::jws::{JwsMethod, ReplayCache};
+use gnap_client::{HttpTransport, sign_jose_request, sign_request};
 use gnap_crypto::Es256Signer;
+use gnap_crypto::jws::{JwsMethod, ReplayCache};
 use gnap_rs::{AudiencePolicy, AuthorizationError, Authorized, Authorizer, TokenInfo, TrustedAs};
 use gnap_types::{
     access::AccessItem,
@@ -11,7 +11,7 @@ use gnap_types::{
     rs::ResourceServer,
     token::TokenValue,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 
@@ -262,11 +262,7 @@ fn the_policy_runs_before_the_proof_and_the_last_clock_after() {
     let reads = Cell::new(0);
     let clock = || {
         reads.set(reads.get() + 1);
-        if reads.get() < 3 {
-            NOW
-        } else {
-            NOW + 200
-        }
+        if reads.get() < 3 { NOW } else { NOW + 200 }
     };
     assert!(authorize(&transport, Some(&replay), &late, permit, &clock).is_err());
     assert_eq!(

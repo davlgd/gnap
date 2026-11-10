@@ -1,8 +1,8 @@
 //! Interaction hash: RFC test vectors and the rules of §4.2.3.
 
 use gnap_crypto::hash::{
-    interaction_hash, interaction_hash_named, verify_interaction_hash, HashError, HashMethod,
-    InteractionHashInput,
+    HashError, HashMethod, InteractionHashInput, interaction_hash, interaction_hash_named,
+    verify_interaction_hash,
 };
 use serde_json::Value;
 
@@ -152,7 +152,7 @@ const fn demo() -> InteractionHashInput<'static> {
 /// invent one that only agrees by accident.
 #[test]
 fn a_non_ascii_value_has_no_hash() {
-    use gnap_crypto::hash::{interaction_hash, HashError, HashMethod, InteractionHashInput};
+    use gnap_crypto::hash::{HashError, HashMethod, InteractionHashInput, interaction_hash};
 
     let input = InteractionHashInput {
         client_nonce: "VJLO6A4CATR0KRO",

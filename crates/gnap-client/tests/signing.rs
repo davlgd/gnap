@@ -1,8 +1,8 @@
 //! Public request signing with real PS256 verification and replay memory.
 
-use gnap_client::{sign_request, ClientError, HttpRequest};
+use gnap_client::{ClientError, HttpRequest, sign_request};
 use gnap_crypto::ps256::Ps256Signer;
-use gnap_crypto::verify::{verify_request, Expectations, SignedRequest};
+use gnap_crypto::verify::{Expectations, SignedRequest, verify_request};
 use gnap_types::token::TokenValue;
 use std::cell::RefCell;
 use std::collections::HashSet;

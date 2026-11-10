@@ -119,10 +119,12 @@ fn credentials_cannot_change_roles_even_when_replacing_the_entire_grant() {
             Err(StoreError::Collision)
         ));
     }
-    assert!(storage
-        .lookup(GrantSelector::Continuation("value-old"))
-        .unwrap()
-        .is_none());
+    assert!(
+        storage
+            .lookup(GrantSelector::Continuation("value-old"))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         storage
             .lookup(GrantSelector::AccessToken("value-old"))
@@ -176,10 +178,12 @@ fn two_callers_cannot_complete_the_same_interaction() {
         current.aggregate.record.interact_ref.as_deref(),
         Some("reference")
     );
-    assert!(storage
-        .lookup(GrantSelector::Interaction("handle"))
-        .unwrap()
-        .is_none());
+    assert!(
+        storage
+            .lookup(GrantSelector::Interaction("handle"))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -247,10 +251,12 @@ fn a_shared_store_is_the_store_itself() {
             .revision,
         Revision(1)
     );
-    assert!(shared
-        .lookup(GrantSelector::Continuation("continue-one"))
-        .unwrap()
-        .is_none());
+    assert!(
+        shared
+            .lookup(GrantSelector::Continuation("continue-one"))
+            .unwrap()
+            .is_none()
+    );
     assert!(shared.remember_nonce("n", 1_000));
     assert!(!borrowed.remember_nonce("n", 1_000));
 }
@@ -324,14 +330,18 @@ fn collisions_never_partially_publish_creation_or_replacement() {
             storage.compare_exchange(second.id, second.revision, candidate),
             Err(StoreError::Collision)
         ));
-        assert!(storage
-            .lookup(GrantSelector::Continuation("continue-candidate"))
-            .unwrap()
-            .is_none());
-        assert!(storage
-            .lookup(GrantSelector::AccessToken("value-candidate"))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .lookup(GrantSelector::Continuation("continue-candidate"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .lookup(GrantSelector::AccessToken("value-candidate"))
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             storage
                 .lookup(GrantSelector::Id(second.id))
@@ -400,26 +410,36 @@ fn revocation_is_terminal_and_clears_all_aliases() {
         storage.compare_exchange(GrantId(99), Revision(0), populated("missing")),
         Err(StoreError::Conflict)
     ));
-    assert!(storage
-        .lookup(GrantSelector::Continuation("continue-one"))
-        .unwrap()
-        .is_none());
-    assert!(storage
-        .lookup(GrantSelector::Interaction("interact-one"))
-        .unwrap()
-        .is_none());
-    assert!(storage
-        .lookup(GrantSelector::Management("handle-one"))
-        .unwrap()
-        .is_none());
-    assert!(storage
-        .lookup(GrantSelector::AccessToken("value-one"))
-        .unwrap()
-        .is_none());
-    assert!(storage
-        .lookup(GrantSelector::TokenIdentifier(b"one"))
-        .unwrap()
-        .is_none());
+    assert!(
+        storage
+            .lookup(GrantSelector::Continuation("continue-one"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .lookup(GrantSelector::Interaction("interact-one"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .lookup(GrantSelector::Management("handle-one"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .lookup(GrantSelector::AccessToken("value-one"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .lookup(GrantSelector::TokenIdentifier(b"one"))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -435,19 +455,23 @@ fn normal_closure_preserves_token_management() {
         .compare_exchange(original.id, original.revision, closed)
         .unwrap();
     assert!(!closed.aggregate.revoked);
-    assert!(storage
-        .lookup(GrantSelector::Management("handle-one"))
-        .unwrap()
-        .is_some());
+    assert!(
+        storage
+            .lookup(GrantSelector::Management("handle-one"))
+            .unwrap()
+            .is_some()
+    );
     let mut deletion = closed.aggregate;
     deletion.tokens.clear();
     storage
         .compare_exchange(closed.id, closed.revision, deletion)
         .unwrap();
-    assert!(storage
-        .lookup(GrantSelector::Management("handle-one"))
-        .unwrap()
-        .is_none());
+    assert!(
+        storage
+            .lookup(GrantSelector::Management("handle-one"))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -589,10 +613,12 @@ fn malformed_candidates_are_refused_without_consuming_an_identity() {
             storage.create(candidate),
             Err(StoreError::Invalid)
         ));
-        assert!(storage
-            .lookup(GrantSelector::Management("handle-one"))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .lookup(GrantSelector::Management("handle-one"))
+                .unwrap()
+                .is_none()
+        );
     }
     assert_eq!(storage.create(populated("one")).unwrap().id, GrantId(1));
 }
@@ -614,10 +640,12 @@ fn a_finalized_core_state_cannot_be_reopened() {
         storage.compare_exchange(original.id, original.revision, populated("new")),
         Err(StoreError::Invalid)
     ));
-    assert!(storage
-        .lookup(GrantSelector::Continuation("continue-new"))
-        .unwrap()
-        .is_none());
+    assert!(
+        storage
+            .lookup(GrantSelector::Continuation("continue-new"))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         storage
             .lookup(GrantSelector::Id(original.id))
@@ -672,21 +700,27 @@ fn a_constructed_token_record_is_stored_and_read_back() {
         created.id
     );
     assert!(snapshot.aggregate.tokens.remove("handle-c").is_some());
-    assert!(store
-        .lookup(GrantSelector::Management("handle-c"))
-        .unwrap()
-        .is_some());
+    assert!(
+        store
+            .lookup(GrantSelector::Management("handle-c"))
+            .unwrap()
+            .is_some()
+    );
     store
         .compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate)
         .unwrap();
-    assert!(store
-        .lookup(GrantSelector::Management("handle-c"))
-        .unwrap()
-        .is_none());
-    assert!(store
-        .lookup(GrantSelector::AccessToken("BBB"))
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .lookup(GrantSelector::Management("handle-c"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .lookup(GrantSelector::AccessToken("BBB"))
+            .unwrap()
+            .is_none()
+    );
     let remaining = store
         .lookup(GrantSelector::Id(created.id))
         .unwrap()

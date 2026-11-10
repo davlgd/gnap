@@ -58,12 +58,12 @@ mod trust;
 pub use token::{AccessPolicy, Audience, AudiencePolicy, TokenInfo};
 pub use trust::TrustedAs;
 
-use gnap_client::{sign_request, HttpTransport};
+use gnap_client::{HttpTransport, sign_request};
 use gnap_crypto::{
-    jws::{verify_jws_request, JwsKey, JwsMethod, JwsReplayMemory, DETACHED_JWS_HEADER},
-    proof::Signer,
-    verify::{verify_request_with_policy, Expectations, NonceMemory, SignedRequest},
     PublicKey,
+    jws::{DETACHED_JWS_HEADER, JwsKey, JwsMethod, JwsReplayMemory, verify_jws_request},
+    proof::Signer,
+    verify::{Expectations, NonceMemory, SignedRequest, verify_request_with_policy},
 };
 use gnap_registry::KeyProofingMethod;
 use gnap_types::{

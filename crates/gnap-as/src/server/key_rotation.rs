@@ -6,14 +6,14 @@
 //! without assigning precedence when several conditions apply to one request.
 
 use super::{
-    check_presented_key, error, misconfigured, require_json_content, signed_request,
-    AuthorizationServer, BothKeys, GrantSnapshot, HttpRequest, HttpResponse, KeyResolver, Nonces,
-    Policy, Storage, TokenEncoder, MAX_CLOCK_SKEW,
+    AuthorizationServer, BothKeys, GrantSnapshot, HttpRequest, HttpResponse, KeyResolver,
+    MAX_CLOCK_SKEW, Nonces, Policy, Storage, TokenEncoder, check_presented_key, error,
+    misconfigured, require_json_content, signed_request,
 };
-use crate::policy::parameterless_proof;
 use crate::ResolvedTokenKey;
-use gnap_crypto::jws::{unverified_rotation_content, verify_jws_rotation, JwsMethod, ReplayId};
-use gnap_crypto::{verify_key_rotation, Expectations, PublicKey, RotationProof, Verifier as _};
+use crate::policy::parameterless_proof;
+use gnap_crypto::jws::{JwsMethod, ReplayId, unverified_rotation_content, verify_jws_rotation};
+use gnap_crypto::{Expectations, PublicKey, RotationProof, Verifier as _, verify_key_rotation};
 use gnap_registry::{ErrorCode, KeyProofingMethod};
 use gnap_types::key::{Key, KeyObject, Proof};
 

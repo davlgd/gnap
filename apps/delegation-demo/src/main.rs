@@ -1,19 +1,19 @@
 //! Real HTTP GNAP client/AS application. All records and credentials are synthetic.
 use axum::{
+    Json, Router,
     body::Bytes,
     extract::{DefaultBodyLimit, OriginalUri, Request, State},
-    http::{uri::Authority, HeaderMap, Method, StatusCode, Uri, Version},
+    http::{HeaderMap, Method, StatusCode, Uri, Version, uri::Authority},
     middleware::Next,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use gnap_as::{
     AuthorizationServer, Decision, DerivedGrantStore, Endpoints, EvaluationContext, Finish,
     GrantAggregate, GrantId, GrantSelector, GrantSnapshot, GrantStore, KeyResolver, MemoryStorage,
     NonceStore, OsNonces, Policy, Revision, RotationNonceStore, StoreError,
 };
-use gnap_client::{sign_request, HttpRequest, HttpResponse, HttpTransport, Session};
+use gnap_client::{HttpRequest, HttpResponse, HttpTransport, Session, sign_request};
 use gnap_crypto::{httpsig::fresh_nonce, proof::Verifier, ps256::Ps256Signer};
 use gnap_types::{
     access::AccessItem,
@@ -22,13 +22,13 @@ use gnap_types::{
     message::{ContinueRequest, GrantRequest},
     token::TokenValue,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     io::Read,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU64,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 
@@ -1174,7 +1174,7 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                         operations: 0,
                         state: "pending",
                         events: vec![
-                            "Signed POST /gnap over HTTP: AS requests explicit consent.".into()
+                            "Signed POST /gnap over HTTP: AS requests explicit consent.".into(),
                         ],
                         retired: None,
                         folder: None,
@@ -1744,7 +1744,7 @@ async fn action(
                         StatusCode::BAD_REQUEST,
                         Json(json!({"error":"Unknown proof method"})),
                     )
-                        .into_response()
+                        .into_response();
                 }
             }
         }
@@ -1753,7 +1753,7 @@ async fn action(
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error":"Unexpected request body"})),
             )
-                .into_response()
+                .into_response();
         }
     };
     if proof.jose().is_some() && matches!(action, "start-identity" | "start-push") {
@@ -1970,7 +1970,9 @@ async fn main() {
         eprintln!("Invalid APP_ORIGIN: {reason}");
         std::process::exit(1);
     });
-    eprintln!("Generating an ephemeral 2048-bit RSA client key; no fixtures or private key files are used.");
+    eprintln!(
+        "Generating an ephemeral 2048-bit RSA client key; no fixtures or private key files are used."
+    );
     let signer = Arc::new(
         Ps256Signer::generate(2048, "delegation-demo-ephemeral")
             .expect("OS randomness and RSA generation"),
@@ -2031,7 +2033,9 @@ async fn main() {
         .expect("code entry URI")
         .with_jose_proofs(true);
     let server = Arc::new(if origin.starts_with("http:") {
-        eprintln!("Development-only HTTP loopback discovery enabled; RFC 9635 §9 requires HTTPS in production.");
+        eprintln!(
+            "Development-only HTTP loopback discovery enabled; RFC 9635 §9 requires HTTPS in production."
+        );
         server.with_development_http_discovery()
     } else {
         server
@@ -2100,10 +2104,12 @@ async fn main() {
         bootstrap: Arc::default(),
     };
     let worker_storage = storage.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(30));
-        if let Err(error) = storage.cleanup() {
-            eprintln!("Background store maintenance failed: {error}");
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(30));
+            if let Err(error) = storage.cleanup() {
+                eprintln!("Background store maintenance failed: {error}");
+            }
         }
     });
     let listener = canonical.bind(port).await.expect("listener initialization");
@@ -2770,25 +2776,31 @@ mod tests {
         let snapshot = store
             .create(test_aggregate("handle", test_record("access-one")))
             .unwrap();
-        assert!(read_resource(
-            &app,
-            &HttpRequest::new("GET", "https://demo.example/resource/folder")
-        )
-        .is_err());
+        assert!(
+            read_resource(
+                &app,
+                &HttpRequest::new("GET", "https://demo.example/resource/folder")
+            )
+            .is_err()
+        );
         let request = resource_request(&app.origin, "access-one", &app.signer).unwrap();
         assert!(read_resource(&app, &request).is_ok());
         assert!(read_resource(&app, &request).is_err());
-        assert!(read_resource(
-            &app,
-            &resource_request(&app.origin, "management-access-one", &app.signer).unwrap()
-        )
-        .is_err());
+        assert!(
+            read_resource(
+                &app,
+                &resource_request(&app.origin, "management-access-one", &app.signer).unwrap()
+            )
+            .is_err()
+        );
         let other = Ps256Signer::generate(2048, "test-client").unwrap();
-        assert!(read_resource(
-            &app,
-            &resource_request(&app.origin, "access-one", &other).unwrap()
-        )
-        .is_err());
+        assert!(
+            read_resource(
+                &app,
+                &resource_request(&app.origin, "access-one", &other).unwrap()
+            )
+            .is_err()
+        );
         let mut replacement = snapshot.aggregate.clone();
         replacement.tokens.clear();
         replacement
@@ -2797,30 +2809,38 @@ mod tests {
         let rotated = store
             .compare_exchange(snapshot.id, snapshot.revision, replacement)
             .unwrap();
-        assert!(read_resource(
-            &app,
-            &resource_request(&app.origin, "access-one", &app.signer).unwrap()
-        )
-        .is_err());
-        assert!(read_resource(
-            &app,
-            &resource_request(&app.origin, "access-two", &app.signer).unwrap()
-        )
-        .is_ok());
+        assert!(
+            read_resource(
+                &app,
+                &resource_request(&app.origin, "access-one", &app.signer).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            read_resource(
+                &app,
+                &resource_request(&app.origin, "access-two", &app.signer).unwrap()
+            )
+            .is_ok()
+        );
         let mut replacement = rotated.aggregate.clone();
         replacement.tokens.clear();
         store
             .compare_exchange(rotated.id, rotated.revision, replacement)
             .unwrap();
-        assert!(read_resource(
-            &app,
-            &resource_request(&app.origin, "access-two", &app.signer).unwrap()
-        )
-        .is_err());
-        assert!(store
-            .lookup(GrantSelector::AccessToken("access-two"))
-            .unwrap()
-            .is_none());
+        assert!(
+            read_resource(
+                &app,
+                &resource_request(&app.origin, "access-two", &app.signer).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            store
+                .lookup(GrantSelector::AccessToken("access-two"))
+                .unwrap()
+                .is_none()
+        );
     }
     #[test]
     fn expiry_is_enforced_before_background_cleanup_and_wrong_rights_fail() {
@@ -2839,27 +2859,35 @@ mod tests {
                 .is_some(),
             "no sweep has run"
         );
-        assert!(read_resource(
-            &app,
-            &resource_request(&app.origin, "access-expired", &app.signer).unwrap()
-        )
-        .is_err());
-        assert!(store
-            .lookup(GrantSelector::Management("expired"))
-            .unwrap()
-            .is_none());
-        assert!(store
-            .lookup(GrantSelector::AccessToken("access-expired"))
-            .unwrap()
-            .is_none());
+        assert!(
+            read_resource(
+                &app,
+                &resource_request(&app.origin, "access-expired", &app.signer).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            store
+                .lookup(GrantSelector::Management("expired"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .lookup(GrantSelector::AccessToken("access-expired"))
+                .unwrap()
+                .is_none()
+        );
         let mut record = test_record("wrong-right");
         record.token.access = Some(vec![AccessItem::Reference("other:read".into())]);
         store.create(test_aggregate("wrong", record)).unwrap();
-        assert!(read_resource(
-            &app,
-            &resource_request(&app.origin, "wrong-right", &app.signer).unwrap()
-        )
-        .is_err());
+        assert!(
+            read_resource(
+                &app,
+                &resource_request(&app.origin, "wrong-right", &app.signer).unwrap()
+            )
+            .is_err()
+        );
     }
     #[test]
     fn concurrent_replay_has_one_winner() {
@@ -2927,10 +2955,12 @@ mod tests {
         assert_eq!(restored.expires_at(), deadline);
         assert_eq!(restored.token, original.token);
         storage.cleanup().unwrap();
-        assert!(storage
-            .lookup(GrantSelector::Management("handle"))
-            .unwrap()
-            .is_some());
+        assert!(
+            storage
+                .lookup(GrantSelector::Management("handle"))
+                .unwrap()
+                .is_some()
+        );
         original.issued_at = now().saturating_sub(1200);
         let mut replacement = rewritten.aggregate;
         replacement.tokens.insert("handle".into(), original);
@@ -2938,14 +2968,18 @@ mod tests {
             .compare_exchange(rewritten.id, rewritten.revision, replacement)
             .unwrap();
         storage.cleanup().unwrap();
-        assert!(storage
-            .lookup(GrantSelector::Management("handle"))
-            .unwrap()
-            .is_none());
-        assert!(storage
-            .lookup(GrantSelector::AccessToken("access-one"))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .lookup(GrantSelector::Management("handle"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .lookup(GrantSelector::AccessToken("access-one"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -2975,11 +3009,12 @@ mod tests {
         );
         // A remote RS enforces the returned deadline; it does not mutate AS
         // storage using its own clock. AS maintenance uses the AS's clock.
-        assert!(app
-            .storage
-            .lookup(GrantSelector::AccessToken("access-one"))
-            .unwrap()
-            .is_some());
+        assert!(
+            app.storage
+                .lookup(GrantSelector::AccessToken("access-one"))
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -3001,14 +3036,18 @@ mod tests {
             storage.lock().unwrap().continuation_deadlines.len(),
             MAX_GRANTS
         );
-        assert!(storage
-            .lookup(GrantSelector::AccessToken("access-0"))
-            .unwrap()
-            .is_some());
-        assert!(storage
-            .lookup(GrantSelector::AccessToken("overflow"))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .lookup(GrantSelector::AccessToken("access-0"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            storage
+                .lookup(GrantSelector::AccessToken("overflow"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -3033,14 +3072,18 @@ mod tests {
             .unwrap();
         assert!(current.aggregate.record.continuation_token.is_none());
         assert!(current.aggregate.record.interact_expires_at.is_none());
-        assert!(storage
-            .lookup(GrantSelector::Continuation("continue-secret"))
-            .unwrap()
-            .is_none());
-        assert!(storage
-            .lookup(GrantSelector::Interaction("interaction"))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .lookup(GrantSelector::Continuation("continue-secret"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .lookup(GrantSelector::Interaction("interaction"))
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             current.aggregate.tokens["handle"].issued_at,
             snapshot.aggregate.tokens["handle"].issued_at
@@ -3049,10 +3092,12 @@ mod tests {
             storage.compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate),
             Err(StoreError::Conflict)
         ));
-        assert!(storage
-            .lookup(GrantSelector::AccessToken("access"))
-            .unwrap()
-            .is_some());
+        assert!(
+            storage
+                .lookup(GrantSelector::AccessToken("access"))
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -3069,18 +3114,24 @@ mod tests {
             .continuation_deadlines
             .insert(snapshot.id, 0);
         storage.cleanup().unwrap();
-        assert!(storage
-            .lookup(GrantSelector::Id(snapshot.id))
-            .unwrap()
-            .is_none());
-        assert!(storage
-            .lookup(GrantSelector::Continuation("continuation"))
-            .unwrap()
-            .is_none());
-        assert!(storage
-            .lookup(GrantSelector::Interaction("interaction"))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .lookup(GrantSelector::Id(snapshot.id))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .lookup(GrantSelector::Continuation("continuation"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .lookup(GrantSelector::Interaction("interaction"))
+                .unwrap()
+                .is_none()
+        );
         assert!(matches!(
             storage.compare_exchange(snapshot.id, snapshot.revision, snapshot.aggregate),
             Err(StoreError::Conflict)

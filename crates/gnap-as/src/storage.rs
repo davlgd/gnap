@@ -475,4 +475,4 @@ forward_storage!(&T);
 
 mod memory;
 
-pub use memory::{MemoryStorage, MAX_JWS_PROOFS};
+pub use memory::{MAX_JWS_PROOFS, MemoryStorage};

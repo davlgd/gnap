@@ -450,9 +450,10 @@ fn the_scenario_stays_within_its_admissions() {
             "{method} {url}"
         );
     }
-    assert!(sent
-        .iter()
-        .any(|(m, u, _)| m == "DELETE" && u.starts_with("https://as.example/continue")));
+    assert!(
+        sent.iter()
+            .any(|(m, u, _)| m == "DELETE" && u.starts_with("https://as.example/continue"))
+    );
     // The resource reads each prove at their own second: the check after
     // revocation is a fresh proof, never one the resource saw before.
     let reads: Vec<u64> = sent
@@ -1236,9 +1237,10 @@ fn a_recoverable_first_answer_is_inconclusive() {
     );
     // The scenario polled the continuation and went on with the token.
     assert_eq!(outcome(&report, "token-issued"), Some(Outcome::Passed));
-    assert!(sent
-        .iter()
-        .any(|(m, url, _)| m == "POST" && url.starts_with("https://as.example/continue")));
+    assert!(
+        sent.iter()
+            .any(|(m, url, _)| m == "POST" && url.starts_with("https://as.example/continue"))
+    );
     assert_eq!(report.exit_code(), 2);
 }
 

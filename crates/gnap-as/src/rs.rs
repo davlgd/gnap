@@ -7,10 +7,10 @@
 //! issue RS management credentials, or implement trust-on-first-use.
 
 use crate::{
-    GrantSelector, NonceStore, Nonces, ResourceSetError, ResourceSetStore, RsId, Storage,
-    TokenRecord, MAX_CLOCK_SKEW,
+    GrantSelector, MAX_CLOCK_SKEW, NonceStore, Nonces, ResourceSetError, ResourceSetStore, RsId,
+    Storage, TokenRecord,
 };
-use gnap_crypto::verify::{verify_request_with_policy, Expectations, SignedRequest};
+use gnap_crypto::verify::{Expectations, SignedRequest, verify_request_with_policy};
 use gnap_registry::{AccessTokenFlag, KeyProofingMethod, RsErrorCode};
 use gnap_types::{
     access::AccessItem,
@@ -303,7 +303,7 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
             {
                 Ok(record) => record,
                 Err(ResourceSetError::InvalidAccessInput) => {
-                    return rs_error(RsErrorCode::InvalidRequest)
+                    return rs_error(RsErrorCode::InvalidRequest);
                 }
                 Err(_) => {
                     // A failed local allocation/commit is not a malformed RS request.
@@ -406,7 +406,7 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
             {
                 IntrospectionDecision::Inactive => return inactive(),
                 IntrospectionDecision::InvalidAccess => {
-                    return rs_error(RsErrorCode::InvalidAccess)
+                    return rs_error(RsErrorCode::InvalidAccess);
                 }
                 IntrospectionDecision::Active { access, key } => (access, key),
             };

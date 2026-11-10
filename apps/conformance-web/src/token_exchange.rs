@@ -1,7 +1,7 @@
 //! Cross-message label diagnostics over a caller-declared pair of JSON objects.
 //! This import envelope is local tooling, not a GNAP message or live exchange.
 
-use crate::{check, observation, rs_import, Check, Import, Report};
+use crate::{Check, Import, Report, check, observation, rs_import};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 

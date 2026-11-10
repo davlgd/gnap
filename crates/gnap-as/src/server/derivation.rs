@@ -1,8 +1,8 @@
 //! Downstream token derivation (RFC 9767 §4): a resource server exchanging a token it received.
 
 use super::{
-    error, is_jose_content, misconfigured, ok, require_json_content, storage_failure,
-    ApprovedDerivation, AuthorizationServer, MAX_GRANT_BODY_BYTES,
+    ApprovedDerivation, AuthorizationServer, MAX_GRANT_BODY_BYTES, error, is_jose_content,
+    misconfigured, ok, require_json_content, storage_failure,
 };
 use crate::nonce::Nonces;
 use crate::policy::{KeyResolver, Policy};

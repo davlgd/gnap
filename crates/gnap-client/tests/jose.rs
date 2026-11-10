@@ -2,11 +2,11 @@
 //! anything (RFC 9635 §2.3, §7.3.3, §7.3.4).
 
 use gnap_client::{
-    sign_jose_request, ClientError, HttpRequest, HttpResponse, HttpTransport, Session,
+    ClientError, HttpRequest, HttpResponse, HttpTransport, Session, sign_jose_request,
 };
 use gnap_crypto::{Es256Signer, JwkSigner, Ps256Signer};
 use gnap_types::message::GrantRequest;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A transport that must never be reached.
 struct Unreachable;
@@ -66,10 +66,12 @@ fn an_empty_detailed_proof_is_accepted_up_to_the_transport() {
     impl HttpTransport for Reached {
         type Error = String;
         fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
-            assert!(request
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("detached-jws")));
+            assert!(
+                request
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("detached-jws"))
+            );
             Err("reached".into())
         }
     }
@@ -132,10 +134,12 @@ fn references_prove_with_httpsig_and_a_lost_start_can_be_retried() {
             Err(ClientError::Transport(_))
         ));
         let sent = transport.1.borrow();
-        assert!(sent[0]
-            .headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("signature-input")));
+        assert!(
+            sent[0]
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("signature-input"))
+        );
     }
 
     let transport = Failing::default();

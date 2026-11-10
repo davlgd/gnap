@@ -1,12 +1,12 @@
 //! Real PS256 proofs for RFC 9635 §7.3.1.1, including adversarial pairings.
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use gnap_crypto::httpsig::{signature_base, Component, Message, SignatureInput, Tag};
-use gnap_crypto::rotation::{MAX_ROTATION_SIGNATURES, MAX_ROTATION_SIGNATURE_BYTES};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, signature_base};
+use gnap_crypto::rotation::{MAX_ROTATION_SIGNATURE_BYTES, MAX_ROTATION_SIGNATURES};
 use gnap_crypto::{
-    content_digest, verify_key_rotation, verify_request, AcceptedRotation, DigestAlgorithm,
-    Expectations, ProofError, Ps256Signer, RotationNonceMemory, RotationProof, SignedRequest,
-    Signer, Verifier, VerifyError,
+    AcceptedRotation, DigestAlgorithm, Expectations, ProofError, Ps256Signer, RotationNonceMemory,
+    RotationProof, SignedRequest, Signer, Verifier, VerifyError, content_digest,
+    verify_key_rotation, verify_request,
 };
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -289,15 +289,17 @@ fn dictionary_member_resolution_matches_rfc9421_canonical_values() {
             ("\"example-dict\";key=\"d\"".into(), "?1".into()),
         ]
     );
-    assert!(Message {
-        method: "POST",
-        target_uri: URL,
-        content_digest: None,
-        authorization: None,
-        other: Vec::new(),
-    }
-    .with_dictionary_fields(&[member("example-dict", "missing")], |_| ["a=1"])
-    .is_err());
+    assert!(
+        Message {
+            method: "POST",
+            target_uri: URL,
+            content_digest: None,
+            authorization: None,
+            other: Vec::new(),
+        }
+        .with_dictionary_fields(&[member("example-dict", "missing")], |_| ["a=1"])
+        .is_err()
+    );
 }
 
 #[test]
@@ -498,22 +500,26 @@ fn ordinary_verification_still_requires_gnap_and_shares_nonce_state() {
     let memory = Memory::default();
     request.verify(&memory).unwrap();
     let remember = |nonce: &str, _: u64| memory.0.lock().unwrap().insert(nonce.into());
-    assert!(verify_request(
-        &request.view(),
-        &old_key().verifier(),
-        &expectations(),
-        &remember
-    )
-    .is_err());
+    assert!(
+        verify_request(
+            &request.view(),
+            &old_key().verifier(),
+            &expectations(),
+            &remember
+        )
+        .is_err()
+    );
     let mut only_new = Request::signed();
     // Keep the covered old fields, but there is no old proof under the new key.
-    assert!(verify_request(
-        &only_new.view(),
-        &new_key().verifier(),
-        &expectations(),
-        &remember
-    )
-    .is_err());
+    assert!(
+        verify_request(
+            &only_new.view(),
+            &new_key().verifier(),
+            &expectations(),
+            &remember
+        )
+        .is_err()
+    );
     only_new
         .headers
         .retain(|(_, value)| !value.starts_with("new-good="));

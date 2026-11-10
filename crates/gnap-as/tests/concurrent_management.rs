@@ -5,12 +5,13 @@ use gnap_as::{
     GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore, OsNonces, Policy, Revision,
     StoreError, TokenRecord,
 };
-use gnap_client::{sign_request, HttpRequest};
+use gnap_client::{HttpRequest, sign_request};
 use gnap_crypto::{proof::Verifier, ps256::Ps256Signer};
 use gnap_types::{client::Client, message::GrantRequest, token::AccessToken, token::TokenValue};
 use std::sync::{
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
-    mpsc, Arc, Mutex,
+    mpsc,
 };
 
 /// A one-way gate: both the worker and the controller have a finite wait.
@@ -200,14 +201,18 @@ fn revocation_wins(allow_rotation: bool) {
         current.aggregate.tokens.is_empty(),
         "rotation published or restored a token after DELETE returned 204"
     );
-    assert!(storage
-        .lookup(GrantSelector::Management(HANDLE))
-        .unwrap()
-        .is_none());
-    assert!(storage
-        .lookup(GrantSelector::AccessToken("original-access"))
-        .unwrap()
-        .is_none());
+    assert!(
+        storage
+            .lookup(GrantSelector::Management(HANDLE))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .lookup(GrantSelector::AccessToken("original-access"))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -345,10 +350,12 @@ fn ongoing_race(winning_method: &str) {
         .unwrap()
         .unwrap();
     assert_eq!(current.revision, Revision(1));
-    assert!(storage
-        .lookup(GrantSelector::AccessToken(token.value.as_str()))
-        .unwrap()
-        .is_none());
+    assert!(
+        storage
+            .lookup(GrantSelector::AccessToken(token.value.as_str()))
+            .unwrap()
+            .is_none()
+    );
     if winning_method == "DELETE" {
         assert!(current.aggregate.revoked);
         assert!(current.aggregate.tokens.is_empty());

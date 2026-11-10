@@ -4,7 +4,7 @@ use super::Session;
 use crate::error::ClientError;
 use crate::transport::HttpTransport;
 use gnap_core::State;
-use gnap_crypto::hash::{verify_interaction_hash, HashMethod, InteractionHashInput};
+use gnap_crypto::hash::{HashMethod, InteractionHashInput, verify_interaction_hash};
 use gnap_crypto::proof::Signer;
 use gnap_types::interact::InteractCallback;
 use gnap_types::message::GrantResponse;

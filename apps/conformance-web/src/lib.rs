@@ -2,13 +2,13 @@
 //! Imports remain stateless. This is not a certification suite.
 
 use axum::{
+    Json, Router,
     body::Bytes,
     extract::{DefaultBodyLimit, Request},
-    http::{header, HeaderValue, StatusCode},
+    http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
-    Json, Router,
 };
 use gnap_types::{ContinueRequest, GrantRequest, GrantResponse};
 use serde::{Deserialize, Serialize};
@@ -293,7 +293,15 @@ pub fn analyze(input: Import) -> Result<Report, &'static str> {
         check("resource-server", None, "Not tested: RS authentication, introspection, audience and rights enforcement, discovery and resource registration.", "https://www.rfc-editor.org/rfc/rfc9767.html"),
         check("transport-and-interop", None, "Not tested: TLS, actual HTTP status/media types, live AS/RS behavior, independent implementation interoperability, mtls/jwsd/jws profiles.", RFC),
     ]);
-    Ok(Report { schema_version: 1, profile: "gnap-import-diagnostics-v1", kind: input.kind, certification: false, independence: "Shared gnap-types and gnap-crypto implementation; not an independent conformance oracle. Pass applies only to each named check.", observation: observation("import"), checks })
+    Ok(Report {
+        schema_version: 1,
+        profile: "gnap-import-diagnostics-v1",
+        kind: input.kind,
+        certification: false,
+        independence: "Shared gnap-types and gnap-crypto implementation; not an independent conformance oracle. Pass applies only to each named check.",
+        observation: observation("import"),
+        checks,
+    })
 }
 
 fn finish_check(interact: Option<&gnap_types::interact::InteractRequest>, checks: &mut Vec<Check>) {
@@ -372,9 +380,19 @@ fn secured(mut response: Response) -> Response {
         ("cache-control", "no-store"),
         ("x-content-type-options", "nosniff"),
         ("referrer-policy", "no-referrer"),
-        ("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"),
-        ("permissions-policy", "camera=(), microphone=(), geolocation=()"),
-    ] { response.headers_mut().insert(name, HeaderValue::from_static(value)); }
+        (
+            "content-security-policy",
+            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+        ),
+        (
+            "permissions-policy",
+            "camera=(), microphone=(), geolocation=()",
+        ),
+    ] {
+        response
+            .headers_mut()
+            .insert(name, HeaderValue::from_static(value));
+    }
     response
 }
 
@@ -409,7 +427,7 @@ async fn import_handler(headers: axum::http::HeaderMap, body: Bytes) -> Response
 mod tests {
     use super::*;
     use axum::{
-        body::{to_bytes, Body},
+        body::{Body, to_bytes},
         http::Request,
     };
     use tower::ServiceExt;
@@ -524,11 +542,13 @@ mod tests {
 
     #[test]
     fn message_and_header_limits() {
-        assert!(analyze(imported(
-            MessageKind::ContinueRequest,
-            &" ".repeat(MAX_MESSAGE + 1)
-        ))
-        .is_err());
+        assert!(
+            analyze(imported(
+                MessageKind::ContinueRequest,
+                &" ".repeat(MAX_MESSAGE + 1)
+            ))
+            .is_err()
+        );
         let mut input = imported(MessageKind::ContinueRequest, "{}");
         input.headers = Some(vec![("x".into(), "secret\r\nheader".into())]);
         assert!(analyze(input).is_err());
@@ -646,14 +666,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(!String::from_utf8(
-            to_bytes(response.into_body(), MAX_UPLOAD)
-                .await
-                .unwrap()
-                .to_vec()
-        )
-        .unwrap()
-        .contains("TOP-SECRET"));
+        assert!(
+            !String::from_utf8(
+                to_bytes(response.into_body(), MAX_UPLOAD)
+                    .await
+                    .unwrap()
+                    .to_vec()
+            )
+            .unwrap()
+            .contains("TOP-SECRET")
+        );
     }
 
     #[test]

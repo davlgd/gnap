@@ -6,7 +6,7 @@
 //! client that cannot validate it must not pass the interaction reference on to
 //! the AS (§4.2.1).
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use core::fmt;
 use sha2::Digest;
 use subtle::ConstantTimeEq;

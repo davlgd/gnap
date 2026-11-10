@@ -627,10 +627,12 @@ fn a_requested_flag_may_not_appear_twice() {
     .unwrap_err();
     assert!(err.to_string().contains("more than once"), "{err}");
 
-    assert!(serde_json::from_str::<AccessTokenRequest>(
-        r#"{"access":["dolphin-metadata"],"flags":["split"]}"#
-    )
-    .is_ok());
+    assert!(
+        serde_json::from_str::<AccessTokenRequest>(
+            r#"{"access":["dolphin-metadata"],"flags":["split"]}"#
+        )
+        .is_ok()
+    );
 }
 
 /// GNAP-9635-§3.2.1-M12 — the token's `key` "MUST be an object or string in a
@@ -707,10 +709,12 @@ fn multiple_tokens_are_told_apart_by_unique_labels() {
     use gnap_types::token::AccessTokenRequest;
 
     // Requests.
-    assert!(serde_json::from_str::<AccessTokenRequest>(
-        r#"[{"label":"a","access":["read"]},{"label":"b","access":["write"]}]"#
-    )
-    .is_ok());
+    assert!(
+        serde_json::from_str::<AccessTokenRequest>(
+            r#"[{"label":"a","access":["read"]},{"label":"b","access":["write"]}]"#
+        )
+        .is_ok()
+    );
     for broken in [
         r#"[{"access":["read"]},{"label":"b","access":["write"]}]"#,
         r#"[{"label":"a","access":["read"]},{"label":"a","access":["write"]}]"#,
@@ -720,10 +724,12 @@ fn multiple_tokens_are_told_apart_by_unique_labels() {
     }
 
     // Responses.
-    assert!(serde_json::from_str::<AccessTokenResponse>(
-        r#"[{"label":"a","value":"AAA"},{"label":"b","value":"BBB"}]"#
-    )
-    .is_ok());
+    assert!(
+        serde_json::from_str::<AccessTokenResponse>(
+            r#"[{"label":"a","value":"AAA"},{"label":"b","value":"BBB"}]"#
+        )
+        .is_ok()
+    );
     for broken in [
         r#"[{"value":"AAA"},{"label":"b","value":"BBB"}]"#,
         r#"[{"label":"a","value":"AAA"},{"label":"a","value":"BBB"}]"#,

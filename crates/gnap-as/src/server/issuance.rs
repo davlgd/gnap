@@ -2,10 +2,10 @@
 //! occur here: the grant handler publishes the complete aggregate once.
 
 use super::{
-    credential_used, misconfigured, ok, AccessToken, AccessTokenResponse, AuthorizationServer,
-    BoundToken, Continue, GrantAggregate, GrantRequest, GrantResponse, GrantSnapshot, HttpResponse,
-    KeyResolver, Nonces, Policy, PreparedToken, ReleasedSubject, Storage, SubjectGround,
-    TokenEncoder, TokenManage, TokenRecord, TokenValue,
+    AccessToken, AccessTokenResponse, AuthorizationServer, BoundToken, Continue, GrantAggregate,
+    GrantRequest, GrantResponse, GrantSnapshot, HttpResponse, KeyResolver, Nonces, Policy,
+    PreparedToken, ReleasedSubject, Storage, SubjectGround, TokenEncoder, TokenManage, TokenRecord,
+    TokenValue, credential_used, misconfigured, ok,
 };
 use crate::policy::TokenApproval;
 use std::collections::{HashMap, HashSet};

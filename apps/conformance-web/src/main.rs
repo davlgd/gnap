@@ -15,7 +15,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &std::env::var("GNAP_WORKBENCH_ORIGIN").unwrap_or_default(),
         probes.clone(),
     )?;
-    eprintln!("GNAP diagnostics listening on port {port}; no request/body logging; only explicitly configured probe targets");
+    eprintln!(
+        "GNAP diagnostics listening on port {port}; no request/body logging; only explicitly configured probe targets"
+    );
     axum::serve(
         listener,
         gnap_conformance_web::app_with_lifecycle(probes, lifecycle),

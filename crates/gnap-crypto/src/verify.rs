@@ -16,8 +16,8 @@
 
 use crate::digest::verify_content_digest;
 use crate::httpsig::{
-    parse_covered_components, parse_signature_params, parse_signatures, signature_base, Component,
-    LabelledSignature, Message, ReceivedParams, Tag,
+    Component, LabelledSignature, Message, ReceivedParams, Tag, parse_covered_components,
+    parse_signature_params, parse_signatures, signature_base,
 };
 use crate::proof::Verifier;
 use core::fmt;

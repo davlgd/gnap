@@ -1,7 +1,7 @@
 //! Real SDK exchanges for the optional human-code profile, without HTTP.
 use gnap_as::{
-    normalize_user_code, AuthorizationServer, Decision, Endpoints, Finish, GrantSelector,
-    GrantStore, InteractionError, KeyResolver, MemoryStorage, Nonces, Policy, UserCodeStore,
+    AuthorizationServer, Decision, Endpoints, Finish, GrantSelector, GrantStore, InteractionError,
+    KeyResolver, MemoryStorage, Nonces, Policy, UserCodeStore, normalize_user_code,
 };
 use gnap_client::{HttpRequest, HttpResponse, HttpTransport, Session, Step};
 use gnap_crypto::{Ps256Signer, Ps256Verifier, Verifier};
@@ -9,7 +9,7 @@ use gnap_types::{
     client::Client,
     message::{ContinueRequest, GrantRequest},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     cell::Cell,
     collections::VecDeque,
@@ -245,10 +245,12 @@ fn configuration_is_opt_in_bounded_and_preserved_by_encoder_changes() {
         let error = fixture().server.with_user_code_uri(uri).err().unwrap();
         assert_eq!(error.to_string(), "invalid user-code entry URI");
     }
-    assert!(fixture()
-        .server
-        .with_user_code_uri(format!("https://a/{}", "x".repeat(256)))
-        .is_err());
+    assert!(
+        fixture()
+            .server
+            .with_user_code_uri(format!("https://a/{}", "x".repeat(256)))
+            .is_err()
+    );
     for uri in [
         ENTRY,
         "http://localhost:18081/code",
@@ -303,11 +305,12 @@ fn expiry_replacement_and_removal_retire_codes_without_changing_other_grants() {
     assert_ne!(code(&next), old);
     assert!(f.server.resolve_user_code(&old, 1_605).is_err());
     assert!(f.server.complete_interaction(&old_handle, 1_605).is_err());
-    assert!(f
-        .storage
-        .lookup_user_code(code(&sibling))
-        .unwrap()
-        .is_some());
+    assert!(
+        f.storage
+            .lookup_user_code(code(&sibling))
+            .unwrap()
+            .is_some()
+    );
     let saved = f.storage.lookup_user_code(code(&next)).unwrap().unwrap();
     f.storage.remove(saved.id, saved.revision).unwrap();
     assert!(f.storage.lookup_user_code(code(&next)).unwrap().is_none());
@@ -427,9 +430,11 @@ fn malformed_nonce_seeds_and_codes_embedded_in_the_entry_uri_are_not_emitted() {
             server: &f.server,
             now: Cell::new(1_000),
         };
-        assert!(Session::new(&direct, &signer, ENDPOINT)
-            .start(&request(&["user_code"], None), 1_000)
-            .is_err());
+        assert!(
+            Session::new(&direct, &signer, ENDPOINT)
+                .start(&request(&["user_code"], None), 1_000)
+                .is_err()
+        );
         assert!(f.storage.is_empty().unwrap());
     }
     let mut f = fixture();

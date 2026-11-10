@@ -1,6 +1,6 @@
 //! `Content-Digest`: RFC 9421 vectors and validation rules.
 
-use gnap_crypto::digest::{content_digest, verify_content_digest, DigestAlgorithm, DigestError};
+use gnap_crypto::digest::{DigestAlgorithm, DigestError, content_digest, verify_content_digest};
 
 /// Test request and response from Appendix B.2 of RFC 9421.
 const REQUEST: &[u8] = br#"{"hello": "world"}"#;

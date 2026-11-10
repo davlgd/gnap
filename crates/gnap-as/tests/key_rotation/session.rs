@@ -170,11 +170,12 @@ fn client_and_server_keep_token_keys_separate_from_grant_continuation() {
     wire.now.set(poll_at + 5);
     client.revoke_grant(poll_at + 5).unwrap();
     assert!(client.usable_tokens(poll_at + 5).is_none());
-    assert!(wire
-        .exchanges
-        .borrow()
-        .iter()
-        .all(|(_, response)| (200..300).contains(&response.status)));
+    assert!(
+        wire.exchanges
+            .borrow()
+            .iter()
+            .all(|(_, response)| (200..300).contains(&response.status))
+    );
 }
 
 #[test]

@@ -1,9 +1,9 @@
 //! Atomic local state and deliberately non-atomic remote outcomes.
 
 use super::*;
-use gnap_crypto::hash::{interaction_hash, InteractionHashInput};
+use gnap_crypto::hash::{InteractionHashInput, interaction_hash};
 use gnap_crypto::ps256::Ps256Signer;
-use gnap_crypto::verify::{verify_request, Expectations, SignedRequest};
+use gnap_crypto::verify::{Expectations, SignedRequest, verify_request};
 use gnap_types::interact::InteractCallback;
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};

@@ -325,10 +325,12 @@ async fn only_a_registered_key_with_its_proof_is_resolved() {
     // Once the session's lifetime ends, its key is no longer the lab's.
     tokio::time::sleep(lifetime + Duration::from_secs(1)).await;
     assert!(resolver.resolve(&presented).is_none());
-    assert!(status(&router, &origin, Some(&id))
-        .await
-        .get("trace")
-        .is_none_or(Value::is_null));
+    assert!(
+        status(&router, &origin, Some(&id))
+            .await
+            .get("trace")
+            .is_none_or(Value::is_null)
+    );
 }
 
 async fn approved(app: &App, router: &Router, origin: &str, proof: &str) -> String {

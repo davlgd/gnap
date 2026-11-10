@@ -52,9 +52,9 @@ impl Registry {
         if raw.len() > 65_536 {
             return Err("GNAP_EXTERNAL_CLIENTS exceeds its configuration limit".into());
         }
-        let values: Vec<Value> = serde_json::from_str(raw).map_err(|_| {
-            "GNAP_EXTERNAL_CLIENTS must be an array of public client configurations"
-        })?;
+        let values: Vec<Value> = serde_json::from_str(raw).map_err(
+            |_| "GNAP_EXTERNAL_CLIENTS must be an array of public client configurations",
+        )?;
         if values.len() > 8 {
             return Err("GNAP_EXTERNAL_CLIENTS accepts at most eight clients".into());
         }
@@ -383,7 +383,9 @@ pub(super) fn entry(app: &App, handle: &str, headers: &HeaderMap) -> Response {
             },
         },
     );
-    let page=format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/assets/gnap.css\"><title>External GNAP client consent</title><main><h1>Authorize a synthetic test client?</h1><p>This external workbench client requests <code>synthetic-folder:read</code>. No real owner account or private document is involved.</p><p>Consent must be completed within five minutes of the initial grant. Reloading does not extend this limit.</p><form method=\"post\" class=\"actions\"><input type=\"hidden\" name=\"ticket\" value=\"{ticket}\"><button name=\"choice\" value=\"allow\" class=\"primary\">Allow synthetic folder read</button><button name=\"choice\" value=\"deny\">Deny</button></form></main></html>");
+    let page = format!(
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/assets/gnap.css\"><title>External GNAP client consent</title><main><h1>Authorize a synthetic test client?</h1><p>This external workbench client requests <code>synthetic-folder:read</code>. No real owner account or private document is involved.</p><p>Consent must be completed within five minutes of the initial grant. Reloading does not extend this limit.</p><form method=\"post\" class=\"actions\"><input type=\"hidden\" name=\"ticket\" value=\"{ticket}\"><button name=\"choice\" value=\"allow\" class=\"primary\">Allow synthetic folder read</button><button name=\"choice\" value=\"deny\">Deny</button></form></main></html>"
+    );
     let mut response = Html(page).into_response();
     let secure = if app.origin.starts_with("https:") {
         "; Secure"
@@ -393,7 +395,13 @@ pub(super) fn entry(app: &App, handle: &str, headers: &HeaderMap) -> Response {
     let age = deadline
         .saturating_sub(now())
         .min(LIFETIME.saturating_sub(born.elapsed().as_secs()));
-    if let Ok(cookie)=format!("gnap_external_owner={id}; Path=/interact; HttpOnly; SameSite=Strict; Max-Age={age}{secure}").parse() { response.headers_mut().insert("set-cookie",cookie); }
+    if let Ok(cookie) = format!(
+        "gnap_external_owner={id}; Path=/interact; HttpOnly; SameSite=Strict; Max-Age={age}{secure}"
+    )
+    .parse()
+    {
+        response.headers_mut().insert("set-cookie", cookie);
+    }
     response
 }
 

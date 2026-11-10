@@ -1,8 +1,8 @@
 //! Grant continuation (§5): polling, modification, and revocation of a grant.
 
 use super::{
-    classify, error, gnap_token, method_not_allowed, misconfigured, no_content, presented_key,
-    require_json_content, storage_failure, supported_finish, AuthorizationServer,
+    AuthorizationServer, classify, error, gnap_token, method_not_allowed, misconfigured,
+    no_content, presented_key, require_json_content, storage_failure, supported_finish,
 };
 use crate::encoding::TokenEncoder;
 use crate::nonce::Nonces;
@@ -10,10 +10,10 @@ use crate::policy::{Decision, EvaluationContext, KeyResolver, Policy};
 use crate::storage::{GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot, Storage};
 use gnap_core::{Event, State};
 use gnap_registry::{ErrorCode, KeyProofingMethod};
+use gnap_types::GnapError;
 use gnap_types::http::{HttpRequest, HttpResponse};
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{BoundToken, TokenValue};
-use gnap_types::GnapError;
 use std::borrow::Cow;
 
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
@@ -101,7 +101,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                         "the continuation request is not a JSON object this server can \
                          read (RFC 9635 §5)",
                         now,
-                    )
+                    );
                 }
             }
         };

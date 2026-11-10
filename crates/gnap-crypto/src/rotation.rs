@@ -5,9 +5,9 @@
 //! signed body, validates the request and proof method, and commits the new
 //! binding only after these proofs and its own policy have succeeded.
 
-use crate::httpsig::{parse_signature_params, parse_signatures, Component, ReceivedParams, Tag};
+use crate::httpsig::{Component, ReceivedParams, Tag, parse_signature_params, parse_signatures};
 use crate::proof::Verifier;
-use crate::verify::{authenticate_signature, Accepted, Expectations, SignedRequest, VerifyError};
+use crate::verify::{Accepted, Expectations, SignedRequest, VerifyError, authenticate_signature};
 
 /// Maximum paired-proof candidates accepted by this implementation.
 ///

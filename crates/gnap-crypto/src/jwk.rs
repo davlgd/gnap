@@ -10,7 +10,7 @@ use crate::es256::Es256Verifier;
 use crate::proof::{ProofError, Verifier};
 use crate::ps256::Ps256Verifier;
 use crate::rs256::Rs256Verifier;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use gnap_types::key::PRIVATE_MEMBERS;
 use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};

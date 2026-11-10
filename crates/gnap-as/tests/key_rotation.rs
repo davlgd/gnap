@@ -5,14 +5,14 @@ use gnap_as::{
     KeyResolver, MemoryStorage, Nonces, Policy, TokenApproval, TokenRecord,
 };
 use gnap_client::sign_request;
-use gnap_crypto::httpsig::{fresh_nonce, sign, Component, Message, SignatureInput, Tag};
+use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, fresh_nonce, sign};
 use gnap_crypto::{Ps256Signer, Ps256Verifier, Signer, Verifier};
 use gnap_types::client::Client;
 use gnap_types::http::{HttpRequest, HttpResponse};
 use gnap_types::key::{Key, KeyObject};
 use gnap_types::message::{GrantRequest, GrantResponse};
 use gnap_types::token::AccessToken;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::Cell;
 use std::num::NonZeroU64;
 use std::sync::{Arc, OnceLock};
@@ -364,10 +364,12 @@ fn rotating_one_token_preserves_client_identity_and_sibling_state() {
     )
     .unwrap();
     assert_eq!(server.handle(&revoke, NOW + 3).status, 204);
-    assert!(snapshot(&server, &tokens[1])
-        .aggregate
-        .tokens
-        .contains_key(handle(&tokens[1])));
+    assert!(
+        snapshot(&server, &tokens[1])
+            .aggregate
+            .tokens
+            .contains_key(handle(&tokens[1]))
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use super::*;
 use gnap_as::{ResourceSetStore, RsId};
-use resource_registration::{bootstrap, leaves, RS_OWNER};
+use resource_registration::{RS_OWNER, bootstrap, leaves};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tower::ServiceExt;
 
@@ -123,12 +123,13 @@ fn bootstrap_retries_lost_commit_without_duplicate_sets_or_reused_signatures() {
         assert!(body.get("token_formats_supported").is_none());
         assert_eq!(body["token_introspection_required"], true);
     }
-    assert!(app
-        .storage
-        .lock()
-        .unwrap()
-        .continuation_deadlines
-        .is_empty());
+    assert!(
+        app.storage
+            .lock()
+            .unwrap()
+            .continuation_deadlines
+            .is_empty()
+    );
 }
 
 #[test]
@@ -142,20 +143,23 @@ fn bootstrap_does_not_publish_partial_wrong_owner_or_foreign_instance_references
             Reply::Status(400, json!({"error":{"code":"invalid_request"}})),
         ],
     );
-    assert!(bootstrap(
-        &app,
-        || Duration::ZERO,
-        |_| panic!("permanent error must not retry")
-    )
-    .is_err());
+    assert!(
+        bootstrap(
+            &app,
+            || Duration::ZERO,
+            |_| panic!("permanent error must not retry")
+        )
+        .is_err()
+    );
     assert_eq!(observed.requests.lock().unwrap().len(), 3);
     assert!(app.bootstrap.get().is_none());
-    assert!(app
-        .storage
-        .lock()
-        .unwrap()
-        .continuation_deadlines
-        .is_empty());
+    assert!(
+        app.storage
+            .lock()
+            .unwrap()
+            .continuation_deadlines
+            .is_empty()
+    );
     // A well-formed old-instance ACK must not publish a reference absent here.
     let observed = script(
         &mut app,
@@ -191,12 +195,14 @@ fn bootstrap_does_not_publish_partial_wrong_owner_or_foreign_instance_references
             Reply::Status(200, json!({"resource_reference":"rsr_other_owner"})),
         ],
     );
-    assert!(bootstrap(
-        &app,
-        || Duration::ZERO,
-        |_| panic!("wrong ownership must stop")
-    )
-    .is_err());
+    assert!(
+        bootstrap(
+            &app,
+            || Duration::ZERO,
+            |_| panic!("wrong ownership must stop")
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -211,55 +217,63 @@ fn bootstrap_budget_rollback_and_retry_classes_are_bounded() {
             )],
         );
         let elapsed = AtomicU64::new(0);
-        assert!(bootstrap(
-            &app,
-            || Duration::from_secs(elapsed.load(Ordering::SeqCst)),
-            |delay| {
-                elapsed.fetch_add(delay.as_secs(), Ordering::SeqCst);
-            }
-        )
-        .is_ok());
+        assert!(
+            bootstrap(
+                &app,
+                || Duration::from_secs(elapsed.load(Ordering::SeqCst)),
+                |delay| {
+                    elapsed.fetch_add(delay.as_secs(), Ordering::SeqCst);
+                }
+            )
+            .is_ok()
+        );
         assert_eq!(observed.requests.lock().unwrap().len(), 4);
     }
     let observed = script(&mut app, vec![Reply::Status(503, json!({}))]);
     let calls = AtomicU64::new(0);
-    assert!(bootstrap(
-        &app,
-        || if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            Duration::from_secs(119)
-        } else {
-            Duration::from_secs(120)
-        },
-        |_| {}
-    )
-    .is_err());
+    assert!(
+        bootstrap(
+            &app,
+            || if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Duration::from_secs(119)
+            } else {
+                Duration::from_secs(120)
+            },
+            |_| {}
+        )
+        .is_err()
+    );
     assert_eq!(observed.requests.lock().unwrap().len(), 1);
     let calls = AtomicU64::new(0);
     let observed = script(&mut app, vec![]);
-    assert!(bootstrap(
-        &app,
-        || if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            Duration::from_secs(1)
-        } else {
-            Duration::ZERO
-        },
-        |_| {}
-    )
-    .is_err());
+    assert!(
+        bootstrap(
+            &app,
+            || if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Duration::from_secs(1)
+            } else {
+                Duration::ZERO
+            },
+            |_| {}
+        )
+        .is_err()
+    );
     assert_eq!(observed.requests.lock().unwrap().len(), 1);
     // Deadline reached after the second successful POST still forbids publishing.
     let calls = AtomicU64::new(0);
     let observed = script(&mut app, vec![]);
-    assert!(bootstrap(
-        &app,
-        || if calls.fetch_add(1, Ordering::SeqCst) >= 7 {
-            Duration::from_secs(120)
-        } else {
-            Duration::ZERO
-        },
-        |_| {}
-    )
-    .is_err());
+    assert!(
+        bootstrap(
+            &app,
+            || if calls.fetch_add(1, Ordering::SeqCst) >= 7 {
+                Duration::from_secs(120)
+            } else {
+                Duration::ZERO
+            },
+            |_| {}
+        )
+        .is_err()
+    );
     assert_eq!(observed.requests.lock().unwrap().len(), 3);
     assert!(app.bootstrap.get().is_none());
 }
@@ -291,12 +305,14 @@ fn missing_old_instance_capabilities_retry_but_changed_destinations_stop() {
         let mut metadata = json!({"grant_request_endpoint":"https://demo.example/gnap","resource_registration_endpoint":"https://demo.example/register-resources","introspection_endpoint":"https://demo.example/introspect"});
         metadata[field] = json!("https://untrusted.example/endpoint");
         let observed = script(&mut app, vec![Reply::Status(200, metadata)]);
-        assert!(bootstrap(
-            &app,
-            || Duration::ZERO,
-            |_| panic!("untrusted endpoint must not retry")
-        )
-        .is_err());
+        assert!(
+            bootstrap(
+                &app,
+                || Duration::ZERO,
+                |_| panic!("untrusted endpoint must not retry")
+            )
+            .is_err()
+        );
         assert_eq!(observed.requests.lock().unwrap().len(), 1);
     }
 }

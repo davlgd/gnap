@@ -248,7 +248,7 @@ impl Grant {
                          (RFC 9635 §1.5)"
                     ),
                     finalizes: false,
-                })
+                });
             }
         };
 

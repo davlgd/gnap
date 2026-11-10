@@ -9,12 +9,12 @@ use gnap_biscuit_files::{
     resource::Resources,
     resource_check::{self, CheckService, Nonces},
 };
-use gnap_client::{sign_request, HttpRequest, HttpResponse, HttpTransport, Session};
+use gnap_client::{HttpRequest, HttpResponse, HttpTransport, Session, sign_request};
 use gnap_crypto::Ps256Signer;
 use std::{
     cell::Cell,
     collections::BTreeMap,
-    sync::{mpsc, Arc, Barrier, OnceLock},
+    sync::{Arc, Barrier, OnceLock, mpsc},
     time::Duration,
 };
 
@@ -304,11 +304,12 @@ fn colliding_expired_or_unavailable_authorities_fail_closed() {
             .reserve_resource(&id, "expired", f.now, || Some(f.now)),
         LiveDecision::Denied
     );
-    assert!(f
-        .store
-        .lookup(GrantSelector::Id(snapshot.id))
-        .unwrap()
-        .is_none());
+    assert!(
+        f.store
+            .lookup(GrantSelector::Id(snapshot.id))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         f.store
             .compare_exchange(snapshot.id, expired.revision, snapshot.aggregate)
@@ -683,23 +684,26 @@ fn resource_reservation_and_rotation_share_one_publication_lock() {
     let replacement = after.aggregate.tokens.values().next().unwrap();
     let new_id = replacement.identifier.as_ref().unwrap();
     assert_ne!(&old_id, new_id);
-    assert!(f
-        .store
-        .lookup(GrantSelector::TokenIdentifier(&old_id))
-        .unwrap()
-        .is_none());
-    assert!(f
-        .store
-        .lookup(GrantSelector::AccessToken(token.value.as_str()))
-        .unwrap()
-        .is_none());
-    assert!(f
-        .store
-        .lookup(GrantSelector::Management(
-            manage.uri.rsplit('/').next().unwrap()
-        ))
-        .unwrap()
-        .is_none());
+    assert!(
+        f.store
+            .lookup(GrantSelector::TokenIdentifier(&old_id))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        f.store
+            .lookup(GrantSelector::AccessToken(token.value.as_str()))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        f.store
+            .lookup(GrantSelector::Management(
+                manage.uri.rsplit('/').next().unwrap()
+            ))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         f.store
             .reserve_resource(&old_id, "fresh-old", f.now, || Some(f.now)),
@@ -741,11 +745,12 @@ fn resource_reservation_and_rotation_share_one_publication_lock() {
             .unwrap_err(),
         StoreError::Conflict
     );
-    assert!(f
-        .store
-        .lookup(GrantSelector::TokenIdentifier(new_id))
-        .unwrap()
-        .is_none());
+    assert!(
+        f.store
+            .lookup(GrantSelector::TokenIdentifier(new_id))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

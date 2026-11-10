@@ -5,7 +5,7 @@ use crate::error::GnapError;
 use crate::interact::{InteractRequest, InteractResponse};
 use crate::token::{AccessTokenRequest, AccessTokenResponse, BoundToken, TokenValue};
 use crate::user::{SubjectRequest, SubjectResponse, User};
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::fmt;
 
 /// The request sent to the AS grant endpoint (§2).

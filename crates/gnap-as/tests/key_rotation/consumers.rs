@@ -43,10 +43,12 @@ fn an_encoder_receives_the_explicit_binding_and_can_refuse_it_without_publicatio
         let before = snapshot(&server, &tokens[0]);
         let original_client = before.aggregate.record.request.client.clone();
         assert_eq!(calls.borrow().len(), 2);
-        assert!(calls
-            .borrow()
-            .iter()
-            .all(|(client, binding)| { client == &original_client && binding.is_none() }));
+        assert!(
+            calls
+                .borrow()
+                .iter()
+                .all(|(client, binding)| { client == &original_client && binding.is_none() })
+        );
         calls.borrow_mut().clear();
         let request = rotate_request(&tokens[0], &presented(new_key()), None);
         let response = server.handle(&request, NOW + 1);

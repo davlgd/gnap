@@ -2,15 +2,15 @@
 
 use crate::session::SessionProof;
 use crate::{ClientError, HttpRequest};
-use gnap_crypto::digest::{content_digest, DigestAlgorithm};
-use gnap_crypto::httpsig::{fresh_nonce, sign, Component, Message, SignatureInput, Tag};
+use gnap_crypto::digest::{DigestAlgorithm, content_digest};
+use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, fresh_nonce, sign};
 use gnap_crypto::jws::{
-    sign_jws, verify_jws_request, JwsKey, JwsMethod, JwsParams, JwsProof, ReplayId,
-    DETACHED_JWS_HEADER, JOSE_MEDIA_TYPE,
+    DETACHED_JWS_HEADER, JOSE_MEDIA_TYPE, JwsKey, JwsMethod, JwsParams, JwsProof, ReplayId,
+    sign_jws, verify_jws_request,
 };
 use gnap_crypto::proof::Signer;
 use gnap_crypto::verify::SignedRequest;
-use gnap_crypto::{PublicKey, Verifier as _, JWS_ALGORITHMS};
+use gnap_crypto::{JWS_ALGORITHMS, PublicKey, Verifier as _};
 use gnap_registry::KeyProofingMethod;
 use gnap_types::message::GrantRequest;
 use gnap_types::polymorphic::MethodOrObject;
@@ -145,7 +145,7 @@ pub(crate) fn session_proof(
                 "client.key.proof: this session can't present a `{}` proof; the key MUST be \
                  used with the proofing mechanism it declares (RFC 9635 §2.3, §7.3)",
                 other.as_str()
-            )))
+            )));
         }
     };
     let usage = |reason: &str| ClientError::Usage(format!("client.key: {reason}"));

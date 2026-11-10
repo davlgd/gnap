@@ -8,7 +8,7 @@
 
 use gnap_client::{HttpRequest, HttpResponse, HttpTransport};
 use gnap_crypto::httpsig::{
-    parse_covered_components, parse_signature_params, parse_signatures, Component,
+    Component, parse_covered_components, parse_signature_params, parse_signatures,
 };
 use gnap_registry::ErrorCode;
 use serde::Serialize;

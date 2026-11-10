@@ -1,8 +1,8 @@
 //! Token management (§6): rotation and revocation of an issued token.
 
 use super::{
-    credential_used, error, key_rotation, method_not_allowed, misconfigured, no_content, ok,
-    presented_key, storage_failure, AuthorizationServer,
+    AuthorizationServer, credential_used, error, key_rotation, method_not_allowed, misconfigured,
+    no_content, ok, presented_key, storage_failure,
 };
 use crate::encoding::TokenEncoder;
 use crate::nonce::Nonces;

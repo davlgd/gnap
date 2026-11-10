@@ -8,21 +8,21 @@ mod tests;
 mod worker;
 
 use axum::{
+    Json, Router,
     extract::{OriginalUri, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use gnap_crypto::Ps256Signer;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::{Semaphore, oneshot};
 
 pub use config::Target;
 const COOKIE: &str = "gnap_lifecycle";

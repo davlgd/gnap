@@ -238,11 +238,11 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
         .clone();
     let reader = app.clone();
     let presented = token.clone();
-    assert!(tokio::task::spawn_blocking(
-        move || read(&reader, &presented, "/resource/folder").is_ok()
-    )
-    .await
-    .unwrap());
+    assert!(
+        tokio::task::spawn_blocking(move || read(&reader, &presented, "/resource/folder").is_ok())
+            .await
+            .unwrap()
+    );
     let other_before = dispatch(&app, identities[1].clone(), "status".into())
         .await
         .unwrap();
@@ -274,14 +274,16 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
         drop(lab);
         let choices = app.decisions.lock().unwrap();
         assert_eq!(choices.grants.len(), consent_before.len());
-        assert!(consent_before
-            .iter()
-            .all(|(id, before)| choices
-                .grants
-                .get(id)
-                .is_some_and(|after| after.request == before.0
-                    && after.interaction_reference == before.1
-                    && after.allowed == before.2)));
+        assert!(
+            consent_before
+                .iter()
+                .all(|(id, before)| choices
+                    .grants
+                    .get(id)
+                    .is_some_and(|after| after.request == before.0
+                        && after.interaction_reference == before.1
+                        && after.allowed == before.2))
+        );
     }
     let current = app
         .storage
@@ -292,11 +294,11 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
     assert!(!current.aggregate.revoked);
     let reader = app.clone();
     let presented = token.clone();
-    assert!(tokio::task::spawn_blocking(
-        move || read(&reader, &presented, "/resource/folder").is_ok()
-    )
-    .await
-    .unwrap());
+    assert!(
+        tokio::task::spawn_blocking(move || read(&reader, &presented, "/resource/folder").is_ok())
+            .await
+            .unwrap()
+    );
     let retained = dispatch(&app, identities[0].clone(), "status".into())
         .await
         .unwrap();
@@ -315,11 +317,11 @@ async fn repeated_http_starts_get_new_ids_and_worker_duplicate_preserves_existin
         .unwrap();
     let reader = app.clone();
     let presented = token.clone();
-    assert!(tokio::task::spawn_blocking(
-        move || read(&reader, &presented, "/resource/folder").is_err()
-    )
-    .await
-    .unwrap());
+    assert!(
+        tokio::task::spawn_blocking(move || read(&reader, &presented, "/resource/folder").is_err())
+            .await
+            .unwrap()
+    );
 
     serving.abort();
     let _ = serving.await;
@@ -529,32 +531,37 @@ fn consent_cannot_cross_grants_clients_requests_or_interaction_references() {
         .lookup(GrantSelector::Interaction(handle))
         .unwrap()
         .unwrap();
-    assert!(consent_finish(
-        &app.server,
-        &app.storage,
-        &app.decisions,
-        "another-client",
-        snapshot.id,
-        handle,
-        true
-    )
-    .is_err());
-    assert!(app
-        .storage
-        .lookup(GrantSelector::Interaction(handle))
-        .unwrap()
-        .is_some());
+    assert!(
+        consent_finish(
+            &app.server,
+            &app.storage,
+            &app.decisions,
+            "another-client",
+            snapshot.id,
+            handle,
+            true
+        )
+        .is_err()
+    );
+    assert!(
+        app.storage
+            .lookup(GrantSelector::Interaction(handle))
+            .unwrap()
+            .is_some()
+    );
     choice(&app, &pending, true);
-    assert!(consent_finish(
-        &app.server,
-        &app.storage,
-        &app.decisions,
-        "test-client",
-        snapshot.id,
-        handle,
-        false
-    )
-    .is_err());
+    assert!(
+        consent_finish(
+            &app.server,
+            &app.storage,
+            &app.decisions,
+            "test-client",
+            snapshot.id,
+            handle,
+            false
+        )
+        .is_err()
+    );
     let snapshot = app
         .storage
         .lookup(GrantSelector::Id(snapshot.id))
@@ -591,16 +598,18 @@ fn consent_cannot_cross_grants_clients_requests_or_interaction_references() {
         .lookup(GrantSelector::Interaction(other_handle))
         .unwrap()
         .unwrap();
-    assert!(consent_finish(
-        &app.server,
-        &app.storage,
-        &app.decisions,
-        "test-client",
-        snapshot.id,
-        other_handle,
-        true
-    )
-    .is_err());
+    assert!(
+        consent_finish(
+            &app.server,
+            &app.storage,
+            &app.decisions,
+            "test-client",
+            snapshot.id,
+            other_handle,
+            true
+        )
+        .is_err()
+    );
     let mut changed = snapshot.clone();
     changed.id = other.id;
     assert!(matches!(

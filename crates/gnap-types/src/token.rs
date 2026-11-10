@@ -163,13 +163,13 @@ impl<'de> Deserialize<'de> for AccessTokenRequest {
                             return Err(de::Error::custom(format!(
                                 "access_token[{i}]: `label` is required for a multiple \
                                  token request (RFC 9635 §2.1.2 -> invalid_request)"
-                            )))
+                            )));
                         }
                         Some(l) if !seen.insert(l.as_str()) => {
                             return Err(de::Error::custom(format!(
                                 "access_token[{i}]: duplicate label `{l}`; labels MUST be \
                                  unique (RFC 9635 §2.1.2 -> invalid_request)"
-                            )))
+                            )));
                         }
                         _ => {}
                     }
@@ -660,12 +660,12 @@ impl<'de> Deserialize<'de> for AccessTokenResponse {
                             return Err(de::Error::custom(format!(
                                 "access_token[{i}]: `label` is required for multiple \
                                  tokens (RFC 9635 §3.2.2)"
-                            )))
+                            )));
                         }
                         Some(l) if !seen.insert(l.as_str()) => {
                             return Err(de::Error::custom(format!(
                                 "access_token[{i}]: duplicate label `{l}` (RFC 9635 §3.2.2)"
-                            )))
+                            )));
                         }
                         _ => {}
                     }

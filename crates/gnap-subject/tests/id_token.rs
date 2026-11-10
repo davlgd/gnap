@@ -1,11 +1,11 @@
 //! Issuance and hostile-wire verification with public RFC test key material.
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use gnap_crypto::{Ps256Signer, Signer};
 use gnap_registry::AssertionFormat;
-use gnap_subject::{issue, verify, AssertionError, Expectations, Issuance, MAX_ASSERTION_BYTES};
+use gnap_subject::{AssertionError, Expectations, Issuance, MAX_ASSERTION_BYTES, issue, verify};
 use gnap_types::user::Assertion;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const PUBLIC_TEST_KEY: &str = include_str!("fixtures/rfc9421-b12.pkcs1.pem");
 
@@ -337,15 +337,17 @@ fn wire_bounds_duplicate_members_and_exact_signature_bytes_are_checked() {
         format!("{}=", assertion.value),
         "a".repeat(MAX_ASSERTION_BYTES + 1),
     ] {
-        assert!(verify(
-            &Assertion {
-                format: AssertionFormat::IdToken,
-                value
-            },
-            &key,
-            &expected()
-        )
-        .is_err());
+        assert!(
+            verify(
+                &Assertion {
+                    format: AssertionFormat::IdToken,
+                    value
+                },
+                &key,
+                &expected()
+            )
+            .is_err()
+        );
     }
     for (head, body) in [
         (

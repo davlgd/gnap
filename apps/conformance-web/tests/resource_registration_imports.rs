@@ -1,10 +1,10 @@
 //! Synthetic diagnostic-oracle tests, not evidence of a live AS registration.
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use gnap_conformance_web::{analyze, app, Import, Report, Status, MAX_UPLOAD};
-use serde_json::{json, Value};
+use gnap_conformance_web::{Import, MAX_UPLOAD, Report, Status, analyze, app};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const REQUEST: &str = "resource_registration_request";
@@ -307,11 +307,12 @@ fn duplicate_members_and_parser_limits_do_not_create_last_wins_or_gnap_failures(
         ] {
             let r = raw_report(kind, body);
             assert_eq!(status(&r, "rs-json-unambiguous"), Status::NotTested);
-            assert!(!r
-                .checks
-                .iter()
-                .any(|c| c.id.starts_with("registration-request-")
-                    || c.id.starts_with("registration-response-")));
+            assert!(
+                !r.checks
+                    .iter()
+                    .any(|c| c.id.starts_with("registration-request-")
+                        || c.id.starts_with("registration-response-"))
+            );
             assert!(r.checks.iter().all(|c| c.status != Status::Fail));
             for id in UNOBSERVABLE {
                 assert_eq!(status(&r, id), Status::NotTested);

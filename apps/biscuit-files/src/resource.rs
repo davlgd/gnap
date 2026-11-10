@@ -1,13 +1,13 @@
 //! File service: proof, attenuation, and a fresh authority lookup per operation.
 use crate::{
+    SKEW,
     http::{self, Origin},
     resource_check::{LiveCheck, Nonces},
-    SKEW,
 };
 use axum::{
+    Router,
     extract::{Request, State},
     routing::any,
-    Router,
 };
 use biscuit_auth::PublicKey;
 use gnap_biscuit::{LiveDecision, RequestContext, VerifiedToken};

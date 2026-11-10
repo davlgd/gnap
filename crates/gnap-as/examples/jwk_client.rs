@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn an_importable_public_key_does_not_substitute_for_proof_of_possession() {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
         let signer = Ps256Signer::from_pkcs1_pem(
             include_str!("../tests/fixtures/rfc9421-b12.pkcs1.pem"),

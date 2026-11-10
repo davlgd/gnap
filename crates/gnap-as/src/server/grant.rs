@@ -1,9 +1,9 @@
 //! Grant requests: classification, policy evaluation, issuance, and interaction offers.
 
 use super::{
-    error, is_jose_content, method_not_allowed, misconfigured, modifies, not_found, ok,
-    require_json_content, signed_request, storage_failure, unsupported_media_type,
-    unsupported_proof, AuthorizationServer, INTERACTION_LIFETIME,
+    AuthorizationServer, INTERACTION_LIFETIME, error, is_jose_content, method_not_allowed,
+    misconfigured, modifies, not_found, ok, require_json_content, signed_request, storage_failure,
+    unsupported_media_type, unsupported_proof,
 };
 use crate::encoding::TokenEncoder;
 use crate::nonce::Nonces;
@@ -189,25 +189,26 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                     .access_token
                     .as_ref()
                     .map(|a| a.tokens.as_slice());
-                let tokens =
-                    match slots {
-                        // §2: a client that only wants subject information omits
-                        // `access_token`, and gets no token.
-                        None if access.is_empty() => Vec::new(),
-                        None => return misconfigured(
+                let tokens = match slots {
+                    // §2: a client that only wants subject information omits
+                    // `access_token`, and gets no token.
+                    None if access.is_empty() => Vec::new(),
+                    None => {
+                        return misconfigured(
                             "Decision::Approve grants rights to a request that asks for no token",
-                        ),
-                        Some([slot]) => vec![TokenApproval {
-                            requested_label: slot.label.clone(),
-                            access,
-                        }],
-                        Some(_) => {
-                            return misconfigured(
-                                "Decision::Approve needs exactly one requested token; \
+                        );
+                    }
+                    Some([slot]) => vec![TokenApproval {
+                        requested_label: slot.label.clone(),
+                        access,
+                    }],
+                    Some(_) => {
+                        return misconfigured(
+                            "Decision::Approve needs exactly one requested token; \
                              select tokens with Decision::ApproveTokens",
-                            )
-                        }
-                    };
+                        );
+                    }
+                };
                 self.approve_selected(aggregate, tokens, subject, now, authenticated)
             }
             Decision::ApproveTokens { tokens, subject } => {

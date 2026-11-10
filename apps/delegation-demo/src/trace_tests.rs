@@ -1,7 +1,7 @@
 use super::*;
 use gnap_client::{sign_jose_request, sign_request};
-use gnap_crypto::jws::JwsMethod;
 use gnap_crypto::Ed25519Signer;
+use gnap_crypto::jws::JwsMethod;
 use gnap_types::token::TokenValue;
 use std::cell::Cell;
 

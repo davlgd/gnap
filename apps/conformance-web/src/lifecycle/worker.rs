@@ -1,15 +1,16 @@
 use super::{
+    Callback, Inner, Snapshot, WORK_LIMIT,
     config::{self, Target},
     network::Network,
-    oracle, Callback, Inner, Snapshot, WORK_LIMIT,
+    oracle,
 };
-use gnap_client::{sign_request, ClientError, HttpRequest, HttpTransport, Session, Step};
-use gnap_crypto::{proof::Signer, Ps256Signer};
-use gnap_types::{token::TokenValue, GrantRequest};
-use serde_json::{json, Value};
+use gnap_client::{ClientError, HttpRequest, HttpTransport, Session, Step, sign_request};
+use gnap_crypto::{Ps256Signer, proof::Signer};
+use gnap_types::{GrantRequest, token::TokenValue};
+use serde_json::{Value, json};
 use std::{
     num::NonZeroU64,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 
