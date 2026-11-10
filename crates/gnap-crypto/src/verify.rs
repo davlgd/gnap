@@ -41,7 +41,7 @@ pub struct SignedRequest<'a> {
 
 impl SignedRequest<'_> {
     /// Every instance of a field, in message order (RFC 9421 §2.1).
-    pub(crate) fn header_values(&self, name: &str) -> impl Iterator<Item = &str> {
+    pub(crate) fn header_values(&self, name: &str) -> impl Iterator<Item = &str> + use<'_> {
         let name = name.to_ascii_lowercase();
         self.headers
             .iter()

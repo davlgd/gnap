@@ -729,7 +729,7 @@ pub fn lifecycle<T: HttpTransport>(
                 "The AS doesn't announce key rotation in its discovery document, so the \
                  scenario didn't try it.",
             );
-        } else if let Ok(replacement) = generate(plan.alg, &format!("{kid}-next")) {
+        } else { match generate(plan.alg, &format!("{kid}-next")) { Ok(replacement) => {
             // Generating an RSA key takes long enough for an interrupt.
             if run.clock.interrupted() {
                 return finish(run, transport, started);
@@ -764,7 +764,7 @@ pub fn lifecycle<T: HttpTransport>(
             if adopted {
                 run.hold_token(clock.now());
             }
-        } else {
+        } _ => {
             run.push(
                 "key-rotation",
                 Outcome::Inconclusive,
@@ -772,7 +772,7 @@ pub fn lifecycle<T: HttpTransport>(
                 "The scenario couldn't generate the new key: the system's random source is \
                  unavailable.",
             );
-        }
+        }}}
     }
 
     if run.clock.interrupted() {

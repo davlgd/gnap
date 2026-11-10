@@ -1,7 +1,7 @@
 [package]
 name = "gnap-conformance-web"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
 # The web workbench; `gnap-conformance` is the command line.
 default-run = "gnap-conformance-web"
