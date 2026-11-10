@@ -15,7 +15,7 @@ Every exchange below runs between this project's own roles, so none of it establ
 - Biscuit is a required target: support means issuing, validating, and attenuating tokens in a working application
 - Signed and encrypted JWT access tokens are allowed alternatives, for a concrete integration
 - Macaroon and ZCAP tokens are out of scope, and their registry names stay as reference data
-- HTTP Message Signatures (`httpsig`) are the preferred proof method
+- HTTP Message Signatures, the `httpsig` method, are the preferred proof method
 - Ed25519 and ECDSA P-256 request signatures are supported, next to RSA-PSS
 - The `jws` and `jwsd` proof methods are selected targets, with RS256, ES256, and EdDSA
 - mTLS is an allowed additional proof method, not a prerequisite
