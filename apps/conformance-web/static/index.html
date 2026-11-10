@@ -76,11 +76,11 @@
 <section id="cli" aria-labelledby="cli-title">
 <h2 id="cli-title">Run the same checks from a terminal</h2>
 <p>The <code>gnap-conformance</code> command prints the same findings as text or JSON, and its exit code tells failed (1) from inconclusive (2). It reaches the server you name, which makes it the tool for your own authorization server and for CI.</p>
-<pre class="command">cargo run --manifest-path apps/conformance-web/Cargo.toml --bin gnap-conformance -- \
-  discover https://as.example/gnap</pre>
+<pre class="command">cargo install gnap-conformance</pre>
+<pre class="command">gnap-conformance discover https://as.example/gnap</pre>
 <pre class="command">gnap-conformance probe https://as.example/gnap --json</pre>
 <pre class="command">gnap-conformance lifecycle https://as.example/gnap --proof jwsd --alg EdDSA --access read</pre>
-<p>The <a href="https://github.com/davlgd/gnap/blob/main/apps/conformance-web/README.md#check-a-server-from-the-command-line" rel="noreferrer">workbench guide</a> lists every option and what each command sends.</p>
+<p>The <a href="https://github.com/davlgd/gnap/blob/main/crates/gnap-conformance/README.md" rel="noreferrer">command guide</a> lists every option and what each command sends.</p>
 </section>
 
 <section aria-labelledby="limits-title">
