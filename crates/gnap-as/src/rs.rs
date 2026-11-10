@@ -244,10 +244,10 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
             }
             return response;
         }
-        if let Some(registration) = &self.registration {
-            if request.url == registration.endpoint {
-                return self.register(request, now, registration);
-            }
+        if let Some(registration) = &self.registration
+            && request.url == registration.endpoint
+        {
+            return self.register(request, now, registration);
         }
         if request.url != self.endpoint {
             return HttpResponse {
@@ -459,10 +459,10 @@ pub(crate) fn authenticate_rs(
     let key = &resolved.key;
     // The RS proves itself with `httpsig`, the method discovery announces.
     let verifier = rs_verifier(key)?;
-    if let Some(presented) = identity.as_value().and_then(|rs| rs.key.as_value()) {
-        if presented != key {
-            return None;
-        }
+    if let Some(presented) = identity.as_value().and_then(|rs| rs.key.as_value())
+        && presented != key
+    {
+        return None;
     }
     let signed = SignedRequest {
         method: &request.method,

@@ -66,11 +66,11 @@ pub(super) fn run(
             state.observation = crate::observation("live");
         }
     }));
-    if outcome.is_err() {
-        if let Ok(mut state) = snapshot.lock() {
-            state.status = "inconclusive";
-            state.redirect = None;
-        }
+    if outcome.is_err()
+        && let Ok(mut state) = snapshot.lock()
+    {
+        state.status = "inconclusive";
+        state.redirect = None;
     }
 }
 

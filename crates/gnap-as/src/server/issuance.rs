@@ -293,17 +293,16 @@ fn reserve_identifier(
     identifiers: &mut HashSet<Vec<u8>>,
     authenticated: Option<&GrantSnapshot>,
 ) -> Result<(), HttpResponse> {
-    if let Some(identifier) = identifier {
-        if !identifiers.insert(identifier.to_vec())
+    if let Some(identifier) = identifier
+        && (!identifiers.insert(identifier.to_vec())
             || authenticated.is_some_and(|old| {
                 old.aggregate
                     .tokens
                     .values()
                     .any(|token| token.identifier.as_deref() == Some(identifier))
-            })
-        {
-            return Err(misconfigured("encoded batch identifiers collide"));
-        }
+            }))
+    {
+        return Err(misconfigured("encoded batch identifiers collide"));
     }
     Ok(())
 }

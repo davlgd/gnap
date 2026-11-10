@@ -229,18 +229,17 @@ async fn start(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     sessions.retain(|_, entry| entry.born.elapsed() < REPORT_LIMIT);
-    if let Some(existing) = cookie(&headers).and_then(|id| sessions.get(id)) {
-        if existing
+    if let Some(existing) = cookie(&headers).and_then(|id| sessions.get(id))
+        && existing
             .snapshot
             .lock()
             .is_ok_and(|s| matches!(s.status, "running" | "pending"))
-        {
-            return (
-                StatusCode::CONFLICT,
-                "This browser already has an active scenario.",
-            )
-                .into_response();
-        }
+    {
+        return (
+            StatusCode::CONFLICT,
+            "This browser already has an active scenario.",
+        )
+            .into_response();
     }
     if sessions.len() >= 8 {
         return (

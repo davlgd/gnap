@@ -246,12 +246,11 @@ fn key_in(content: &[u8], request: &HttpRequest) -> Result<Key, HttpResponse> {
             .as_ref()
             .filter(|_| object.proof.method() == &KeyProofingMethod::Httpsig)
             .filter(|jwk| gnap_crypto::PublicKey::is_builtin_for_httpsig(jwk))
+            && gnap_crypto::PublicKey::for_httpsig(jwk).is_err()
         {
-            if gnap_crypto::PublicKey::for_httpsig(jwk).is_err() {
-                return Err(invalid_rotation(
-                    "the requested public key cannot be used with httpsig",
-                ));
-            }
+            return Err(invalid_rotation(
+                "the requested public key cannot be used with httpsig",
+            ));
         }
     } else if key.as_reference().is_none_or(str::is_empty) {
         return Err(invalid_rotation("the requested key reference is empty"));

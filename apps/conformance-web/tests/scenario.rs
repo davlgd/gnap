@@ -621,11 +621,12 @@ fn cleanup_revokes_a_token_the_scenario_still_holds() {
 fn a_grant_without_continuation_needs_no_revocation() {
     fn drop_continuation(_: &HttpRequest, forward: &dyn Fn() -> HttpResponse) -> HttpResponse {
         let mut response = forward();
-        if let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&response.body) {
-            if body.get("continue").is_some() && body.get("access_token").is_some() {
-                body.as_object_mut().unwrap().remove("continue");
-                response.body = serde_json::to_vec(&body).unwrap();
-            }
+        if let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&response.body)
+            && body.get("continue").is_some()
+            && body.get("access_token").is_some()
+        {
+            body.as_object_mut().unwrap().remove("continue");
+            response.body = serde_json::to_vec(&body).unwrap();
         }
         response
     }

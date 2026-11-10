@@ -453,12 +453,12 @@ impl GrantStore for MemoryStorage {
         for child in cascade {
             state.publish(child, Indices::default());
         }
-        if let Some(parent) = state.derived_origins.remove(&id) {
-            if let Some(children) = state.children.get_mut(&parent) {
-                children.remove(&id);
-                if children.is_empty() {
-                    state.children.remove(&parent);
-                }
+        if let Some(parent) = state.derived_origins.remove(&id)
+            && let Some(children) = state.children.get_mut(&parent)
+        {
+            children.remove(&id);
+            if children.is_empty() {
+                state.children.remove(&parent);
             }
         }
         state.indices.replace(id, Indices::default());

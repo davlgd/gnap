@@ -232,23 +232,23 @@ pub fn checks(
         ),
     ];
     // A syntax this parser can't interpret leaves the endpoint undecided.
-    if document.is_some() && endpoint.is_some_and(|e| https_endpoint(e).is_none()) && !userinfo {
-        if let Some(finding) = checks
+    if document.is_some()
+        && endpoint.is_some_and(|e| https_endpoint(e).is_none())
+        && !userinfo
+        && let Some(finding) = checks
             .iter_mut()
             .find(|finding| finding.id == "discovery-endpoint")
-        {
-            finding.undecided = true;
-        }
+    {
+        finding.undecided = true;
     }
-    if userinfo {
-        if let Some(finding) = checks
+    if userinfo
+        && let Some(finding) = checks
             .iter_mut()
             .find(|finding| finding.id == "discovery-endpoint")
-        {
-            finding.remediation = Some(
-                "Remove userinfo and its @ delimiter from the announced endpoint. This diagnostic profile never needs or accepts embedded credentials.",
-            );
-        }
+    {
+        finding.remediation = Some(
+            "Remove userinfo and its @ delimiter from the announced endpoint. This diagnostic profile never needs or accepts embedded credentials.",
+        );
     }
     for (field, registered) in [
         (
