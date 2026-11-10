@@ -263,6 +263,33 @@ test('a failure that predates an action never shows as its error', async () => {
   assert.equal(read.disabled, false);
 });
 
+for (const [name, fail] of [
+  ['a refused', (lab, index) => lab.answer(index, { error: 'synthetic refusal' })],
+  ['an unreadable', (lab, index) => lab.requests[index].resolve({ json: async () => { throw new Error('synthetic refusal'); } })],
+]) test(`${name} action during a countdown reads the whole state again, and keeps its error`, async () => {
+  const lab = page();
+  const waiting = { state: 'approved', token_present: true, continuation_open: true, continuation_wait_seconds: 3, trace: { attempts: [attempt('grant')], dropped: 0 } };
+  lab.answer(0, waiting);
+  await settle();
+  const proceed = lab.nodes.get('[data-action="continue"]');
+  assert.equal(proceed.disabled, true, 'the wait holds the continuation');
+  const reading = lab.nodes.get('[data-action="read"]').click();
+  const action = lab.requests.length - 1;
+  // The countdown's read leaves during the action, and is dropped.
+  lab.timers[lab.timers.length - 1]();
+  fail(lab, action);
+  await reading;
+  const recovery = lab.requests.length - 1;
+  assert.ok(recovery > action + 1, 'a read leaves after the action');
+  assert.equal(lab.requests[recovery].url, '/api/status');
+  lab.answer(action + 1, waiting);
+  lab.answer(recovery, { ...waiting, continuation_wait_seconds: 0, trace: { attempts: [attempt('grant'), attempt('folder')], dropped: 0 } });
+  await settle();
+  assert.equal(proceed.disabled, false, 'the state read after the failure gives the continuation back');
+  assert.equal(lab.nodes.get('#error').textContent, 'synthetic refusal');
+  assert.ok(lab.routes().includes('/resource/folder'), 'the attempt the action made shows');
+});
+
 test('a status read answered while an action is in flight is dropped too', async () => {
   const lab = page();
   const started = lab.nodes.get('[data-action="start"]').click();

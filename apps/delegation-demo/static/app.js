@@ -98,17 +98,23 @@ for (const button of actionButtons) button.addEventListener('click', async () =>
     render(data);
     if (data.error) {
       unlock();
-      // A refused action answers with its error only: read the record again,
-      // so the attempt it made shows, without sending the action twice.
-      refreshStatus(view => renderTrace(view.trace));
+      recover(data.error);
     }
   } catch (e) {
     busy = false;
     generation += 1;
     unlock();
     error.textContent = e.message;
+    recover(e.message);
   }
 });
+// A failed action answers with its error only, and the status read it may
+// have overlapped was dropped: read the whole state again, without sending
+// the action twice, so the attempt it made shows and a countdown it stopped
+// starts again. The action's error stays shown.
+function recover(message) {
+  refreshStatus(view => { render(view); error.textContent = message; });
+}
 refreshStatus(render);
 
 // The exchange inspector. Every label comes from these tables: the trace holds
