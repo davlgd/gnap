@@ -722,6 +722,17 @@ enum WorkerCommand {
     Browser(Command),
     Push(push_finish::Incoming),
 }
+/// When the continuation a response offers may be called, counted from
+/// `received`: §3.1 makes an absent `wait` mean five seconds.
+fn continuation_deadline(response: &gnap_types::message::GrantResponse, received: u64) -> u64 {
+    received.saturating_add(
+        response
+            .r#continue
+            .as_ref()
+            .map_or(0, gnap_types::message::Continue::effective_wait),
+    )
+}
+
 struct BrowserSession<'a> {
     push: Option<push_finish::Registration>,
     identity: Option<Arc<identity::Identity>>,
@@ -756,20 +767,19 @@ struct BrowserSession<'a> {
 }
 
 impl BrowserSession<'_> {
+    /// Records the continuation a response offers, and when its wait ends.
+    fn offered(&mut self, response: &gnap_types::message::GrantResponse) {
+        self.continuation_open = response.r#continue.is_some();
+        self.next_continuation = continuation_deadline(response, now());
+    }
+
     fn received(
         &mut self,
         step: &gnap_client::Step,
         before: Option<multiple::Retired>,
     ) -> Result<(), String> {
         let response = step.response();
-        self.continuation_open = response.r#continue.is_some();
-        self.next_continuation = now().saturating_add(
-            response
-                .r#continue
-                .as_ref()
-                .and_then(|c| c.wait)
-                .unwrap_or(0),
-        );
+        self.offered(response);
         if let Some(uri) = response.interact.as_ref().and_then(|i| i.redirect.as_ref()) {
             self.handle = uri
                 .rsplit('/')
@@ -1185,13 +1195,7 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                         requested: multiple::requested(mode, true),
                         last_resource_status: None,
                         mode,
-                        next_continuation: now()
-                            + step
-                                .response()
-                                .r#continue
-                                .as_ref()
-                                .and_then(|c| c.wait)
-                                .unwrap_or(0),
+                        next_continuation: continuation_deadline(step.response(), now()),
                     },
                 );
             }
@@ -1291,6 +1295,19 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                             return Ok(browser_view(session, &origin));
                         }
                     };
+                    // §5-M11 — a refusal the grant survives, such as `too_fast`,
+                    // comes with a new continuation and its own wait. Nothing
+                    // was approved: the session keeps its state and its tokens.
+                    if let gnap_client::Step::Recoverable(response) = &step {
+                        session.offered(response);
+                        let code = response
+                            .error
+                            .as_ref()
+                            .map_or("an error", |e| e.code.as_str());
+                        return Err(format!(
+                            "AS refused this continuation with {code}; continue again once its new wait has passed"
+                        ));
+                    }
                     session.received(&step, before)?;
                     session.events.push(if step.response().access_token.is_some() { "Signed continuation approved the requested rights and atomically replaced all earlier tokens." } else { "Signed POST poll renewed continuation without issuing another token or renewing its lifetime." }.into());
                 }
@@ -2290,6 +2307,25 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST);
         assert!(!response.headers().contains_key("location"));
+    }
+
+    #[test]
+    fn an_absent_continuation_wait_is_five_seconds() {
+        let response = |body: Value| {
+            serde_json::from_value::<gnap_types::message::GrantResponse>(body).unwrap()
+        };
+        let offered = |wait: Value| {
+            let mut continuation =
+                json!({"uri": "https://demo.example/continue", "access_token": {"value": "c"}});
+            if !wait.is_null() {
+                continuation["wait"] = wait;
+            }
+            response(json!({"continue": continuation}))
+        };
+        assert_eq!(continuation_deadline(&offered(Value::Null), 100), 105);
+        assert_eq!(continuation_deadline(&offered(json!(30)), 100), 130);
+        assert_eq!(continuation_deadline(&offered(json!(0)), 100), 100);
+        assert_eq!(continuation_deadline(&response(json!({})), 100), 100);
     }
 
     #[test]

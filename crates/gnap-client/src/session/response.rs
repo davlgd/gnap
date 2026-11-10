@@ -134,8 +134,9 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             self.protocol.subject = Some(Box::new(subject.clone()));
         }
 
-        // §3.2.1 — `expires_in` is a duration; it starts running when the
-        // response arrives, which is here and nowhere else.
+        // §3.2.1 — `expires_in` is a duration that starts running when the
+        // response arrives. `now` was read before the request left, so a token
+        // expires here no later than the AS meant.
         if let Some(tokens) = &response.access_token {
             self.protocol.issued = Some(tokens.tokens.iter().map(|t| (now, t.clone())).collect());
         }

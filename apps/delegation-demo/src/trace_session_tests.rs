@@ -142,6 +142,95 @@ pub(super) async fn status(router: &Router, origin: &str, cookie: Option<&str>) 
     serde_json::from_slice(&body).unwrap()
 }
 
+/// The wait a session announces, in seconds.
+async fn announced_wait(app: &App, id: &str) -> u64 {
+    dispatch(app, id.to_owned(), "status".into()).await.unwrap()["continuation_wait_seconds"]
+        .as_u64()
+        .unwrap()
+}
+
+/// An action a browser posts with its cookie, and the status and body of the
+/// answer.
+async fn post(router: &Router, origin: &str, cookie: &str, action: &str) -> (StatusCode, Value) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/{action}"))
+                .header("host", origin.strip_prefix("http://").unwrap())
+                .header("origin", origin)
+                .header("cookie", format!("gnap_demo={cookie}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// A refusal the grant survives, such as `too_fast`, reaches the browser as
+/// an error: the session isn't approved, and once the new wait has passed,
+/// the next continuation is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_too_fast_continuation_is_an_error_not_an_approval() {
+    let (app, router, origin) = lab(SESSION_LIFETIME).await;
+    let id = start(&router, &origin).await;
+    let finish = dispatch(&app, id.clone(), "approve".into()).await.unwrap();
+    dispatch(
+        &app,
+        id.clone(),
+        format!("callback:{}", finish["redirect"].as_str().unwrap()),
+    )
+    .await
+    .unwrap();
+
+    // The AS's wait now ends a minute after the one it announced.
+    let grant = *app
+        .storage
+        .lock()
+        .unwrap()
+        .continuation_deadlines
+        .keys()
+        .next()
+        .unwrap();
+    let snapshot = app
+        .storage
+        .lookup(GrantSelector::Id(grant))
+        .unwrap()
+        .unwrap();
+    let mut aggregate = snapshot.aggregate;
+    aggregate
+        .record
+        .grant
+        .offer_continuation(now().saturating_add(60), Some(0));
+    app.storage
+        .compare_exchange(grant, snapshot.revision, aggregate)
+        .unwrap();
+
+    let wait =
+        |view: Value| Duration::from_secs(view["continuation_wait_seconds"].as_u64().unwrap());
+    tokio::time::sleep(wait(status(&router, &origin, Some(&id)).await)).await;
+    let (code, refused) = post(&router, &origin, &id, "continue").await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("too_fast"),
+        "{refused}"
+    );
+    let view = status(&router, &origin, Some(&id)).await;
+    assert_eq!(view["state"], "ready", "{view}");
+    assert_eq!(view["token_present"], false, "{view}");
+
+    tokio::time::sleep(wait(view)).await;
+    let (code, approved) = post(&router, &origin, &id, "continue").await;
+    assert_eq!(code, StatusCode::OK, "{approved}");
+    assert_eq!(approved["token_present"], true, "{approved}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_sessions_record_their_own_exchanges_and_no_secret() {
     let (app, router, origin) = lab(SESSION_LIFETIME).await;
@@ -169,13 +258,13 @@ async fn two_sessions_record_their_own_exchanges_and_no_secret() {
         .await
         .unwrap();
     }
-    let wait =
-        dispatch(&app, a.clone(), "status".into()).await.unwrap()["continuation_wait_seconds"]
-            .as_u64()
-            .unwrap();
-    tokio::time::sleep(Duration::from_secs(wait)).await;
-    dispatch(&app, a.clone(), "continue".into()).await.unwrap();
-    dispatch(&app, b.clone(), "continue".into()).await.unwrap();
+    // Each session waits for its own continuation: B started after A, and
+    // its wait may end a second later.
+    for id in [&a, &b] {
+        tokio::time::sleep(Duration::from_secs(announced_wait(&app, id).await)).await;
+        let view = dispatch(&app, id.clone(), "continue".into()).await.unwrap();
+        assert_eq!(view["token_present"], true, "{view}");
+    }
     dispatch(&app, a.clone(), "read".into()).await.unwrap();
     dispatch(&app, a.clone(), "rotate".into()).await.unwrap();
     dispatch(&app, b.clone(), "read-archive".into())
