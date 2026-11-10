@@ -756,12 +756,8 @@ struct BrowserSession<'a> {
 }
 
 impl BrowserSession<'_> {
-    fn received(
-        &mut self,
-        step: &gnap_client::Step,
-        before: Option<multiple::Retired>,
-    ) -> Result<(), String> {
-        let response = step.response();
+    /// Records the continuation a response offers, and when its wait ends.
+    fn offered(&mut self, response: &gnap_types::message::GrantResponse) {
         self.continuation_open = response.r#continue.is_some();
         self.next_continuation = now().saturating_add(
             response
@@ -770,6 +766,15 @@ impl BrowserSession<'_> {
                 .and_then(|c| c.wait)
                 .unwrap_or(0),
         );
+    }
+
+    fn received(
+        &mut self,
+        step: &gnap_client::Step,
+        before: Option<multiple::Retired>,
+    ) -> Result<(), String> {
+        let response = step.response();
+        self.offered(response);
         if let Some(uri) = response.interact.as_ref().and_then(|i| i.redirect.as_ref()) {
             self.handle = uri
                 .rsplit('/')
@@ -1291,6 +1296,19 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                             return Ok(browser_view(session, &origin));
                         }
                     };
+                    // §5-M11 — a refusal the grant survives, such as `too_fast`,
+                    // comes with a new continuation and its own wait. Nothing
+                    // was approved: the session keeps its state and its tokens.
+                    if let gnap_client::Step::Recoverable(response) = &step {
+                        session.offered(response);
+                        let code = response
+                            .error
+                            .as_ref()
+                            .map_or("an error", |e| e.code.as_str());
+                        return Err(format!(
+                            "AS refused this continuation with {code}; continue again once its new wait has passed"
+                        ));
+                    }
                     session.received(&step, before)?;
                     session.events.push(if step.response().access_token.is_some() { "Signed continuation approved the requested rights and atomically replaced all earlier tokens." } else { "Signed POST poll renewed continuation without issuing another token or renewing its lifetime." }.into());
                 }

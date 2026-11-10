@@ -142,6 +142,66 @@ pub(super) async fn status(router: &Router, origin: &str, cookie: Option<&str>) 
     serde_json::from_slice(&body).unwrap()
 }
 
+/// The wait a session announces, in seconds.
+async fn announced_wait(app: &App, id: &str) -> u64 {
+    dispatch(app, id.to_owned(), "status".into()).await.unwrap()["continuation_wait_seconds"]
+        .as_u64()
+        .unwrap()
+}
+
+/// A refusal the grant survives, such as `too_fast`, reaches the browser as
+/// an error: the session isn't approved, and once the new wait has passed,
+/// the next continuation is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_too_fast_continuation_is_an_error_not_an_approval() {
+    let (app, router, origin) = lab(SESSION_LIFETIME).await;
+    let id = start(&router, &origin).await;
+    let finish = dispatch(&app, id.clone(), "approve".into()).await.unwrap();
+    dispatch(
+        &app,
+        id.clone(),
+        format!("callback:{}", finish["redirect"].as_str().unwrap()),
+    )
+    .await
+    .unwrap();
+
+    // The AS's wait now ends a minute after the one it announced.
+    let grant = *app
+        .storage
+        .lock()
+        .unwrap()
+        .continuation_deadlines
+        .keys()
+        .next()
+        .unwrap();
+    let snapshot = app
+        .storage
+        .lookup(GrantSelector::Id(grant))
+        .unwrap()
+        .unwrap();
+    let mut aggregate = snapshot.aggregate;
+    aggregate
+        .record
+        .grant
+        .offer_continuation(now().saturating_add(60), Some(0));
+    app.storage
+        .compare_exchange(grant, snapshot.revision, aggregate)
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(announced_wait(&app, &id).await)).await;
+    let refused = dispatch(&app, id.clone(), "continue".into())
+        .await
+        .unwrap_err();
+    assert!(refused.contains("too_fast"), "{refused}");
+    let view = dispatch(&app, id.clone(), "status".into()).await.unwrap();
+    assert_eq!(view["state"], "ready", "{view}");
+    assert_eq!(view["token_present"], false, "{view}");
+
+    tokio::time::sleep(Duration::from_secs(announced_wait(&app, &id).await)).await;
+    let approved = dispatch(&app, id.clone(), "continue".into()).await.unwrap();
+    assert_eq!(approved["token_present"], true, "{approved}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_sessions_record_their_own_exchanges_and_no_secret() {
     let (app, router, origin) = lab(SESSION_LIFETIME).await;
