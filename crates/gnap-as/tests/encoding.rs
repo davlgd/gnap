@@ -686,6 +686,7 @@ fn a_failed_ongoing_issuance_preserves_the_snapshot_and_allows_a_fresh_retry() {
             .unwrap()
         };
         assert_eq!(server.handle(&patch(1_005), 1_005).status, 500);
+        let absent = |selector| server.storage().lookup(selector).unwrap().is_none();
         let after = server
             .storage()
             .lookup(GrantSelector::Id(before.id))
@@ -704,49 +705,13 @@ fn a_failed_ongoing_issuance_preserves_the_snapshot_and_allows_a_fresh_retry() {
                 before.revision
             );
         }
-        assert!(
-            server
-                .storage()
-                .lookup(GrantSelector::AccessToken("new-value"))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            server
-                .storage()
-                .lookup(GrantSelector::Management("handle2"))
-                .unwrap()
-                .is_none()
-        );
+        assert!(absent(GrantSelector::AccessToken("new-value")));
+        assert!(absent(GrantSelector::Management("handle2")));
         assert_eq!(server.handle(&patch(1_006), 1_006).status, 200);
-        assert!(
-            server
-                .storage()
-                .lookup(GrantSelector::TokenIdentifier(&[1]))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            server
-                .storage()
-                .lookup(GrantSelector::TokenIdentifier(&[2]))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            server
-                .storage()
-                .lookup(GrantSelector::AccessToken("value1"))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            server
-                .storage()
-                .lookup(GrantSelector::AccessToken("value3"))
-                .unwrap()
-                .is_some()
-        );
+        assert!(absent(GrantSelector::TokenIdentifier(&[1])));
+        assert!(absent(GrantSelector::TokenIdentifier(&[2])));
+        assert!(absent(GrantSelector::AccessToken("value1")));
+        assert!(!absent(GrantSelector::AccessToken("value3")));
     }
 }
 
