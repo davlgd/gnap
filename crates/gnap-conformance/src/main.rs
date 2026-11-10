@@ -1,12 +1,12 @@
 //! `gnap-conformance`: selected GNAP checks against a server, from a terminal.
 //!
 //! Each command sends only the requests it names, to the endpoint it is
-//! given, through the workbench's bounded transport. The report goes to
+//! given, through this crate's bounded transport. The report goes to
 //! standard output, as text or as JSON, and the exit code says whether the
 //! selected checks passed (0), one failed (1), or none could be decided (2).
 
-use gnap_conformance_web::net::{self, Admitted, Bounded, Exact, Limits, Phased};
-use gnap_conformance_web::{cli, scenario};
+use gnap_conformance::net::{self, Admitted, Bounded, Exact, Limits, Phased};
+use gnap_conformance::{cli, scenario};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn a_wait_is_capped_on_the_monotonic_clock() {
         let clock = SystemClock(std::sync::Arc::default(), Instant::now());
-        let now = gnap_conformance_web::scenario::Clock::now(&clock);
+        let now = gnap_conformance::scenario::Clock::now(&clock);
         let before = Instant::now();
         let far = clock.deadline(now + 100_000, 5);
         assert!(far <= Instant::now() + Duration::from_secs(5));

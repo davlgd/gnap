@@ -1,0 +1,30 @@
+[package]
+name = "gnap-conformance"
+version = "0.1.0"
+description = "Selected GNAP (RFC 9635, RFC 9767) checks of messages and servers, as a library and a command line"
+keywords = ["gnap", "rfc9635", "rfc9767", "authorization", "testing"]
+categories = ["authentication", "command-line-utilities", "development-tools::testing"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/gnap-conformance"
+
+[dependencies]
+gnap-types = { workspace = true }
+gnap-registry = { workspace = true }
+gnap-crypto = { workspace = true }
+gnap-client = { workspace = true }
+gnap-net = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+# The lifecycle scenario runs against a real authorization server, in memory.
+gnap-as = { workspace = true }
+
+[lints]
+workspace = true

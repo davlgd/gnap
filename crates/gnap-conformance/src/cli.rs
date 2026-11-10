@@ -8,6 +8,7 @@
 use crate::{Check, Status, discovery, probe};
 use gnap_client::{HttpRequest, HttpTransport};
 use serde::Serialize;
+use std::fmt::Write as _;
 
 /// The version of the report format.
 pub const SCHEMA: &str = "gnap-conformance/1";
@@ -60,19 +61,28 @@ impl From<Check> for Finding {
 /// How many checks reached each outcome.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Summary {
+    /// Checks that passed.
     pub passed: usize,
+    /// Checks that failed.
     pub failed: usize,
+    /// Checks that couldn't be decided.
     pub inconclusive: usize,
+    /// Checks that had nothing to examine.
     pub skipped: usize,
+    /// Checks that don't apply to the target.
     pub not_applicable: usize,
 }
 
 /// A command's report: what ran against which target, and what it found.
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
+    /// The report's format: `gnap-conformance/1`.
     pub schema: &'static str,
+    /// The tool that produced the report.
     pub tool: &'static str,
+    /// The tool's version.
     pub version: &'static str,
+    /// The command that ran: `discover`, `probe`, or `lifecycle`.
     pub command: &'static str,
     /// The endpoint the command was given, which carries no credentials.
     pub target: String,
@@ -82,7 +92,9 @@ pub struct Report {
     /// apart from another run's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<Profile>,
+    /// The checks, in order.
     pub findings: Vec<Finding>,
+    /// How many checks reached each outcome.
     pub summary: Summary,
     /// What the report doesn't establish.
     pub scope: &'static str,
@@ -92,12 +104,15 @@ pub struct Report {
 /// may name what the operator keeps private.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Profile {
+    /// The proof method: `httpsig`, `jws`, or `jwsd`.
     pub proof: &'static str,
+    /// The key's algorithm.
     pub alg: &'static str,
     /// How many rights the grant requests.
     pub access: usize,
     /// Whether the scenario reads a resource.
     pub resource: bool,
+    /// Whether the scenario changes the token's key.
     pub rotate_key: bool,
     /// The longest wait for an interaction, in seconds.
     pub wait: u64,
@@ -162,7 +177,8 @@ impl Report {
     pub fn text(&self) -> String {
         let mut text = format!("{} {} — {}\n\n", self.command, self.target, self.scope);
         if let Some(p) = self.profile {
-            text.push_str(&format!(
+            let _ = write!(
+                text,
                 "profile: {} {}, {} right(s), resource {}, key rotation {}, wait {} s\n\n",
                 p.proof,
                 p.alg,
@@ -170,7 +186,7 @@ impl Report {
                 if p.resource { "read" } else { "not read" },
                 if p.rotate_key { "asked" } else { "not asked" },
                 p.wait
-            ));
+            );
         }
         for finding in &self.findings {
             let outcome = match finding.outcome {
@@ -180,16 +196,18 @@ impl Report {
                 Outcome::Skipped => "SKIP",
                 Outcome::NotApplicable => "N/A ",
             };
-            text.push_str(&format!(
+            let _ = write!(
+                text,
                 "{outcome}  {}\n      {}\n      {}\n",
                 finding.id, finding.detail, finding.reference
-            ));
+            );
         }
         let s = self.summary;
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "\n{} passed, {} failed, {} inconclusive, {} skipped, {} not applicable\n",
             s.passed, s.failed, s.inconclusive, s.skipped, s.not_applicable
-        ));
+        );
         text
     }
 }

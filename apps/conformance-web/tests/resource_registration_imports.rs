@@ -19,7 +19,7 @@ fn report(kind: &str, body: Value) -> Report {
     raw_report(kind, &body.to_string())
 }
 fn raw_report(kind: &str, body: &str) -> Report {
-    analyze(serde_json::from_value(json!({"kind":kind,"body":body})).unwrap()).unwrap()
+    analyze(&serde_json::from_value(json!({"kind":kind,"body":body})).unwrap()).unwrap()
 }
 fn status(report: &Report, id: &str) -> Status {
     report
@@ -45,7 +45,7 @@ fn positive_fixtures_have_distinct_profiles_and_only_scoped_observations() {
             "gnap-resource-registration-response-import-v1",
         ),
     ] {
-        let r = analyze(serde_json::from_str::<Import>(fixture).unwrap()).unwrap();
+        let r = analyze(&serde_json::from_str::<Import>(fixture).unwrap()).unwrap();
         assert_eq!(r.profile, profile);
         assert!(!r.certification);
         assert_eq!(r.observation.source, "import");
@@ -290,7 +290,7 @@ fn registration_accepts_no_declared_comparison_context_even_empty() {
                 serde_json::from_value(json!({"kind":kind,"body":"{}","rs_context":context}))
                     .unwrap();
             assert_eq!(
-                analyze(input).unwrap_err(),
+                analyze(&input).unwrap_err(),
                 "rs_context fields are not applicable to this message kind."
             );
         }
@@ -357,7 +357,7 @@ fn negative_fixtures_fail_named_fields_without_certification() {
             ],
         ),
     ] {
-        let r = analyze(serde_json::from_str(fixture).unwrap()).unwrap();
+        let r = analyze(&serde_json::from_str(fixture).unwrap()).unwrap();
         for id in ids {
             assert_eq!(status(&r, id), Status::Fail);
         }

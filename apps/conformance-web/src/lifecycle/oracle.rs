@@ -1,14 +1,14 @@
 //! Assertions over captured HTTP/JSON, not GNAP SDK deserializers or validators.
 //! A passing selected profile check is not a complete protocol verdict.
 use super::config::{RIGHT, Target, member};
-use crate::{Check, check};
+use crate::Check;
 use gnap_types::http::HttpResponse;
 use serde_json::Value;
 
 const RFC: &str = "https://www.rfc-editor.org/rfc/rfc9635.html";
 
 pub fn assertion(id: &'static str, outcome: bool, detail: &'static str) -> Check {
-    check(id, Some(outcome), detail, RFC)
+    Check::new(id, Some(outcome), detail, RFC)
 }
 
 fn json(response: &HttpResponse) -> Option<Value> {

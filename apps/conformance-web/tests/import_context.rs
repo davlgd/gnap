@@ -34,7 +34,7 @@ fn discovery_and_rs_comparison_contexts_are_not_interchangeable() {
                 .extend(context.as_object().unwrap().clone());
             let input = serde_json::from_value::<Import>(envelope).unwrap();
             assert_eq!(
-                analyze(input).err(),
+                analyze(&input).err(),
                 Some("queried_endpoint and http_status are only supported for kind as_discovery."),
                 "wrong context diagnostic for {kind}",
             );
@@ -59,7 +59,7 @@ fn discovery_and_rs_comparison_contexts_are_not_interchangeable() {
             }))
             .unwrap();
             assert_eq!(
-                analyze(input).err(),
+                analyze(&input).err(),
                 Some("rs_context fields are not applicable to this message kind."),
                 "wrong context diagnostic for {kind}",
             );
@@ -87,7 +87,7 @@ fn both_discovery_profiles_remain_distinct_when_unused_context_is_null() {
                 .entry(field)
                 .or_insert(serde_json::Value::Null);
         }
-        let report = analyze(serde_json::from_value(envelope).unwrap()).unwrap();
+        let report = analyze(&serde_json::from_value(envelope).unwrap()).unwrap();
         assert_eq!(report.profile, expected_profile);
         assert_eq!(report.observation.source, "import");
         assert!(!report.certification);

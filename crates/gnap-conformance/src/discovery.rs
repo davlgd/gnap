@@ -8,6 +8,7 @@ use serde::{
 use serde_json::Value;
 
 const RFC: &str = "https://www.rfc-editor.org/rfc/rfc9635.html#section-9";
+/// How independent the discovery checks are from the implementation they test.
 pub const INDEPENDENCE: &str = "Discovery HTTP/JSON/URL assertions do not use gnap-types validation. GNAP registry membership reuses gnap-registry data; Subject Identifier names use an IANA snapshot checked 2026-09-05. This is not an independent protocol implementation or certification.";
 
 // This registry is not in gnap-registry. Source checked 2026-09-05:
@@ -168,6 +169,16 @@ impl<'de> Deserialize<'de> for UniqueMembers {
     }
 }
 
+/// The checks of a captured discovery response (RFC 9635 §9).
+///
+/// They examine its status, its media type, its JSON object, and its grant
+/// endpoint, compared with `queried_endpoint` when it is given. Nothing the
+/// document names is fetched.
+#[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Each check is one entry, in the order the report gives them"
+)]
 pub fn checks(
     body: &[u8],
     headers: Option<&[(String, String)]>,

@@ -31,9 +31,10 @@ impl<'a> Tokens<'a> {
             return None;
         }
         let mut seen = HashSet::new();
-        Some(self.objects.iter().all(|object| match object.get("label") {
-            None => !self.multiple,
-            Some(value) => value.as_str().is_some_and(|label| seen.insert(label)),
+        Some(self.objects.iter().all(|object| {
+            object.get("label").map_or(!self.multiple, |value| {
+                value.as_str().is_some_and(|label| seen.insert(label))
+            })
         }))
     }
 }

@@ -476,11 +476,11 @@ fn context_limits_and_synthetic_fixture_are_checked() {
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
         let input: Import = serde_json::from_value(value).unwrap();
-        assert!(analyze(input).is_err());
+        assert!(analyze(&input).is_err());
     }
     let input: Import =
         serde_json::from_str(include_str!("../fixtures/as-discovery.json")).unwrap();
-    let report = analyze(input).unwrap();
+    let report = analyze(&input).unwrap();
     assert!(report.checks.iter().all(|c| c.status != Status::Fail));
     assert!(
         report

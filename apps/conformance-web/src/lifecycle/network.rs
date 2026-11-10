@@ -7,8 +7,7 @@ use crate::net::{Bounded, Limits};
 /// Used only on the lifecycle's dedicated worker thread.
 pub type Network = Bounded<Target>;
 
-impl Network {
-    pub fn new(target: Target, local: bool, runtime: tokio::runtime::Handle) -> Self {
-        Self::with_limits(target, Limits::LIFECYCLE, local, runtime)
-    }
+/// The transport of one lifecycle run, within the lifecycle's limits.
+pub fn network(target: Target, local: bool, runtime: tokio::runtime::Handle) -> Network {
+    Bounded::with_limits(target, Limits::LIFECYCLE, local, runtime)
 }

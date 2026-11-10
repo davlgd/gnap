@@ -36,7 +36,7 @@ pub(super) fn run(
     snapshot: Arc<Mutex<Snapshot>>,
 ) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let network = Network::new(target.clone(), inner.local, runtime);
+        let network = super::network::network(target.clone(), inner.local, runtime);
         let mut client = Session::new(&network, inner.signer.as_ref(), &target.grant)
             .supporting(&["redirect"])
             .with_finish_timeout(NonZeroU64::new(300).unwrap());
@@ -55,7 +55,7 @@ pub(super) fn run(
         if result.is_err() {
             let _ = client.revoke_token(None, now());
             let _ = client.revoke_grant(now());
-            checks.push(crate::check("lifecycle-completion", None,
+            checks.push(crate::Check::new("lifecycle-completion", None,
                 "Scenario incomplete: transport, deadline, callback or an unsupported response prevented completion. Earlier observed failures remain failures. Cleanup was attempted within the same bounded budget; remote deletion is not guaranteed.",
                 "https://www.rfc-editor.org/rfc/rfc9635.html"));
         }

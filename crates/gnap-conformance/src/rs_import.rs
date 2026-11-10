@@ -19,20 +19,27 @@ const ACCESS: &str = "https://www.rfc-editor.org/rfc/rfc9635.html#section-8";
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Context {
+    /// The grant endpoint the caller expects the AS to announce.
     pub grant_request_endpoint: Option<String>,
+    /// The URL the discovery document was read from.
     pub discovery_url: Option<String>,
+    /// Whether the examined token is bound to a key or a bearer token.
     pub token_binding: Option<Binding>,
+    /// The captured HTTP status of the message.
     pub http_status: Option<u16>,
 }
 
+/// How a token is presented, as the caller declares it.
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Binding {
+    /// Bound to a key, which each request proves.
     Bound,
+    /// A bearer token.
     Bearer,
 }
 
-pub fn validate_context(input: &Import) -> Result<(), &'static str> {
+pub(crate) fn validate_context(input: &Import) -> Result<(), &'static str> {
     let Some(c) = &input.rs_context else {
         return Ok(());
     };
@@ -362,11 +369,12 @@ fn request(o: &Map<String, Value>, checks: &mut Vec<Check>) {
         "Required RS identity reference or object with key. Only outer shape: no key resolution, key presentation validation, signature or RS authorization.",
         "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.2",
     );
-    let proof = o.get("proof").and_then(|v| match v.as_str() {
-        None => Some(false),
-        Some(s) => gnap_registry::KeyProofingMethod::REGISTERED
-            .contains(&s)
-            .then_some(true),
+    let proof = o.get("proof").and_then(|v| {
+        v.as_str().map_or(Some(false), |s| {
+            gnap_registry::KeyProofingMethod::REGISTERED
+                .contains(&s)
+                .then_some(true)
+        })
     });
     add(
         checks,
@@ -571,7 +579,11 @@ fn registration_response(o: &Map<String, Value>, checks: &mut Vec<Check>) {
     );
 }
 
-pub fn analyze(input: &Import) -> Result<Report, &'static str> {
+#[allow(
+    clippy::too_many_lines,
+    reason = "Each message kind is one arm, with its checks in the order the report gives them"
+)]
+pub(crate) fn analyze(input: &Import) -> Result<Report, &'static str> {
     let (profile, reference, known): (&str, &str, &[&str]) = match input.kind {
         MessageKind::RsDiscovery => (
             "gnap-rs-discovery-import-v1",
@@ -686,10 +698,10 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
             MessageKind::RsDiscovery => discovery(o, input.rs_context.as_ref(), &mut checks),
             MessageKind::IntrospectionRequest => request(o, &mut checks),
             MessageKind::IntrospectionResponse => {
-                response(o, input.rs_context.as_ref(), &mut checks)
+                response(o, input.rs_context.as_ref(), &mut checks);
             }
             MessageKind::RsErrorResponse => {
-                error_response(o, input.rs_context.as_ref(), &mut checks)
+                error_response(o, input.rs_context.as_ref(), &mut checks);
             }
             MessageKind::ResourceRegistrationRequest => registration_request(o, &mut checks),
             MessageKind::ResourceRegistrationResponse => registration_response(o, &mut checks),

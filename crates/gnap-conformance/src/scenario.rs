@@ -37,28 +37,47 @@ pub const CLEANUP_WAIT: u64 = 10;
 /// The proof method the scenario's key declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Proof {
+    /// HTTP message signatures.
     Httpsig,
+    /// An attached or detached JWS.
     Jose(JwsMethod),
 }
 
 /// The algorithm of the scenario's key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Alg {
+    /// RSASSA-PSS with SHA-256, for `httpsig`.
     Ps256,
+    /// RSASSA-PKCS1-v1_5 with SHA-256, for JOSE.
     Rs256,
+    /// ECDSA on P-256 with SHA-256.
     Es256,
+    /// Ed25519.
     EdDsa,
 }
 
-/// What a `lifecycle` run does, validated before any network work.
+/// What a `lifecycle` run does.
+///
+/// [`Plan::new`] validates the method, the algorithm, the access entries,
+/// and the wait before any network work. It doesn't validate the endpoint
+/// or the resource URL: the caller's transport and admissions do, as the
+/// command line's do with [`crate::net::endpoint`]. The fields stay public,
+/// so a plan changed after `new` is the caller's to check.
 #[derive(Debug, Clone)]
 pub struct Plan {
+    /// The grant endpoint.
     pub endpoint: String,
+    /// The proof method of the generated key.
     pub proof: Proof,
+    /// The algorithm of the generated key.
     pub alg: Alg,
+    /// The rights the grant requests, one to eight.
     pub access: Vec<AccessItem>,
+    /// A resource to read with the token, before and after revocation.
     pub resource: Option<String>,
+    /// Whether to change the token's key, when the AS announces it.
     pub rotate_key: bool,
+    /// The longest wait for the interaction, in seconds.
     pub wait: u64,
 }
 
@@ -193,7 +212,7 @@ const fn alg_name(alg: Alg) -> &'static str {
 impl Plan {
     /// What the report says the scenario was asked to run.
     #[must_use]
-    pub fn profile(&self) -> Profile {
+    pub const fn profile(&self) -> Profile {
         Profile {
             proof: method_name(self.proof),
             alg: alg_name(self.alg),
@@ -258,7 +277,7 @@ const fn finding(
 
 /// The outcome of a client operation the AS may decline: its refusal is a
 /// limit of the scenario, a response the client must refuse is a deviation.
-fn judged(result: &Result<impl Sized, ClientError>) -> Outcome {
+const fn judged(result: &Result<impl Sized, ClientError>) -> Outcome {
     match result {
         Ok(_) => Outcome::Passed,
         Err(ClientError::Protocol(_) | ClientError::Parse(_)) => Outcome::Failed,
@@ -438,9 +457,8 @@ impl<T: HttpTransport> Run<'_, T> {
         let read = self.present(transport, held, self.clock.now());
         let (outcome, accepted) = match read {
             Read::NotRequested => (Outcome::Skipped, false),
-            Read::Unavailable => (Outcome::Inconclusive, false),
             Read::Status(status) if (200..300).contains(&status) => (Outcome::Passed, true),
-            Read::Status(_) => (Outcome::Inconclusive, false),
+            Read::Unavailable | Read::Status(_) => (Outcome::Inconclusive, false),
         };
         self.push(
             id,
@@ -713,14 +731,7 @@ pub fn lifecycle<T: HttpTransport>(
         return finish(run, transport, started);
     }
     // §6.1.1 — the token's key changes, when asked for.
-    if !plan.rotate_key {
-        run.push(
-            "key-rotation",
-            Outcome::Skipped,
-            KEY_ROTATION,
-            "The plan didn't ask for a key change: pass --rotate-key to try it.",
-        );
-    } else {
+    if plan.rotate_key {
         if announces_rotation.flatten() == Some(false) || announces_rotation.flatten().is_none() {
             run.push(
                 "key-rotation",
@@ -778,6 +789,13 @@ pub fn lifecycle<T: HttpTransport>(
                 }
             }
         }
+    } else {
+        run.push(
+            "key-rotation",
+            Outcome::Skipped,
+            KEY_ROTATION,
+            "The plan didn't ask for a key change: pass --rotate-key to try it.",
+        );
     }
 
     if run.clock.interrupted() {

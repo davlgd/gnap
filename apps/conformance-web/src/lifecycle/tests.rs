@@ -301,7 +301,7 @@ async fn bounded_network_runs_on_a_dedicated_thread_and_rejects_redirects_and_ov
         target.resource = format!("http://{address}{path}");
         let runtime = runtime.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let network = network::Network::new(target, true, runtime);
+            let network = network::network(target, true, runtime);
             let response = network.send(HttpRequest::new("GET", &network.target.resource));
             assert!(
                 network

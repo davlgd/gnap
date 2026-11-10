@@ -6,9 +6,9 @@ use gnap_as::{
     MemoryStorage, OsNonces, Policy, TokenApproval,
 };
 use gnap_client::{HttpRequest, HttpResponse, HttpTransport};
-use gnap_conformance_web::cli::Outcome;
-use gnap_conformance_web::net::{Admitted, Destinations};
-use gnap_conformance_web::scenario::{self, Admission, Clock, Plan};
+use gnap_conformance::cli::Outcome;
+use gnap_conformance::net::{Admitted, Destinations};
+use gnap_conformance::scenario::{self, Admission, Clock, Plan};
 use gnap_crypto::{PublicKey, Verifier};
 use gnap_types::client::Client;
 use gnap_types::message::GrantRequest;
@@ -191,10 +191,7 @@ fn run(
     server: &Server,
     plan: &Plan,
     notify: &dyn Fn(&str),
-) -> (
-    gnap_conformance_web::cli::Report,
-    Vec<(String, String, u64)>,
-) {
+) -> (gnap_conformance::cli::Report, Vec<(String, String, u64)>) {
     run_with(server, plan, notify, live_tokens, &untouched)
 }
 
@@ -204,10 +201,7 @@ fn run_with(
     notify: &dyn Fn(&str),
     resource: fn(&str, bool) -> Option<u16>,
     tamper: Tamper<'_>,
-) -> (
-    gnap_conformance_web::cli::Report,
-    Vec<(String, String, u64)>,
-) {
+) -> (gnap_conformance::cli::Report, Vec<(String, String, u64)>) {
     run_on(
         &Virtual(Cell::new(1_700_000_000)),
         server,
@@ -225,10 +219,7 @@ fn run_on(
     notify: &dyn Fn(&str),
     resource: fn(&str, bool) -> Option<u16>,
     tamper: Tamper<'_>,
-) -> (
-    gnap_conformance_web::cli::Report,
-    Vec<(String, String, u64)>,
-) {
+) -> (gnap_conformance::cli::Report, Vec<(String, String, u64)>) {
     let admitted = Admitted::new(GRANT, false).unwrap();
     admitted.allow("POST", GRANT);
     admitted.allow("OPTIONS", GRANT);
@@ -261,7 +252,7 @@ fn plan(proof: &str, alg: &str, resource: bool, rotate_key: bool) -> Plan {
     .unwrap()
 }
 
-fn outcome(report: &gnap_conformance_web::cli::Report, id: &str) -> Option<Outcome> {
+fn outcome(report: &gnap_conformance::cli::Report, id: &str) -> Option<Outcome> {
     report
         .findings
         .iter()
@@ -363,6 +354,19 @@ fn server_denying() -> Server {
 /// An unknown client is the AS's policy: inconclusive, never a failure.
 #[test]
 fn a_refused_client_leaves_the_scenario_inconclusive() {
+    struct Plain<'a, P: Policy, K: KeyResolver>(
+        &'a AuthorizationServer<P, K, MemoryStorage, OsNonces>,
+        &'a Admitted,
+    );
+    impl<P: Policy, K: KeyResolver> HttpTransport for Plain<'_, P, K> {
+        type Error = &'static str;
+        fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
+            if !self.1.permits(&request.method, &request.url) {
+                return Err("not admitted");
+            }
+            Ok(self.0.handle(&request, 1_700_000_000))
+        }
+    }
     struct Nobody;
     impl KeyResolver for Nobody {
         fn resolve(&self, _: &Client) -> Option<Box<dyn Verifier>> {
@@ -387,19 +391,6 @@ fn a_refused_client_leaves_the_scenario_inconclusive() {
     let clock = Virtual(Cell::new(1_700_000_000));
     let admitted = Admitted::new(GRANT, false).unwrap();
     admitted.allow("POST", GRANT);
-    struct Plain<'a, P: Policy, K: KeyResolver>(
-        &'a AuthorizationServer<P, K, MemoryStorage, OsNonces>,
-        &'a Admitted,
-    );
-    impl<P: Policy, K: KeyResolver> HttpTransport for Plain<'_, P, K> {
-        type Error = &'static str;
-        fn send(&self, request: HttpRequest) -> Result<HttpResponse, Self::Error> {
-            if !self.1.permits(&request.method, &request.url) {
-                return Err("not admitted");
-            }
-            Ok(self.0.handle(&request, 1_700_000_000))
-        }
-    }
     let report = scenario::lifecycle(
         &Plain(&server, &admitted),
         &Admit(&admitted),
@@ -526,6 +517,10 @@ fn a_refusal_after_revocation_needs_an_acceptance_before() {
     static FIRST: OnceLock<String> = OnceLock::new();
     // Accepts only the first token it sees, as if the rotated value weren't
     // bound to the right key.
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "It has the signature of the resource the scenario reads"
+    )]
     fn first_only(token: &str, live: bool) -> Option<u16> {
         let first = FIRST.get_or_init(|| token.to_owned());
         Some(if live && first == token { 200 } else { 401 })
@@ -1083,7 +1078,7 @@ struct Jumping {
 }
 
 impl Jumping {
-    fn by(jump: i64) -> Self {
+    const fn by(jump: i64) -> Self {
         Self {
             now: Cell::new(1_700_000_000),
             elapsed: Cell::new(0),
@@ -1141,7 +1136,7 @@ fn the_interaction_wait_ignores_a_wall_clock_set_back() {
     );
     // The 30-second wait, then cleanup's own bounded wait.
     assert!(
-        clock.elapsed.get() <= 30 + gnap_conformance_web::scenario::CLEANUP_WAIT,
+        clock.elapsed.get() <= 30 + gnap_conformance::scenario::CLEANUP_WAIT,
         "{} seconds",
         clock.elapsed.get()
     );
@@ -1170,7 +1165,7 @@ fn the_interaction_wait_ignores_a_wall_clock_jump() {
         .filter(|(m, u, _)| m == "POST" && u.starts_with("https://as.example/continue"))
         .count();
     assert!(polls >= 3, "{polls} polls: {sent:?}");
-    assert!(clock.elapsed.get() <= 30 + gnap_conformance_web::scenario::CLEANUP_WAIT);
+    assert!(clock.elapsed.get() <= 30 + gnap_conformance::scenario::CLEANUP_WAIT);
 }
 
 /// A rotation that returns a token already past its lifetime leaves the

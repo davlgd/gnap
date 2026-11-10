@@ -52,6 +52,10 @@ fn flags_valid(v: &Value) -> bool {
         .is_some_and(|values| values.iter().all(|v| seen.insert(v.as_str())))
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Each check is one entry, in the order the report gives them"
+)]
 fn token_details(value: Option<&Value>, response: bool, checks: &mut Vec<Check>) {
     let objects = value.and_then(tokens);
     let objects = objects.as_deref();
