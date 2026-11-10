@@ -21,13 +21,13 @@ These are choices of this project, not requirements of RFC 9767:
 - An application policy that maps an authorized task at RS1 to the rights needed at RS2
 - At most eight live derived tokens per incoming token, in the reference store
 
-A request outside this profile is refused, never converted into an ordinary grant. The mapping policy isn't a generic comparison of JSON subsets across APIs. Exceeding the budget of eight derived tokens returns a GNAP error rather than an unavailability, as a resource bound and not a protocol limit.
+A request outside this profile is refused, never converted into an ordinary grant. The mapping policy doesn't compare JSON subsets across APIs. Exceeding the budget of eight derived tokens returns a GNAP error, not an unavailability: a resource bound, not a protocol limit.
 
 The reference store separately bounds retained derived grants to 256 across all parents, including grants whose token has been removed. Operators must provide retention maintenance; token expiry alone doesn't purge grant records. The lab runs it, without durable storage.
 
 The lab's task maps a synthetic folder read to a metadata read at RS2. It doesn't authorize arbitrary URLs, arbitrary resource descriptions or an expansion to write access. The client, RS1 and RS2 use distinct keys. Their HTTP paths and AS are configured by the operator.
 
-Registration for introspection doesn't itself enable the requesting role in derivation. The lab admits only RS1 through the derivation resolver; RS2 is registered for introspection but can't request a child. For every admitted requester, the AS's client-key resolver must agree with its RS-key resolver, so the requester can manage the token it receives. A configuration mismatch is refused before inspecting the parent value, without creating a grant.
+Registering for introspection doesn't enable the requesting role in derivation. The lab admits only RS1 through the derivation resolver; RS2 is registered for introspection but can't request a child. For every admitted requester, the AS's client-key resolver must agree with its RS-key resolver, so the requester can manage the token it receives. A mismatch is refused before the parent value is read, with no grant created.
 
 Unknown, expired, revoked, bearer or wrongly addressed parent tokens, loops and negative policy decisions receive the same generic refusal. The response doesn't disclose whether a submitted value exists in the AS. This isn't a claim of constant-time processing.
 

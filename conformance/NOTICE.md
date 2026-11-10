@@ -7,4 +7,4 @@
 
 The generated `clauses.json` and `REPORT.md` contain extracts from those sources. This repository's software license does not replace the notices and conditions applicable to RFC material. See the copyright notice inside each XML document, [RFC 9635](https://www.rfc-editor.org/rfc/rfc9635.html), [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767.html), and the [IETF Trust Legal Provisions](https://trustee.ietf.org/license-info).
 
-These files are public standard documents, not copies of private implementation notes, historical coverage classifications or other development material.
+These are public standard documents, not private notes, coverage classifications or other development material.

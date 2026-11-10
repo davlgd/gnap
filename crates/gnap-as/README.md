@@ -8,7 +8,7 @@ Add it with `cargo add gnap-as`. Its [API documentation](https://docs.rs/gnap-as
 
 Create an `AuthorizationServer` with an authorization `Policy`, trusted `KeyResolver`, transactional `Storage`, nonce generator and endpoint URIs. Your HTTP adapter passes the request to the corresponding handler then sends the response back, without changing the signed request bytes along the way.
 
-The API documentation has a compiled constructor example and the storage contract. The [integration guide](https://github.com/davlgd/gnap/blob/main/docs/getting-started.md#build-an-authorization-server) explains how to connect it to clients and resources.
+The API documentation shows a compiled constructor and the storage contract. The [integration guide](https://github.com/davlgd/gnap/blob/main/docs/getting-started.md#build-an-authorization-server) connects it to clients and resources.
 
 Policy supplies the decisions GNAP leaves to a deployment: owner authentication, consent, approved rights, lifetimes and trust. The included in-memory storage doesn't supply persistence or a production identity system.
 

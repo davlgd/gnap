@@ -17,7 +17,7 @@ The [delegation lab](../apps/delegation-demo/README.md) runs its roles in one pr
 
 ## Messages and extensibility
 
-`gnap-types` represents GNAP's object/reference and single/multiple forms with dedicated types and deserializers. Its diagnostics name the offending field and the RFC rule. Checking the shape of a message is distinct from verifying its signature, matching a response to its request, and authorizing it.
+`gnap-types` represents GNAP's object/reference and single/multiple forms with dedicated types. Its diagnostics name the field and the RFC rule. Checking a message's shape is distinct from verifying its signature, matching a response to its request, and authorizing it.
 
 Continuation credentials use a separate `BoundToken` type that refuses bearer, management and explicit-key fields. Access-token request cardinality and labels are checked when adopting responses. The client validates interaction hashes before using the returned reference and observes the continuation wait period.
 
@@ -27,7 +27,7 @@ Unknown message fields and unregistered registry values are retained for extensi
 
 `gnap-core` implements the grant-state transitions and response constraints. The AS stores a grant and its issued tokens as one revisioned aggregate; a storage adapter must publish the aggregate and credential indexes atomically. A stale write can't restore a token removed by a concurrent operation. See the [AS storage contract](../crates/gnap-as/src/lib.rs) before replacing the in-memory adapter. A transactional interface alone doesn't make the storage behind it persistent across restarts.
 
-Deployment policy chooses rights, lifetimes, interaction and whether approval keeps a continuation open. A grant can issue several independently selected tokens; token management and grant continuation have different lifecycles. See [multiple tokens](multiple-access-tokens.md) and the [delegation lab](../apps/delegation-demo/README.md) for concrete flows.
+Deployment policy chooses rights, lifetimes, interaction and whether approval keeps a continuation open. A grant can issue several independently selected tokens; token management and grant continuation have different lifecycles. See the [multiple-token guide](multiple-access-tokens.md) and the [delegation lab](../apps/delegation-demo/README.md) for concrete flows.
 
 The default encoder issues opaque reference tokens. The trusted [`TokenEncoder`](../crates/gnap-as/src/encoding.rs) hook receives approved rights, key binding and lifetime for issuance and rotation; management credentials stay separate. A custom encoder must preserve these claims and have a matching RS verifier. The hook isn't a generic structured-token validator.
 

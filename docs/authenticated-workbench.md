@@ -21,7 +21,7 @@ The feature is disabled unless `GNAP_LIFECYCLE_TARGETS` is configured on the wor
 ]
 ```
 
-These are configuration examples, not endpoints the service will discover or approve automatically. The prefixes end with `/` and admit only a single bounded alphanumeric/base64url segment. The scenario expects the synthetic document result of the delegation lab. Other application representations need an explicitly designed test profile, not an arbitrary URL in a public form. HTTPS targets use canonical DNS hostnames on port 443.
+These are configuration examples, not endpoints the service discovers or approves automatically. The prefixes end with `/` and admit a single bounded alphanumeric/base64url segment. The scenario expects the delegation lab's synthetic document. Other applications need an explicitly designed test profile, not an arbitrary URL in a public form. HTTPS targets use canonical DNS hostnames on port 443.
 
 At process startup, the workbench generates a 2048-bit PS256 key. Its public JWK and thumbprint are available at `/api/lifecycle/key`, together with the exact callback URI. This is a local endpoint, not a GNAP discovery document, and it returns no private-key member.
 

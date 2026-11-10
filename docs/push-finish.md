@@ -1,6 +1,6 @@
 # HTTP push finish
 
-The delegation lab offers a real server-to-client finish callback. Choose **Start with a server-to-client callback**, then allow or deny the request. The browser opens the consent page, but doesn't carry the finish reference back to the client. The AS sends the JSON produced by `Finish::Push` unchanged in an HTTP POST. The client calls `Session::accept_push` to verify the hash before the signed continuation becomes available to it.
+The delegation lab offers a real server-to-client finish callback. Choose **Start with a server-to-client callback**, then allow or deny the request. The browser opens the consent page but never carries the finish reference back. The AS POSTs the JSON of `Finish::Push` unchanged. The client calls `Session::accept_push` to verify the hash before the signed continuation becomes available to it.
 
 This shows [RFC 9635 §4.2.2](https://www.rfc-editor.org/rfc/rfc9635.html#section-4.2.2) in one deployment, with real HTTP between the roles. It isn't interoperability with an independent vendor, a complete Secondary Device profile, or a general-purpose callback relay. The selected scenario requests one document token, without identity disclosure. After issuance, continuation closes; the token retains its own resource-access, rotation and revocation lifecycle.
 

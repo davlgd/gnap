@@ -39,7 +39,7 @@ The authorization server's `ReleasedSubject` policy stays mandatory. A valid sig
 
 The identity option of the delegation lab shows explicit consent for one fictional owner and the lab's shared proof key. It discloses identity only to enrolled client references, and refuses a client key sent by value or a key that impersonates a reference. Its assertion key and opaque identifier are generated in memory at startup, not loaded from test fixtures, and change on restart. The identity grant closes after issuance, and the ID Token never reaches a resource server.
 
-This option isn't a real user authentication, a general pairwise-identifier service, a persistent account linking, or an interoperability test with an independent vendor.
+This option isn't user authentication, a pairwise-identifier service, account linking, or independent interoperability.
 
 ## Evidence
 

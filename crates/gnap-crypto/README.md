@@ -21,7 +21,7 @@ The example constructs and verifies a signed grant request. For a complete clien
 
 ## Verification boundary
 
-The caller must preserve the signed method, exact URI, headers and content, and process the content that a `jws` verification returns, not the request body. Network security, trusted key selection, nonce storage and resource policy are separate responsibilities. A valid signature doesn't grant access.
+The caller must preserve the signed method, exact URI, headers and content, and process the content a `jws` verification returns, not the request body. Network security, key trust, nonce storage and resource policy remain the caller's. A valid signature grants no access.
 
 Tests include deliberately public RFC keys, with provenance and notices in [the fixture guide](https://github.com/davlgd/gnap/blob/main/crates/gnap-crypto/tests/README.md). Never use those keys for deployment.
 
