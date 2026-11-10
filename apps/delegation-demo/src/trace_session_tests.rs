@@ -149,6 +149,30 @@ async fn announced_wait(app: &App, id: &str) -> u64 {
         .unwrap()
 }
 
+/// An action a browser posts with its cookie, and the status and body of the
+/// answer.
+async fn post(router: &Router, origin: &str, cookie: &str, action: &str) -> (StatusCode, Value) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/{action}"))
+                .header("host", origin.strip_prefix("http://").unwrap())
+                .header("origin", origin)
+                .header("cookie", format!("gnap_demo={cookie}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
 /// A refusal the grant survives, such as `too_fast`, reaches the browser as
 /// an error: the session isn't approved, and once the new wait has passed,
 /// the next continuation is.
@@ -188,17 +212,22 @@ async fn a_too_fast_continuation_is_an_error_not_an_approval() {
         .compare_exchange(grant, snapshot.revision, aggregate)
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(announced_wait(&app, &id).await)).await;
-    let refused = dispatch(&app, id.clone(), "continue".into())
-        .await
-        .unwrap_err();
-    assert!(refused.contains("too_fast"), "{refused}");
-    let view = dispatch(&app, id.clone(), "status".into()).await.unwrap();
+    let wait =
+        |view: Value| Duration::from_secs(view["continuation_wait_seconds"].as_u64().unwrap());
+    tokio::time::sleep(wait(status(&router, &origin, Some(&id)).await)).await;
+    let (code, refused) = post(&router, &origin, &id, "continue").await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("too_fast"),
+        "{refused}"
+    );
+    let view = status(&router, &origin, Some(&id)).await;
     assert_eq!(view["state"], "ready", "{view}");
     assert_eq!(view["token_present"], false, "{view}");
 
-    tokio::time::sleep(Duration::from_secs(announced_wait(&app, &id).await)).await;
-    let approved = dispatch(&app, id.clone(), "continue".into()).await.unwrap();
+    tokio::time::sleep(wait(view)).await;
+    let (code, approved) = post(&router, &origin, &id, "continue").await;
+    assert_eq!(code, StatusCode::OK, "{approved}");
     assert_eq!(approved["token_present"], true, "{approved}");
 }
 
