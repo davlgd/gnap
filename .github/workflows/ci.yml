@@ -82,8 +82,9 @@ jobs:
 
       - name: Document
         # Every public item is documented, and the lint that enforces it is set
-        # to deny; this catches a broken intra-doc link too.
-        run: cargo doc --workspace --no-deps
+        # to deny; this catches a broken intra-doc link too. All features, as
+        # docs.rs builds the gnap crate.
+        run: cargo doc --workspace --no-deps --all-features
 
       - name: Run the examples
         # They are documentation as much as code, so they must keep working.
