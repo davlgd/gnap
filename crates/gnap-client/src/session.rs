@@ -428,10 +428,10 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
     /// `now` of the call that received the continuation.
     ///
     /// That check is no substitute for waiting: §3.1 counts the wait from the
-    /// response's arrival, which can come a second later than that `now`.
-    /// Wait [`Continue::effective_wait`] seconds after the response arrives.
-    /// An AS that still finds the call too early answers `too_fast`, which
-    /// returns as [`Step::Recoverable`] with a new continuation.
+    /// response's arrival, which can come later than that `now`. Wait
+    /// [`Continue::effective_wait`] seconds after the response arrives. An AS
+    /// that still finds the call too early answers `too_fast`: with a new
+    /// continuation, the answer returns as [`Step::Recoverable`].
     ///
     /// `now` is the current time in seconds since the Unix epoch; see
     /// [`unix_now`](gnap_types::unix_now).
