@@ -722,6 +722,17 @@ enum WorkerCommand {
     Browser(Command),
     Push(push_finish::Incoming),
 }
+/// When the continuation a response offers may be called, counted from
+/// `received`: §3.1 makes an absent `wait` mean five seconds.
+fn continuation_deadline(response: &gnap_types::message::GrantResponse, received: u64) -> u64 {
+    received.saturating_add(
+        response
+            .r#continue
+            .as_ref()
+            .map_or(0, gnap_types::message::Continue::effective_wait),
+    )
+}
+
 struct BrowserSession<'a> {
     push: Option<push_finish::Registration>,
     identity: Option<Arc<identity::Identity>>,
@@ -759,13 +770,7 @@ impl BrowserSession<'_> {
     /// Records the continuation a response offers, and when its wait ends.
     fn offered(&mut self, response: &gnap_types::message::GrantResponse) {
         self.continuation_open = response.r#continue.is_some();
-        self.next_continuation = now().saturating_add(
-            response
-                .r#continue
-                .as_ref()
-                .and_then(|c| c.wait)
-                .unwrap_or(0),
-        );
+        self.next_continuation = continuation_deadline(response, now());
     }
 
     fn received(
@@ -1190,13 +1195,7 @@ fn client_worker(worker: Worker, receiver: mpsc::Receiver<WorkerCommand>) {
                         requested: multiple::requested(mode, true),
                         last_resource_status: None,
                         mode,
-                        next_continuation: now()
-                            + step
-                                .response()
-                                .r#continue
-                                .as_ref()
-                                .and_then(|c| c.wait)
-                                .unwrap_or(0),
+                        next_continuation: continuation_deadline(step.response(), now()),
                     },
                 );
             }
@@ -2308,6 +2307,25 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST);
         assert!(!response.headers().contains_key("location"));
+    }
+
+    #[test]
+    fn an_absent_continuation_wait_is_five_seconds() {
+        let response = |body: Value| {
+            serde_json::from_value::<gnap_types::message::GrantResponse>(body).unwrap()
+        };
+        let offered = |wait: Value| {
+            let mut continuation =
+                json!({"uri": "https://demo.example/continue", "access_token": {"value": "c"}});
+            if !wait.is_null() {
+                continuation["wait"] = wait;
+            }
+            response(json!({"continue": continuation}))
+        };
+        assert_eq!(continuation_deadline(&offered(Value::Null), 100), 105);
+        assert_eq!(continuation_deadline(&offered(json!(30)), 100), 130);
+        assert_eq!(continuation_deadline(&offered(json!(0)), 100), 100);
+        assert_eq!(continuation_deadline(&response(json!({})), 100), 100);
     }
 
     #[test]
