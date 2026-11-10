@@ -2,10 +2,10 @@
 //! occur here: the grant handler publishes the complete aggregate once.
 
 use super::{
-    credential_used, misconfigured, ok, AccessToken, AccessTokenResponse, AuthorizationServer,
-    BoundToken, Continue, GrantAggregate, GrantRequest, GrantResponse, GrantSnapshot, HttpResponse,
-    KeyResolver, Nonces, Policy, PreparedToken, ReleasedSubject, Storage, SubjectGround,
-    TokenEncoder, TokenManage, TokenRecord, TokenValue,
+    AccessToken, AccessTokenResponse, AuthorizationServer, BoundToken, Continue, GrantAggregate,
+    GrantRequest, GrantResponse, GrantSnapshot, HttpResponse, KeyResolver, Nonces, Policy,
+    PreparedToken, ReleasedSubject, Storage, SubjectGround, TokenEncoder, TokenManage, TokenRecord,
+    TokenValue, credential_used, misconfigured, ok,
 };
 use crate::policy::TokenApproval;
 use std::collections::{HashMap, HashSet};
@@ -293,17 +293,16 @@ fn reserve_identifier(
     identifiers: &mut HashSet<Vec<u8>>,
     authenticated: Option<&GrantSnapshot>,
 ) -> Result<(), HttpResponse> {
-    if let Some(identifier) = identifier {
-        if !identifiers.insert(identifier.to_vec())
+    if let Some(identifier) = identifier
+        && (!identifiers.insert(identifier.to_vec())
             || authenticated.is_some_and(|old| {
                 old.aggregate
                     .tokens
                     .values()
                     .any(|token| token.identifier.as_deref() == Some(identifier))
-            })
-        {
-            return Err(misconfigured("encoded batch identifiers collide"));
-        }
+            }))
+    {
+        return Err(misconfigured("encoded batch identifiers collide"));
     }
     Ok(())
 }

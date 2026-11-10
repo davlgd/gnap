@@ -1,11 +1,11 @@
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use gnap_conformance_web::{
-    analyze, app, app_with_probes, discovery, probe::Probes, Check, Import, Status, MAX_UPLOAD,
+    Check, Import, MAX_UPLOAD, Status, analyze, app, app_with_probes, discovery, probe::Probes,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 fn status(checks: &[Check], id: &str) -> Status {
@@ -130,12 +130,14 @@ fn grammatical_url_forms_outside_the_parser_are_unresolved_not_failed() {
             "{endpoint}"
         );
         assert_eq!(status(&checks, "discovery-endpoint-match"), Status::Pass);
-        assert!(checks
-            .iter()
-            .find(|c| c.id == "discovery-endpoint")
-            .unwrap()
-            .detail
-            .contains("coverage limit"));
+        assert!(
+            checks
+                .iter()
+                .find(|c| c.id == "discovery-endpoint")
+                .unwrap()
+                .detail
+                .contains("coverage limit")
+        );
         let checks = discovery::checks(
             body.as_bytes(),
             None,
@@ -193,12 +195,14 @@ fn reg_names_rejected_by_whatwg_are_not_misreported_as_gnap_failures() {
             "{endpoint}"
         );
         assert_eq!(status(&checks, "discovery-endpoint-match"), Status::Pass);
-        assert!(checks
-            .iter()
-            .find(|c| c.id == "discovery-endpoint")
-            .unwrap()
-            .detail
-            .contains("production semantics remain unresolved"));
+        assert!(
+            checks
+                .iter()
+                .find(|c| c.id == "discovery-endpoint")
+                .unwrap()
+                .detail
+                .contains("production semantics remain unresolved")
+        );
         let checks = discovery::checks(
             body.as_bytes(),
             None,
@@ -249,9 +253,11 @@ fn userinfo_is_a_safe_profile_failure_not_an_invented_gnap_must() {
             "https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.4"
         );
         assert!(finding.remediation.unwrap().contains("Remove userinfo"));
-        assert!(!serde_json::to_string(&checks)
-            .unwrap()
-            .contains("TOP-SECRET"));
+        assert!(
+            !serde_json::to_string(&checks)
+                .unwrap()
+                .contains("TOP-SECRET")
+        );
     }
     let checks = discovery::checks(
         br#"{"grant_request_endpoint":"https://as.example/path@segment?email=user@example"}"#,
@@ -317,9 +323,11 @@ fn capability_types_registry_membership_and_unknown_are_distinct() {
         assert_eq!(finding.status, Status::NotTested);
         assert!(finding.detail.contains("unknown"));
         assert!(finding.remediation.is_some());
-        assert!(!serde_json::to_string(&checks)
-            .unwrap()
-            .contains("TOP-SECRET"));
+        assert!(
+            !serde_json::to_string(&checks)
+                .unwrap()
+                .contains("TOP-SECRET")
+        );
     }
     let checks = discovery::checks(br#"{"grant_request_endpoint":"https://as.example/gnap","interaction_start_modes_supported":["redirect","app","user_code","user_code_uri"],"interaction_finish_methods_supported":["push","redirect"],"key_proofs_supported":["httpsig","mtls","jws","jwsd"],"sub_id_formats_supported":["phone_number","did","uri","aliases"],"assertion_formats_supported":["id_token","saml2"],"key_rotation_supported":true}"#, None, None, None);
     for field in [
@@ -474,13 +482,15 @@ fn context_limits_and_synthetic_fixture_are_checked() {
         serde_json::from_str(include_str!("../fixtures/as-discovery.json")).unwrap();
     let report = analyze(input).unwrap();
     assert!(report.checks.iter().all(|c| c.status != Status::Fail));
-    assert!(report
-        .checks
-        .iter()
-        .find(|c| c.id == "discovery-key-rotation-type")
-        .unwrap()
-        .detail
-        .contains("declares key rotation unsupported"));
+    assert!(
+        report
+            .checks
+            .iter()
+            .find(|c| c.id == "discovery-key-rotation-type")
+            .unwrap()
+            .detail
+            .contains("declares key rotation unsupported")
+    );
 }
 
 #[tokio::test]

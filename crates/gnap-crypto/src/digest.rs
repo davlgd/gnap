@@ -4,8 +4,8 @@
 //! with the signature whenever the request has content, and requires the
 //! verifier to validate it. Without it the signature does not protect the body.
 
-use crate::httpsig::{dictionary_members, validate_parameters, SF_BASE64};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use crate::httpsig::{SF_BASE64, dictionary_members, validate_parameters};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use core::fmt;
 use sha2::Digest as _;
 use subtle::ConstantTimeEq;

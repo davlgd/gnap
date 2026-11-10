@@ -1,12 +1,12 @@
 //! The shared verifier: every check of RFC 9635 §7.3.1, obtained directly.
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use gnap_crypto::digest::{content_digest, DigestAlgorithm};
-use gnap_crypto::httpsig::{sign, signature_base, Component, Message, SignatureInput, Tag};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use gnap_crypto::digest::{DigestAlgorithm, content_digest};
+use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, sign, signature_base};
 use gnap_crypto::proof::{ProofError, Signer, Verifier};
 use gnap_crypto::ps256::{Ps256Signer, Ps256Verifier};
 use gnap_crypto::verify::{
-    verify_request, verify_request_with_policy, Accepted, Expectations, SignedRequest, VerifyError,
+    Accepted, Expectations, SignedRequest, VerifyError, verify_request, verify_request_with_policy,
 };
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -536,14 +536,16 @@ fn policy_rejections_do_not_spend_nonces_or_verify_signatures() {
         headers: &headers,
         body: None,
     };
-    assert!(verify_request_with_policy(
-        &request,
-        &NeverVerify,
-        &expectations(),
-        &|_: &str, _: u64| panic!("policy rejection cannot consume a nonce"),
-        &|_| false
-    )
-    .is_err());
+    assert!(
+        verify_request_with_policy(
+            &request,
+            &NeverVerify,
+            &expectations(),
+            &|_: &str, _: u64| panic!("policy rejection cannot consume a nonce"),
+            &|_| false
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -609,12 +611,14 @@ fn mandatory_parameters_are_checked_before_the_additional_policy() {
         headers: &headers,
         body: None,
     };
-    assert!(verify_request_with_policy(
-        &request,
-        &signer().verifier(),
-        &expectations(),
-        &|_: &str, _: u64| panic!("invalid tag cannot consume nonce"),
-        &|_| panic!("mandatory parameter checks precede the profile policy")
-    )
-    .is_err());
+    assert!(
+        verify_request_with_policy(
+            &request,
+            &signer().verifier(),
+            &expectations(),
+            &|_: &str, _: u64| panic!("invalid tag cannot consume nonce"),
+            &|_| panic!("mandatory parameter checks precede the profile policy")
+        )
+        .is_err()
+    );
 }

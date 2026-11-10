@@ -10,9 +10,9 @@
 //! cat request.json | cargo run -p gnap-crypto --example sign -- -
 //! ```
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use gnap_crypto::digest::{content_digest, verify_content_digest, DigestAlgorithm};
-use gnap_crypto::httpsig::{sign, verify, Component, Message, SignatureInput, Tag};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use gnap_crypto::digest::{DigestAlgorithm, content_digest, verify_content_digest};
+use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, sign, verify};
 use gnap_crypto::proof::Signer;
 use gnap_crypto::ps256::Ps256Signer;
 use gnap_types::unix_now;

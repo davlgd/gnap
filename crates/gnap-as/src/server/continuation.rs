@@ -1,8 +1,8 @@
 //! Grant continuation (§5): polling, modification, and revocation of a grant.
 
 use super::{
-    classify, error, gnap_token, method_not_allowed, misconfigured, no_content, presented_key,
-    require_json_content, storage_failure, supported_finish, AuthorizationServer,
+    AuthorizationServer, classify, error, gnap_token, method_not_allowed, misconfigured,
+    no_content, presented_key, require_json_content, storage_failure, supported_finish,
 };
 use crate::encoding::TokenEncoder;
 use crate::nonce::Nonces;
@@ -10,10 +10,10 @@ use crate::policy::{Decision, EvaluationContext, KeyResolver, Policy};
 use crate::storage::{GrantAggregate, GrantRecord, GrantSelector, GrantSnapshot, Storage};
 use gnap_core::{Event, State};
 use gnap_registry::{ErrorCode, KeyProofingMethod};
+use gnap_types::GnapError;
 use gnap_types::http::{HttpRequest, HttpResponse};
 use gnap_types::message::{Continue, ContinueRequest, GrantRequest, GrantResponse};
 use gnap_types::token::{BoundToken, TokenValue};
-use gnap_types::GnapError;
 use std::borrow::Cow;
 
 impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
@@ -101,7 +101,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                         "the continuation request is not a JSON object this server can \
                          read (RFC 9635 §5)",
                         now,
-                    )
+                    );
                 }
             }
         };
@@ -111,10 +111,9 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             .interact
             .as_ref()
             .and_then(|i| i.finish.as_ref())
+            && let Err(reason) = supported_finish(finish)
         {
-            if let Err(reason) = supported_finish(finish) {
-                return self.recover(record, ErrorCode::InvalidRequest, &reason, now);
-            }
+            return self.recover(record, ErrorCode::InvalidRequest, &reason, now);
         }
         if continuation
             .user
@@ -144,19 +143,19 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // to reach the continuation endpoint could claim the interaction had
         // finished.
         let returning = matches!(event, Event::ContinueWithInteractRef(_));
-        if let Event::ContinueWithInteractRef(presented) = &event {
-            if record.interact_ref.as_deref() != Some(presented.as_str()) {
-                // The grant survives: presenting a wrong reference is not a
-                // reason to lose a pending request. It survives with a new
-                // continuation token, which is what lets the client try again.
-                return self.recover(
-                    record,
-                    ErrorCode::InvalidInteraction,
-                    "the interaction reference is not the one issued for this grant \
+        if let Event::ContinueWithInteractRef(presented) = &event
+            && record.interact_ref.as_deref() != Some(presented.as_str())
+        {
+            // The grant survives: presenting a wrong reference is not a
+            // reason to lose a pending request. It survives with a new
+            // continuation token, which is what lets the client try again.
+            return self.recover(
+                record,
+                ErrorCode::InvalidInteraction,
+                "the interaction reference is not the one issued for this grant \
                      (RFC 9635 §4.2)",
-                    now,
-                );
-            }
+                now,
+            );
         }
 
         // gnap-core owns the guards: wait period, one-time references, the

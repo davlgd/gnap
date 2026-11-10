@@ -666,10 +666,10 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
         let response = self.round_trip(request)?;
         if response.status != 204 {
             let step = self.absorb(&response, now)?;
-            if let Step::Recoverable(response) = step {
-                if let Some(error) = response.error {
-                    return Err(ClientError::Server(error));
-                }
+            if let Step::Recoverable(response) = step
+                && let Some(error) = response.error
+            {
+                return Err(ClientError::Server(error));
             }
             return Err(ClientError::Protocol(
                 "grant revocation requires 204 No Content (RFC 9635 §5.4)".into(),

@@ -1,15 +1,16 @@
 use super::{
+    Callback, Inner, Snapshot, WORK_LIMIT,
     config::{self, Target},
     network::Network,
-    oracle, Callback, Inner, Snapshot, WORK_LIMIT,
+    oracle,
 };
-use gnap_client::{sign_request, ClientError, HttpRequest, HttpTransport, Session, Step};
-use gnap_crypto::{proof::Signer, Ps256Signer};
-use gnap_types::{token::TokenValue, GrantRequest};
-use serde_json::{json, Value};
+use gnap_client::{ClientError, HttpRequest, HttpTransport, Session, Step, sign_request};
+use gnap_crypto::{Ps256Signer, proof::Signer};
+use gnap_types::{GrantRequest, token::TokenValue};
+use serde_json::{Value, json};
 use std::{
     num::NonZeroU64,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 
@@ -65,11 +66,11 @@ pub(super) fn run(
             state.observation = crate::observation("live");
         }
     }));
-    if outcome.is_err() {
-        if let Ok(mut state) = snapshot.lock() {
-            state.status = "inconclusive";
-            state.redirect = None;
-        }
+    if outcome.is_err()
+        && let Ok(mut state) = snapshot.lock()
+    {
+        state.status = "inconclusive";
+        state.redirect = None;
     }
 }
 

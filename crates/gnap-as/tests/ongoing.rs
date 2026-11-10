@@ -5,13 +5,13 @@ use gnap_as::{
     GrantStore, KeyResolver, MemoryStorage, Nonces, Policy,
 };
 use gnap_client::{
-    sign_request, ClientError, HttpRequest, HttpResponse, HttpTransport, Session, Step,
+    ClientError, HttpRequest, HttpResponse, HttpTransport, Session, Step, sign_request,
 };
 use gnap_core::State;
 use gnap_crypto::{
     proof::Verifier,
     ps256::Ps256Signer,
-    verify::{verify_request, Expectations, SignedRequest},
+    verify::{Expectations, SignedRequest, verify_request},
 };
 use gnap_types::{
     access::AccessItem,
@@ -284,11 +284,13 @@ fn approved_poll_rotates_only_continuation_and_patch_replaces_the_old_tokens() {
     management_refused(&server, &old, 1_010);
     management_refused(&server, &sibling, 1_010);
     assert!(!rs_accepts(&server, &sibling.value, "read", 1_010));
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::TokenIdentifier(&[77]))
-        .unwrap()
-        .is_none());
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::TokenIdentifier(&[77]))
+            .unwrap()
+            .is_none()
+    );
     let current = server
         .storage()
         .lookup(GrantSelector::AccessToken(new.value.as_str()))
@@ -430,11 +432,13 @@ fn revoking_an_open_grant_removes_all_credentials_and_local_tokens() {
     management_refused(&server, &old, 1_005);
     management_refused(&server, &sibling, 1_005);
     assert!(!rs_accepts(&server, &sibling.value, "read", 1_005));
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::TokenIdentifier(&[77]))
-        .unwrap()
-        .is_none());
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::TokenIdentifier(&[77]))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         call(&server, "POST", CONTINUE, &continuation, None, 1_005).status,
         400
@@ -446,10 +450,12 @@ fn revoking_an_open_grant_removes_all_credentials_and_local_tokens() {
         .unwrap();
     assert!(revoked.aggregate.revoked);
     assert!(revoked.aggregate.tokens.is_empty());
-    assert!(server
-        .storage()
-        .compare_exchange(before.id, before.revision, before.aggregate)
-        .is_err());
+    assert!(
+        server
+            .storage()
+            .compare_exchange(before.id, before.revision, before.aggregate)
+            .is_err()
+    );
 }
 
 #[test]

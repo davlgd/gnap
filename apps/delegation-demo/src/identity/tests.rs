@@ -203,15 +203,17 @@ fn identity_release_requires_matching_consent_and_verified_consumer_context() {
             key: &wrong_key,
             ..identity.trust()
         };
-        assert!(wrong_key_trust
-            .verify_subject(
-                subject,
-                &identity.endpoint,
-                &identity.audience,
-                nonce,
-                now()
-            )
-            .is_err());
+        assert!(
+            wrong_key_trust
+                .verify_subject(
+                    subject,
+                    &identity.endpoint,
+                    &identity.audience,
+                    nonce,
+                    now()
+                )
+                .is_err()
+        );
         let wrong_issuer = Trust {
             issuer: "https://other.example",
             ..identity.trust()
@@ -248,9 +250,11 @@ fn identity_release_requires_matching_consent_and_verified_consumer_context() {
         assert!(!view.to_string().contains(&assertions[0].value));
         assert!(client.usable_tokens(now()).is_some());
     }
-    assert!(Identity::generate("http://127.0.0.1:8080", &app.signer)
-        .unwrap()
-        .is_none());
+    assert!(
+        Identity::generate("http://127.0.0.1:8080", &app.signer)
+            .unwrap()
+            .is_none()
+    );
     let unsupported: GrantRequest = serde_json::from_value(json!({"client":"test-client", "access_token":{"access":[FOLDER_READ]}, "subject":{"assertion_formats":["saml2"]}})).unwrap();
     assert!(matches!(policy.evaluate(&unsupported), Decision::Deny(_)));
 }

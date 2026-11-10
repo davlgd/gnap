@@ -1,6 +1,6 @@
 //! Cryptographic identity checks use the session's context, not JWT-supplied trust.
 use super::*;
-use gnap_subject::{issue, AssertionError, Issuance, Trust};
+use gnap_subject::{AssertionError, Issuance, Trust, issue};
 use serde_json::json;
 
 const ISSUER: &str = "https://identity.example";

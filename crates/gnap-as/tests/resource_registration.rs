@@ -16,7 +16,7 @@ use gnap_types::{
     message::GrantRequest,
     rs::{ResourceRegistrationResponse, ResourceServer},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{cell::Cell, sync::OnceLock};
 
 const GRANT: &str = "https://as.example/gnap";
@@ -201,17 +201,19 @@ fn registration_is_opt_in_and_discovery_never_advertises_unserved_capabilities()
         "http://as.example/resources",
         "https://as.example/resources#fragment",
     ] {
-        assert!(fixture
-            .server
-            .resource_server_api(&Keys, &NoIntrospection, &fixture.nonces, INTROSPECT)
-            .unwrap()
-            .with_resource_registration(
-                endpoint,
-                &fixture.policy,
-                &fixture.store,
-                &fixture.references
-            )
-            .is_err());
+        assert!(
+            fixture
+                .server
+                .resource_server_api(&Keys, &NoIntrospection, &fixture.nonces, INTROSPECT)
+                .unwrap()
+                .with_resource_registration(
+                    endpoint,
+                    &fixture.policy,
+                    &fixture.store,
+                    &fixture.references
+                )
+                .is_err()
+        );
     }
 }
 
@@ -389,11 +391,13 @@ impl ResourceSetStore for FailingStore {
 fn unavailable(response: HttpResponse) {
     assert_eq!(response.status, 503);
     assert!(response.has_no_store());
-    assert!(response
-        .headers
-        .iter()
-        .any(|(name, value)| name.eq_ignore_ascii_case("content-type")
-            && value == "text/plain; charset=utf-8"));
+    assert!(
+        response
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("content-type")
+                && value == "text/plain; charset=utf-8")
+    );
     assert!(serde_json::from_slice::<Value>(&response.body).is_err());
     assert_eq!(
         String::from_utf8(response.body).unwrap(),

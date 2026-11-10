@@ -184,10 +184,12 @@ async fn real_http_introspection_authenticates_rs_and_protects_resource_lifecycl
             ))
             .unwrap();
         assert_eq!(metadata.status, 200);
-        assert!(metadata
-            .headers
-            .iter()
-            .any(|(name, value)| name == "cache-control" && value == "no-store"));
+        assert!(
+            metadata
+                .headers
+                .iter()
+                .any(|(name, value)| name == "cache-control" && value == "no-store")
+        );
         let response = http
             .send(introspection_request(
                 &app,
@@ -228,12 +230,13 @@ async fn real_http_introspection_authenticates_rs_and_protects_resource_lifecycl
         )
         .unwrap();
         assert!(returned.verify(challenge, &proof).is_ok());
-        assert!(app
-            .resource_client
-            .signer
-            .verifier()
-            .verify(challenge, &proof)
-            .is_err());
+        assert!(
+            app.resource_client
+                .signer
+                .verifier()
+                .verify(challenge, &proof)
+                .is_err()
+        );
         assert!(!String::from_utf8_lossy(&response.body).contains("secret-access"));
         let signed = introspection_request(&app, "secret-access", &app.resource_client.signer);
         assert_eq!(http.send(signed.clone()).unwrap().status, 200);
@@ -494,19 +497,17 @@ fn policy_refuses_unknown_audience_or_rights_and_clock_rollback() {
     for rollback_at in [1, 2] {
         let time = now();
         let calls = std::cell::Cell::new(0);
-        assert!(read_resource_with_clock(
-            &app,
-            &resource_request(&app.origin, "access", &app.signer).unwrap(),
-            || {
-                let index = calls.get();
-                calls.set(index + 1);
-                if index >= rollback_at {
-                    time - 1
-                } else {
-                    time
+        assert!(
+            read_resource_with_clock(
+                &app,
+                &resource_request(&app.origin, "access", &app.signer).unwrap(),
+                || {
+                    let index = calls.get();
+                    calls.set(index + 1);
+                    if index >= rollback_at { time - 1 } else { time }
                 }
-            }
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 }

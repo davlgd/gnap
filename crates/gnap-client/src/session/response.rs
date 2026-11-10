@@ -4,7 +4,7 @@ use super::interaction::InteractionWindow;
 use super::{Session, Step};
 use crate::error::ClientError;
 use crate::transport::{HttpResponse, HttpTransport};
-use gnap_core::{check_response, Event, State};
+use gnap_core::{Event, State, check_response};
 use gnap_crypto::proof::Signer;
 use gnap_types::message::GrantResponse;
 use gnap_types::token::{AccessTokenRequest, Cardinality};

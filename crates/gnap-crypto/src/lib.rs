@@ -25,27 +25,27 @@ mod rsa_key;
 pub mod verify;
 
 pub use digest::{
-    content_digest, content_digest_algorithms, verify_content_digest, DigestAlgorithm,
+    DigestAlgorithm, content_digest, content_digest_algorithms, verify_content_digest,
 };
 pub use ed25519::{Ed25519Signer, Ed25519Verifier};
 pub use es256::{Es256Signer, Es256Verifier};
 pub use hash::{
-    interaction_hash, interaction_hash_named, verify_interaction_hash, HashError, HashMethod,
-    InteractionHashInput,
+    HashError, HashMethod, InteractionHashInput, interaction_hash, interaction_hash_named,
+    verify_interaction_hash,
 };
-pub use httpsig::{parse_signature_params, parse_signatures, LabelledSignature, ReceivedParams};
-pub use jwk::{PublicKey, HTTPSIG_ALGORITHMS, JWS_ALGORITHMS};
+pub use httpsig::{LabelledSignature, ReceivedParams, parse_signature_params, parse_signatures};
+pub use jwk::{HTTPSIG_ALGORITHMS, JWS_ALGORITHMS, PublicKey};
 pub use jws::{
+    AcceptedJws, JwsKey, JwsMethod, JwsParams, JwsProof, JwsReplayMemory, ReplayCache, ReplayId,
     sign_jws, sign_jws_rotation, unverified_attached_payload, unverified_rotation_content,
-    verify_jws_request, verify_jws_rotation, AcceptedJws, JwsKey, JwsMethod, JwsParams, JwsProof,
-    JwsReplayMemory, ReplayCache, ReplayId,
+    verify_jws_request, verify_jws_rotation,
 };
 pub use proof::{JwkSigner, ProofError, Signer, Verifier};
 pub use ps256::{Ps256Signer, Ps256Verifier};
-pub use rotation::{verify_key_rotation, AcceptedRotation, RotationNonceMemory, RotationProof};
+pub use rotation::{AcceptedRotation, RotationNonceMemory, RotationProof, verify_key_rotation};
 pub use rs256::{Rs256Signer, Rs256Verifier};
 pub use rsa_key::{MAX_MODULUS_BITS, MIN_MODULUS_BITS};
 pub use verify::{
-    verify_request, verify_request_with_policy, Accepted, Expectations, NonceMemory, SignedRequest,
-    VerifyError,
+    Accepted, Expectations, NonceMemory, SignedRequest, VerifyError, verify_request,
+    verify_request_with_policy,
 };

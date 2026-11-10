@@ -725,14 +725,16 @@ async fn browser_flow_selects_tokens_by_label_over_http() {
         .await
         .unwrap();
     assert_eq!(view["last_resource_status"], 401);
-    assert!(view["events"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .contains("retired reports token was rejected at /resource/reports"));
+    assert!(
+        view["events"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("retired reports token was rejected at /resource/reports")
+    );
     let view = dispatch(&app, lot.clone(), "read-reports".into())
         .await
         .unwrap();

@@ -62,13 +62,13 @@ impl ClientDisplay {
     /// Fails on the first URI that is not an absolute URI, naming the field.
     pub fn validate(&self) -> Result<(), DisplayError> {
         for (field, value) in [("uri", &self.uri), ("logo_uri", &self.logo_uri)] {
-            if let Some(value) = value {
-                if !crate::uri::is_absolute(value) {
-                    return Err(DisplayError::NotAbsolute {
-                        field,
-                        uri: value.clone(),
-                    });
-                }
+            if let Some(value) = value
+                && !crate::uri::is_absolute(value)
+            {
+                return Err(DisplayError::NotAbsolute {
+                    field,
+                    uri: value.clone(),
+                });
             }
         }
         Ok(())

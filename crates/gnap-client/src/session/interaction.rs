@@ -4,7 +4,7 @@ use super::Session;
 use crate::error::ClientError;
 use crate::transport::HttpTransport;
 use gnap_core::State;
-use gnap_crypto::hash::{verify_interaction_hash, HashMethod, InteractionHashInput};
+use gnap_crypto::hash::{HashMethod, InteractionHashInput, verify_interaction_hash};
 use gnap_crypto::proof::Signer;
 use gnap_types::interact::InteractCallback;
 use gnap_types::message::GrantResponse;
@@ -63,22 +63,22 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
             self.protocol.hash_method = None;
         }
         // The nonce the client chose feeds the interaction hash later (§4.2.3).
-        if let Some(i) = interaction {
-            if let Some(f) = &i.finish {
-                // §2.5.2 — the callback is validated against this nonce and
-                // this algorithm, so both have to be usable now.
-                f.validate()
-                    .map_err(|e| ClientError::Usage(e.to_string()))?;
-                let name = f.effective_hash_method();
-                let method = HashMethod::from_name(name).ok_or_else(|| {
-                    ClientError::Usage(format!(
-                        "interact.finish.hash_method `{name}` is not one this client can \
+        if let Some(i) = interaction
+            && let Some(f) = &i.finish
+        {
+            // §2.5.2 — the callback is validated against this nonce and
+            // this algorithm, so both have to be usable now.
+            f.validate()
+                .map_err(|e| ClientError::Usage(e.to_string()))?;
+            let name = f.effective_hash_method();
+            let method = HashMethod::from_name(name).ok_or_else(|| {
+                ClientError::Usage(format!(
+                    "interact.finish.hash_method `{name}` is not one this client can \
                          compute, so it could not validate the callback (RFC 9635 §4.2.3)"
-                    ))
-                })?;
-                self.protocol.client_nonce = Some(f.nonce.clone());
-                self.protocol.hash_method = Some(method);
-            }
+                ))
+            })?;
+            self.protocol.client_nonce = Some(f.nonce.clone());
+            self.protocol.hash_method = Some(method);
         }
         if let Some(i) = interaction {
             self.protocol.offered_modes = i
@@ -89,19 +89,18 @@ impl<T: HttpTransport, S: Signer> Session<T, S> {
 
             // §2.5-MN01 — declaring a mode this client cannot drive strands the
             // end user in front of something nobody will finish.
-            if let Some(supported) = &self.supported_modes {
-                if let Some(unsupported) = self
+            if let Some(supported) = &self.supported_modes
+                && let Some(unsupported) = self
                     .protocol
                     .offered_modes
                     .iter()
                     .find(|m| !supported.contains(m))
-                {
-                    return Err(ClientError::Usage(format!(
-                        "the request declares the `{unsupported}` interaction mode, which \
+            {
+                return Err(ClientError::Usage(format!(
+                    "the request declares the `{unsupported}` interaction mode, which \
                          this client does not support; a client instance MUST NOT declare \
                          an interaction mode it does not support (RFC 9635 §2.5)"
-                    )));
-                }
+                )));
             }
         }
 

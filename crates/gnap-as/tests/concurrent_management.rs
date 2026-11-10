@@ -5,12 +5,13 @@ use gnap_as::{
     GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore, OsNonces, Policy, Revision,
     StoreError, TokenRecord,
 };
-use gnap_client::{sign_request, HttpRequest};
+use gnap_client::{HttpRequest, sign_request};
 use gnap_crypto::{proof::Verifier, ps256::Ps256Signer};
 use gnap_types::{client::Client, message::GrantRequest, token::AccessToken, token::TokenValue};
 use std::sync::{
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
-    mpsc, Arc, Mutex,
+    mpsc,
 };
 
 /// A one-way gate: both the worker and the controller have a finite wait.
@@ -41,6 +42,15 @@ impl Gate {
 const NOW: u64 = 1_700_000_000;
 const HANDLE: &str = "original";
 const URL: &str = "https://as.example/token/original";
+
+fn endpoints() -> Endpoints {
+    Endpoints {
+        grant: "https://as.example/gnap".into(),
+        continuation: "https://as.example/continue".into(),
+        interaction: "https://as.example/interact".into(),
+        token_management: "https://as.example/token".into(),
+    }
+}
 
 fn signer() -> Ps256Signer {
     Ps256Signer::from_pkcs1_pem(include_str!("fixtures/rfc9421-b12.pkcs1.pem"), "client-key")
@@ -154,28 +164,19 @@ fn revocation_wins(allow_rotation: bool) {
         Keys,
         storage.clone(),
         OsNonces,
-        Endpoints {
-            grant: "https://as.example/gnap".into(),
-            continuation: "https://as.example/continue".into(),
-            interaction: "https://as.example/interact".into(),
-            token_management: "https://as.example/token".into(),
-        },
+        endpoints(),
     ));
     let management = TokenValue::new("management").unwrap();
-    let deletion = sign_request(
-        HttpRequest::new("DELETE", URL),
-        &signer(),
-        Some(&management),
-        NOW,
-    )
-    .unwrap();
-    let rotation = sign_request(
-        HttpRequest::new("POST", URL),
-        &signer(),
-        Some(&management),
-        NOW,
-    )
-    .unwrap();
+    let managed = |method| {
+        sign_request(
+            HttpRequest::new(method, URL),
+            &signer(),
+            Some(&management),
+            NOW,
+        )
+        .unwrap()
+    };
+    let (deletion, rotation) = (managed("DELETE"), managed("POST"));
     let deleting_server = server.clone();
     let deleting = std::thread::spawn(move || deleting_server.handle(&deletion, NOW));
     captured.wait(); // DELETE has the authenticatable record, but has not acted.
@@ -200,14 +201,18 @@ fn revocation_wins(allow_rotation: bool) {
         current.aggregate.tokens.is_empty(),
         "rotation published or restored a token after DELETE returned 204"
     );
-    assert!(storage
-        .lookup(GrantSelector::Management(HANDLE))
-        .unwrap()
-        .is_none());
-    assert!(storage
-        .lookup(GrantSelector::AccessToken("original-access"))
-        .unwrap()
-        .is_none());
+    assert!(
+        storage
+            .lookup(GrantSelector::Management(HANDLE))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .lookup(GrantSelector::AccessToken("original-access"))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -284,12 +289,7 @@ fn ongoing_race(winning_method: &str) {
         Keys,
         storage.clone(),
         OsNonces,
-        Endpoints {
-            grant: "https://as.example/gnap".into(),
-            continuation: "https://as.example/continue".into(),
-            interaction: "https://as.example/interact".into(),
-            token_management: "https://as.example/token".into(),
-        },
+        endpoints(),
     ));
     let initial = sign_request(
         HttpRequest::new("POST", "https://as.example/gnap").json_body(
@@ -345,10 +345,12 @@ fn ongoing_race(winning_method: &str) {
         .unwrap()
         .unwrap();
     assert_eq!(current.revision, Revision(1));
-    assert!(storage
-        .lookup(GrantSelector::AccessToken(token.value.as_str()))
-        .unwrap()
-        .is_none());
+    assert!(
+        storage
+            .lookup(GrantSelector::AccessToken(token.value.as_str()))
+            .unwrap()
+            .is_none()
+    );
     if winning_method == "DELETE" {
         assert!(current.aggregate.revoked);
         assert!(current.aggregate.tokens.is_empty());

@@ -2,7 +2,7 @@
 
 use super::*;
 use gnap_as::{GrantAggregate, GrantId, NonceStore, Revision, RotationNonceStore, StoreError};
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(10);

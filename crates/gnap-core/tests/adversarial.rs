@@ -3,7 +3,7 @@
 //! These exercise the MUST NOT requirements that do not need a network: a
 //! client checking an AS response, and an AS checking a client's calls.
 
-use gnap_core::{check_response, Event, Grant, State, Violation};
+use gnap_core::{Event, Grant, State, Violation, check_response};
 use gnap_types::message::GrantResponse;
 
 /// GNAP-9635-§5.1-MN07 — an AS handing out a token while the grant is pending.

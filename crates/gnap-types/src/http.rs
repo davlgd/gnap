@@ -62,7 +62,7 @@ impl HttpRequest {
     /// A signature that covers a field covers all of its instances, joined
     /// (RFC 9421 §2.1); reading only the first would verify a different
     /// message from the one that was sent.
-    pub fn header_values(&self, name: &str) -> impl Iterator<Item = &str> {
+    pub fn header_values(&self, name: &str) -> impl Iterator<Item = &str> + use<'_> {
         header_values(&self.headers, name)
     }
 
@@ -93,7 +93,7 @@ impl HttpRequest {
 fn header_values<'a>(
     headers: &'a [(String, String)],
     name: &str,
-) -> impl Iterator<Item = &'a str> + 'a {
+) -> impl Iterator<Item = &'a str> + use<'a> {
     let name = name.to_ascii_lowercase();
     headers
         .iter()
@@ -141,7 +141,7 @@ impl HttpResponse {
 
     /// Every value of a header field, in message order, matched
     /// case-insensitively.
-    pub fn header_values(&self, name: &str) -> impl Iterator<Item = &str> {
+    pub fn header_values(&self, name: &str) -> impl Iterator<Item = &str> + use<'_> {
         header_values(&self.headers, name)
     }
 

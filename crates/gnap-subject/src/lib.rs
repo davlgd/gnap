@@ -4,13 +4,13 @@
 //! validator. The caller supplies the trusted issuer key, intended audience and
 //! expected session nonce. No received key or URL can initiate key resolution.
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use gnap_crypto::{Ps256Signer, Ps256Verifier, Signer, Verifier};
 use gnap_registry::AssertionFormat;
 use gnap_types::user::Assertion;
 use serde::de::{Error as _, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::fmt;
 
 /// Maximum compact assertion size, checked before decoding or verification.

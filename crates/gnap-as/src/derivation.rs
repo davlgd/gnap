@@ -20,7 +20,7 @@ pub(crate) fn management_binding(
 ) -> bool {
     use gnap_crypto::{
         proof::{ProofError, Verifier},
-        verify::{verify_request_with_policy, Expectations, SignedRequest},
+        verify::{Expectations, SignedRequest, verify_request_with_policy},
     };
     struct Both<'a>(&'a dyn Verifier, &'a dyn Verifier);
     impl Verifier for Both<'_> {

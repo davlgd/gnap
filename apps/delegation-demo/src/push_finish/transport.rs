@@ -174,14 +174,14 @@ async fn attempt(target: Target, body: Vec<u8>) -> Delivery {
 mod tests {
     use super::*;
     use axum::{
+        Router,
         body::Bytes,
         http::{HeaderMap, StatusCode},
         routing::post,
-        Router,
     };
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     const SLOT: &str = "abcdefghijklmnopqrstuv";

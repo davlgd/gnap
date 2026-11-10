@@ -1,10 +1,10 @@
 //! Synthetic offline oracle tests, not downstream-token execution evidence.
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use gnap_conformance_web::{analyze, app, Report, Status, MAX_MESSAGE, MAX_UPLOAD};
-use serde_json::{json, Value};
+use gnap_conformance_web::{MAX_MESSAGE, MAX_UPLOAD, Report, Status, analyze, app};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const REQUEST: &str = "derivation_request";
@@ -256,13 +256,14 @@ fn response_value_is_required_but_encoding_is_explicitly_not_checked() {
             status(&r, "derivation-token-value-encoding"),
             Status::NotTested
         );
-        assert!(r
-            .checks
-            .iter()
-            .find(|c| c.id == "derivation-response-value")
-            .unwrap()
-            .detail
-            .contains("string shape ONLY"));
+        assert!(
+            r.checks
+                .iter()
+                .find(|c| c.id == "derivation-response-value")
+                .unwrap()
+                .detail
+                .contains("string shape ONLY")
+        );
     }
 }
 
@@ -394,11 +395,12 @@ fn ambiguity_limits_and_context_do_not_smuggle_evidence_or_echo_values() {
         ] {
             let r = raw(kind, body);
             assert_eq!(status(&r, "rs-json-unambiguous"), Status::NotTested);
-            assert!(!r
-                .checks
-                .iter()
-                .any(|c| c.id.starts_with("derivation-request-")
-                    || c.id.starts_with("derivation-response-")));
+            assert!(
+                !r.checks
+                    .iter()
+                    .any(|c| c.id.starts_with("derivation-request-")
+                        || c.id.starts_with("derivation-response-"))
+            );
             inconclusive(&r);
         }
         for body in [
@@ -421,17 +423,21 @@ fn ambiguity_limits_and_context_do_not_smuggle_evidence_or_echo_values() {
             json!({"http_status":200}),
             json!({"token_binding":"bound"}),
         ] {
-            assert!(analyze(
-                serde_json::from_value(json!({"kind":kind,"body":"{}","rs_context":context}))
+            assert!(
+                analyze(
+                    serde_json::from_value(json!({"kind":kind,"body":"{}","rs_context":context}))
+                        .unwrap()
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            analyze(
+                serde_json::from_value(json!({"kind":kind,"body":"x".repeat(MAX_MESSAGE + 1)}))
                     .unwrap()
             )
-            .is_err());
-        }
-        assert!(analyze(
-            serde_json::from_value(json!({"kind":kind,"body":"x".repeat(MAX_MESSAGE + 1)}))
-                .unwrap()
-        )
-        .is_err());
+            .is_err()
+        );
     }
 }
 

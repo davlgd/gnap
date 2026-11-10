@@ -249,9 +249,11 @@ fn issuance_and_rotation_encode_only_approved_context_and_store_native_identifie
             .identifier,
         Some(vec![1])
     );
-    assert!(!serde_json::to_string(response.response())
-        .unwrap()
-        .contains("identifier"));
+    assert!(
+        !serde_json::to_string(response.response())
+            .unwrap()
+            .contains("identifier")
+    );
     transport.1.set(1_010);
     let rotated = client.rotate_token(None, 1_010).unwrap();
     assert_eq!(rotated.value.as_str(), "encoded-rotated");
@@ -541,11 +543,13 @@ fn open_issuance_reserves_the_continuation_before_calling_the_encoder() {
         let server = open_server(&values, vec![], &seen);
         assert_eq!(server.handle(&grant_request(1_000), 1_000).status, 500);
         assert!(seen.borrow().is_empty());
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::Management("handle"))
-            .unwrap()
-            .is_none());
+        assert!(
+            server
+                .storage()
+                .lookup(GrantSelector::Management("handle"))
+                .unwrap()
+                .is_none()
+        );
         assert!(server.storage().is_empty().unwrap());
     }
 }
@@ -562,11 +566,13 @@ fn encoded_values_cannot_repeat_new_continuation_or_management_credentials() {
         );
         assert_eq!(server.handle(&grant_request(1_000), 1_000).status, 500);
         assert_eq!(seen.borrow().len(), 1);
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::Management("handle"))
-            .unwrap()
-            .is_none());
+        assert!(
+            server
+                .storage()
+                .lookup(GrantSelector::Management("handle"))
+                .unwrap()
+                .is_none()
+        );
         assert!(server.storage().is_empty().unwrap());
     }
 }
@@ -680,6 +686,7 @@ fn a_failed_ongoing_issuance_preserves_the_snapshot_and_allows_a_fresh_retry() {
             .unwrap()
         };
         assert_eq!(server.handle(&patch(1_005), 1_005).status, 500);
+        let absent = |selector| server.storage().lookup(selector).unwrap().is_none();
         let after = server
             .storage()
             .lookup(GrantSelector::Id(before.id))
@@ -698,37 +705,13 @@ fn a_failed_ongoing_issuance_preserves_the_snapshot_and_allows_a_fresh_retry() {
                 before.revision
             );
         }
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::AccessToken("new-value"))
-            .unwrap()
-            .is_none());
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::Management("handle2"))
-            .unwrap()
-            .is_none());
+        assert!(absent(GrantSelector::AccessToken("new-value")));
+        assert!(absent(GrantSelector::Management("handle2")));
         assert_eq!(server.handle(&patch(1_006), 1_006).status, 200);
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::TokenIdentifier(&[1]))
-            .unwrap()
-            .is_none());
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::TokenIdentifier(&[2]))
-            .unwrap()
-            .is_none());
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::AccessToken("value1"))
-            .unwrap()
-            .is_none());
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::AccessToken("value3"))
-            .unwrap()
-            .is_some());
+        assert!(absent(GrantSelector::TokenIdentifier(&[1])));
+        assert!(absent(GrantSelector::TokenIdentifier(&[2])));
+        assert!(absent(GrantSelector::AccessToken("value1")));
+        assert!(!absent(GrantSelector::AccessToken("value3")));
     }
 }
 
@@ -829,16 +812,20 @@ fn a_repeated_poll_credential_is_not_published_as_a_rotation() {
     assert_snapshot_unchanged(&before, &after);
     assert_eq!(server.handle(&poll(1_006), 1_006).status, 200);
     assert_eq!(seen.borrow().len(), 1);
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::Continuation("continue1"))
-        .unwrap()
-        .is_none());
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::Continuation("continue2"))
-        .unwrap()
-        .is_some());
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::Continuation("continue1"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::Continuation("continue2"))
+            .unwrap()
+            .is_some()
+    );
 }
 
 struct OpenDirect<'a> {

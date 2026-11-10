@@ -1,5 +1,5 @@
 use super::*;
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use tower::ServiceExt;
 
 fn code_request() -> GrantRequest {
@@ -158,10 +158,12 @@ fn completed_poll_waits_for_its_choice_instead_of_observing_a_missing_decision()
     });
     assert!(poll.recv_timeout(Duration::from_millis(100)).is_err());
     proceed.send(()).unwrap();
-    assert!(completion
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap()
-        .is_ok());
+    assert!(
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_ok()
+    );
     let response = poll.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(response.status, 200);
     let response: Value = serde_json::from_slice(&response.body).unwrap();
@@ -253,20 +255,24 @@ fn competing_poll_and_completion_publish_only_the_winning_snapshot() {
                 200
             );
             resume_owner.send(()).unwrap();
-            assert!(owner_result
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .is_err());
+            assert!(
+                owner_result
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .is_err()
+            );
             assert!(app.decisions.lock().unwrap().grants.is_empty());
             assert!(app.server.resolve_user_code(&code, now()).is_ok());
             // Explicit retry uses the same displayed request, not a new grant.
             assert!(complete(&app, retry_pending, multiple::Choice::All).is_ok());
         } else {
             resume_owner.send(()).unwrap();
-            assert!(owner_result
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .is_ok());
+            assert!(
+                owner_result
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .is_ok()
+            );
             resume_poll.send(()).unwrap();
             assert_eq!(
                 poll_result

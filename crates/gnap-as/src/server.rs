@@ -33,10 +33,10 @@ use crate::storage::{
     TokenRecord, UserCodeStore,
 };
 use gnap_core::State;
-use gnap_crypto::jws::{verify_jws_request, JwsKey, JwsMethod, ReplayId};
-use gnap_crypto::proof::Verifier;
-use gnap_crypto::verify::{verify_request, Expectations, SignedRequest};
 use gnap_crypto::PublicKey;
+use gnap_crypto::jws::{JwsKey, JwsMethod, ReplayId, verify_jws_request};
+use gnap_crypto::proof::Verifier;
+use gnap_crypto::verify::{Expectations, SignedRequest, verify_request};
 use gnap_registry::{ErrorCode, KeyProofingMethod};
 use gnap_types::http::{HttpRequest, HttpResponse};
 use gnap_types::key::KeyObject;

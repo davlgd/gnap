@@ -1,6 +1,6 @@
 //! Access-token encoding and lifetimes, at issuance and at rotation.
 
-use super::{credential_used, misconfigured, AuthorizationServer, PreparedToken};
+use super::{AuthorizationServer, PreparedToken, credential_used, misconfigured};
 use crate::encoding::{EncodedToken, TokenEncoder, TokenEncodingContext, TokenEncodingError};
 use crate::nonce::Nonces;
 use crate::policy::{KeyResolver, Policy};

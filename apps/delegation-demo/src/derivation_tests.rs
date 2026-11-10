@@ -440,11 +440,7 @@ fn downstream_read_uses_the_injected_clock_at_parent_expiration() {
     let result = read_resource_with_clock(&app, &request, || {
         let call = calls.get();
         calls.set(call + 1);
-        if call < 2 {
-            time
-        } else {
-            expires
-        }
+        if call < 2 { time } else { expires }
     });
     assert!(matches!(result, Err(ResourceError::Denied)));
     assert_eq!(

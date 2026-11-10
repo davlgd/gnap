@@ -1,20 +1,20 @@
 //! AS policy, trusted encoder, and one authoritative live-token store.
 use crate::{
+    MAX_RECORDS, TTL,
     http::{self, Origin},
     resource_check::CheckService,
-    MAX_RECORDS, TTL,
 };
 use axum::{
+    Router,
     extract::{Request, State},
     routing::any,
-    Router,
 };
 use biscuit_auth::{KeyPair, PublicKey};
 use gnap_as::{
-    nonce::OsNonces, AuthorizationServer, Decision, EncodedToken, Endpoints, GrantAggregate,
-    GrantId, GrantSelector, GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore,
-    Policy, Revision, RotationNonceStore, StoreError, TokenEncoder, TokenEncodingContext,
-    TokenEncodingError, TokenRecord,
+    AuthorizationServer, Decision, EncodedToken, Endpoints, GrantAggregate, GrantId, GrantSelector,
+    GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore, Policy, Revision,
+    RotationNonceStore, StoreError, TokenEncoder, TokenEncodingContext, TokenEncodingError,
+    TokenRecord, nonce::OsNonces,
 };
 use gnap_biscuit::{FileAction, FileRight, Issuer, VerifiedToken};
 use gnap_crypto::{Ps256Verifier, Verifier};
@@ -403,13 +403,15 @@ mod tests {
     fn unavailable_storage_is_not_reported_as_an_unknown_authority() {
         let store = Store::default();
         std::thread::scope(|scope| {
-            assert!(scope
-                .spawn(|| {
-                    let _lock = store.state.lock().unwrap();
-                    panic!("injected storage failure");
-                })
-                .join()
-                .is_err());
+            assert!(
+                scope
+                    .spawn(|| {
+                        let _lock = store.state.lock().unwrap();
+                        panic!("injected storage failure");
+                    })
+                    .join()
+                    .is_err()
+            );
         });
         assert_eq!(
             store

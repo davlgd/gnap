@@ -1,16 +1,16 @@
 //! Real root chains and GNAP HTTP message signatures, including hostile inputs.
 
 use base64::{
-    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
     Engine,
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
 use biscuit_auth::{Biscuit, BlockBuilder, KeyPair, PublicKey};
 use gnap_biscuit::{
-    inspect, Error, FileAction, FileRight, Issuer, LiveDecision, RequestContext, VerifiedToken,
+    Error, FileAction, FileRight, Issuer, LiveDecision, RequestContext, VerifiedToken, inspect,
 };
 use gnap_crypto::{
-    httpsig::{sign, Component, Message, SignatureInput, Tag},
     Ps256Signer, SignedRequest, Signer,
+    httpsig::{Component, Message, SignatureInput, Tag, sign},
 };
 use gnap_types::{access::AccessItem, token::TokenValue};
 use prost::Message as _;

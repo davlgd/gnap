@@ -1,19 +1,18 @@
 use std::collections::{BTreeMap, HashSet};
 
 use base64::{
-    alphabet,
+    Engine, alphabet,
     engine::{
-        general_purpose::{GeneralPurpose, GeneralPurposeConfig},
         DecodePaddingMode,
+        general_purpose::{GeneralPurpose, GeneralPurposeConfig},
     },
-    Engine,
 };
 use biscuit_auth::{datalog::SymbolTable, format::schema};
 use gnap_types::token::TokenValue;
 use prost::Message;
 use serde_json::{Map, Value};
 
-use crate::{rights::validate_uri, Error, FileAction, FileRight, PROFILE};
+use crate::{Error, FileAction, FileRight, PROFILE, rights::validate_uri};
 
 const MAX_BYTES: usize = 16 * 1024;
 const MAX_BLOCKS: usize = 16;

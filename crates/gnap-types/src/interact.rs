@@ -329,7 +329,7 @@ fn percent_decode(value: &str) -> Result<String, CallbackError> {
                     _ => {
                         return Err(malformed(
                             "a `%` must be followed by two hexadecimal digits (RFC 3986 §2.1)",
-                        ))
+                        ));
                     }
                 }
             }

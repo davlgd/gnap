@@ -6,14 +6,14 @@
 //! without assigning precedence when several conditions apply to one request.
 
 use super::{
-    check_presented_key, error, misconfigured, require_json_content, signed_request,
-    AuthorizationServer, BothKeys, GrantSnapshot, HttpRequest, HttpResponse, KeyResolver, Nonces,
-    Policy, Storage, TokenEncoder, MAX_CLOCK_SKEW,
+    AuthorizationServer, BothKeys, GrantSnapshot, HttpRequest, HttpResponse, KeyResolver,
+    MAX_CLOCK_SKEW, Nonces, Policy, Storage, TokenEncoder, check_presented_key, error,
+    misconfigured, require_json_content, signed_request,
 };
-use crate::policy::parameterless_proof;
 use crate::ResolvedTokenKey;
-use gnap_crypto::jws::{unverified_rotation_content, verify_jws_rotation, JwsMethod, ReplayId};
-use gnap_crypto::{verify_key_rotation, Expectations, PublicKey, RotationProof, Verifier as _};
+use crate::policy::parameterless_proof;
+use gnap_crypto::jws::{JwsMethod, ReplayId, unverified_rotation_content, verify_jws_rotation};
+use gnap_crypto::{Expectations, PublicKey, RotationProof, Verifier as _, verify_key_rotation};
 use gnap_registry::{ErrorCode, KeyProofingMethod};
 use gnap_types::key::{Key, KeyObject, Proof};
 
@@ -246,12 +246,11 @@ fn key_in(content: &[u8], request: &HttpRequest) -> Result<Key, HttpResponse> {
             .as_ref()
             .filter(|_| object.proof.method() == &KeyProofingMethod::Httpsig)
             .filter(|jwk| gnap_crypto::PublicKey::is_builtin_for_httpsig(jwk))
+            && gnap_crypto::PublicKey::for_httpsig(jwk).is_err()
         {
-            if gnap_crypto::PublicKey::for_httpsig(jwk).is_err() {
-                return Err(invalid_rotation(
-                    "the requested public key cannot be used with httpsig",
-                ));
-            }
+            return Err(invalid_rotation(
+                "the requested public key cannot be used with httpsig",
+            ));
         }
     } else if key.as_reference().is_none_or(str::is_empty) {
         return Err(invalid_rotation("the requested key reference is empty"));

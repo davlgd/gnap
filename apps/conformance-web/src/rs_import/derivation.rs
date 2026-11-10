@@ -1,6 +1,6 @@
 //! Selected grant-message JSON assertions for AS-mediated derivation, not an
 //! opaque-token, single-hop or non-interactive deployment profile.
-use super::{access_shape, add, key_shape, strings, Check, Map, Value};
+use super::{Check, Map, Value, access_shape, add, key_shape, strings};
 use std::collections::HashSet;
 
 pub(super) const RFC: &str = "https://www.rfc-editor.org/rfc/rfc9767.html#section-4";

@@ -5,7 +5,7 @@ use gnap_as::{
     GrantSnapshot, GrantStore, KeyResolver, MemoryStorage, NonceStore, OsNonces, Policy, Revision,
     StoreError,
 };
-use gnap_client::{sign_request, HttpRequest};
+use gnap_client::{HttpRequest, sign_request};
 use gnap_crypto::{proof::Verifier, ps256::Ps256Signer};
 use gnap_types::{client::Client, message::GrantRequest, message::GrantResponse};
 use std::cell::Cell;

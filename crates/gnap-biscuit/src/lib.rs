@@ -11,13 +11,13 @@ mod format;
 mod rights;
 
 use biscuit_auth::{
-    builder::{fact, int, string},
     AuthorizerBuilder, Biscuit, BlockBuilder, KeyPair, PublicKey,
+    builder::{fact, int, string},
 };
-pub use format::{inspect, Inspection};
+pub use format::{Inspection, inspect};
 pub use gnap_crypto::ReceivedParams;
 use gnap_crypto::{
-    verify_request_with_policy, Expectations, NonceMemory, Ps256Verifier, SignedRequest,
+    Expectations, NonceMemory, Ps256Verifier, SignedRequest, verify_request_with_policy,
 };
 use gnap_types::token::TokenValue;
 pub use rights::{FileAction, FileRight};

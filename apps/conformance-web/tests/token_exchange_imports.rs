@@ -1,10 +1,10 @@
 //! Caller-declared pairs test label relationships, not authenticated exchanges.
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use gnap_conformance_web::{analyze, app, Report, Status, MAX_MESSAGE};
-use serde_json::{json, Value};
+use gnap_conformance_web::{MAX_MESSAGE, Report, Status, analyze, app};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 fn pair(request: Value, response: Value) -> Value {
@@ -222,11 +222,15 @@ fn envelope_constraints_and_reports_do_not_echo_submitted_values() {
             .extend(extra.as_object().unwrap().clone());
         assert!(analyze(serde_json::from_value(envelope).unwrap()).is_err());
     }
-    assert!(analyze(
-        serde_json::from_value(json!({"kind":"token_exchange","body":" ".repeat(MAX_MESSAGE+1)}))
+    assert!(
+        analyze(
+            serde_json::from_value(
+                json!({"kind":"token_exchange","body":" ".repeat(MAX_MESSAGE+1)})
+            )
             .unwrap()
-    )
-    .is_err());
+        )
+        .is_err()
+    );
     for malformed in [
         json!({}),
         json!({"request":null,"response":{}}),
@@ -252,10 +256,12 @@ async fn http_import_is_bounded_stateless_and_not_a_probe() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers()["cache-control"]
-        .to_str()
-        .unwrap()
-        .contains("no-store"));
+    assert!(
+        response.headers()["cache-control"]
+            .to_str()
+            .unwrap()
+            .contains("no-store")
+    );
     let body = to_bytes(response.into_body(), 65_536).await.unwrap();
     let report: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(report["certification"], false);

@@ -1,8 +1,8 @@
 //! The `httpsig` proof: GNAP's §7.3.1 requirements and the §7.3.1.1 rotation vector.
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gnap_crypto::httpsig::{
-    check_gnap_requirements, sign, signature_base, verify, Component, Message, SignatureInput, Tag,
+    Component, Message, SignatureInput, Tag, check_gnap_requirements, sign, signature_base, verify,
 };
 use gnap_crypto::proof::{ProofError, Signer};
 use gnap_crypto::ps256::Ps256Signer;
@@ -105,7 +105,9 @@ fn rfc_key_rotation_vector() {
     let msg = Message {
         method: "POST",
         target_uri: "https://server.example.com/token/PRY5NM33",
-        content_digest: Some("sha-512=:Fb/A5vnawhuuJ5xk2RjGrbbxr6cvinZqd4+JPY85u/JNyTlmRmCOtyVhZ1Oz/cSS4tsYen6fzpCwizy6UQxNBQ==:"),
+        content_digest: Some(
+            "sha-512=:Fb/A5vnawhuuJ5xk2RjGrbbxr6cvinZqd4+JPY85u/JNyTlmRmCOtyVhZ1Oz/cSS4tsYen6fzpCwizy6UQxNBQ==:",
+        ),
         authorization: Some("GNAP 4398.34-12-asvDa.a"),
         other: vec![
             (sig_comp.identifier(), OLD_SIG.into()),
@@ -194,10 +196,12 @@ fn signature_parameters_follow_the_rfc() {
         tag: Tag::GnapRotate,
         ..demo_input()
     };
-    assert!(rotation
-        .serialize()
-        .unwrap()
-        .contains(r#"tag="gnap-rotate""#));
+    assert!(
+        rotation
+            .serialize()
+            .unwrap()
+            .contains(r#"tag="gnap-rotate""#)
+    );
 }
 
 /// A covered component missing from the message must be reported, not ignored.
@@ -564,7 +568,7 @@ fn the_dictionary_grammar_is_the_rfc_one() {
 /// and nothing else.
 #[test]
 fn the_algorithm_comes_from_the_key_and_the_digest_is_sha_256() {
-    use gnap_crypto::digest::{content_digest, DigestAlgorithm};
+    use gnap_crypto::digest::{DigestAlgorithm, content_digest};
     use gnap_crypto::proof::{Signer, Verifier};
     use gnap_crypto::ps256::Ps256Signer;
 

@@ -1,7 +1,7 @@
 //! Assertions over captured HTTP/JSON, not GNAP SDK deserializers or validators.
 //! A passing selected profile check is not a complete protocol verdict.
-use super::config::{member, Target, RIGHT};
-use crate::{check, Check};
+use super::config::{RIGHT, Target, member};
+use crate::{Check, check};
 use gnap_types::http::HttpResponse;
 use serde_json::Value;
 
@@ -209,9 +209,11 @@ mod tests {
         let mut checks = Vec::new();
         assert!(token(&response(&body), &target, None, &mut checks));
         assert!(checks.iter().all(|c| c.status == crate::Status::Pass));
-        assert!(!serde_json::to_string(&checks)
-            .unwrap()
-            .contains("synthetic-resource-token"));
+        assert!(
+            !serde_json::to_string(&checks)
+                .unwrap()
+                .contains("synthetic-resource-token")
+        );
         for invalid in [
             Value::Null,
             Value::String("https://as.example/token/management-id".into()),
@@ -253,8 +255,10 @@ mod tests {
         refusal(&response, "lifecycle-replay-refused", &mut checks);
         revoked(&response, &mut checks);
         assert!(checks.iter().all(|c| c.status == crate::Status::Fail));
-        assert!(!serde_json::to_string(&checks)
-            .unwrap()
-            .contains("TOP-SECRET"));
+        assert!(
+            !serde_json::to_string(&checks)
+                .unwrap()
+                .contains("TOP-SECRET")
+        );
     }
 }

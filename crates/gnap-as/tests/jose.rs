@@ -7,12 +7,12 @@ use gnap_as::{
     GrantSnapshot, GrantStore, JwsReplayStore, KeyResolver, MemoryStorage, NonceError, NonceStore,
     Nonces, OsNonces, Policy, Revision, StoreError, TokenApproval,
 };
-use gnap_crypto::jws::{sign_jws, JwsMethod, JwsParams, JwsProof, DETACHED_JWS_HEADER};
+use gnap_crypto::jws::{DETACHED_JWS_HEADER, JwsMethod, JwsParams, JwsProof, sign_jws};
 use gnap_crypto::{Ed25519Signer, Es256Signer, JwkSigner, PublicKey, Rs256Signer, Verifier};
 use gnap_types::client::Client;
 use gnap_types::http::{HttpRequest, HttpResponse};
 use gnap_types::message::{AsDiscovery, GrantRequest, GrantResponse};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -831,9 +831,11 @@ fn a_session_keeps_its_jose_method() {
     assert_eq!(server.storage().len().unwrap(), 1);
 
     let first = wire.sent.borrow()[0].clone();
-    assert!(first
-        .header_values("content-type")
-        .any(|v| v == "application/jose"));
+    assert!(
+        first
+            .header_values("content-type")
+            .any(|v| v == "application/jose")
+    );
     // A replacement the session could present over `httpsig`: only the
     // session's own JOSE proof stops the change.
     let replacement = Arc::new(Es256Signer::generate("replacement").unwrap());

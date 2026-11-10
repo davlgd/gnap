@@ -1,9 +1,9 @@
 //! Wire requests and independently scripted AS responses, without an AS store.
-use gnap_client::{sign_request, HttpTransport};
+use gnap_client::{HttpTransport, sign_request};
 use gnap_crypto::{
     proof::Signer,
     ps256::Ps256Signer,
-    verify::{verify_request, Expectations, NonceMemory, SignedRequest},
+    verify::{Expectations, NonceMemory, SignedRequest, verify_request},
 };
 use gnap_rs::{
     AccessPolicy, Audience, AudiencePolicy, AuthorizationError, Authorizer, TokenInfo, TrustedAs,
@@ -14,7 +14,7 @@ use gnap_types::{
     rs::ResourceServer,
     token::TokenValue,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
@@ -750,7 +750,7 @@ fn network_status_mime_json_and_body_limits_are_redacted_unavailability() {
 
 #[test]
 fn nonce_is_required_even_when_otherwise_valid_signature_omits_it() {
-    use gnap_crypto::httpsig::{sign, Component, Message, SignatureInput, Tag};
+    use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, sign};
     for nonce in [None, Some("")] {
         let mut request = HttpRequest::new("GET", RESOURCE);
         request

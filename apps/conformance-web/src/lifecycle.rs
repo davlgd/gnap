@@ -8,21 +8,21 @@ mod tests;
 mod worker;
 
 use axum::{
+    Json, Router,
     extract::{OriginalUri, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use gnap_crypto::Ps256Signer;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::{Semaphore, oneshot};
 
 pub use config::Target;
 const COOKIE: &str = "gnap_lifecycle";
@@ -229,18 +229,17 @@ async fn start(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     sessions.retain(|_, entry| entry.born.elapsed() < REPORT_LIMIT);
-    if let Some(existing) = cookie(&headers).and_then(|id| sessions.get(id)) {
-        if existing
+    if let Some(existing) = cookie(&headers).and_then(|id| sessions.get(id))
+        && existing
             .snapshot
             .lock()
             .is_ok_and(|s| matches!(s.status, "running" | "pending"))
-        {
-            return (
-                StatusCode::CONFLICT,
-                "This browser already has an active scenario.",
-            )
-                .into_response();
-        }
+    {
+        return (
+            StatusCode::CONFLICT,
+            "This browser already has an active scenario.",
+        )
+            .into_response();
     }
     if sessions.len() >= 8 {
         return (

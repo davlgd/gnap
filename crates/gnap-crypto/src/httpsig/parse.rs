@@ -3,9 +3,9 @@
 
 use super::Component;
 use crate::proof::ProofError;
-use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use base64::engine::DecodePaddingMode;
-use base64::{alphabet, Engine as _};
+use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
+use base64::{Engine as _, alphabet};
 
 /// Reads the covered component list out of a received `Signature-Input`.
 ///
@@ -588,7 +588,7 @@ pub(crate) fn dictionary_members(field: &str) -> Result<Vec<(String, String)>, P
             Some("") => {
                 return Err(ProofError::Base(format!(
                     "the Dictionary member `{key}` has no value (RFC 9651 §4.2.2)"
-                )))
+                )));
             }
             Some(value) => value.to_owned(),
             // The Boolean form takes only its parameters. Anything else here —
@@ -599,7 +599,7 @@ pub(crate) fn dictionary_members(field: &str) -> Result<Vec<(String, String)>, P
                 return Err(ProofError::Base(format!(
                     "`{member}` is not a Dictionary member: a key is followed by `=` and a \
                      value, or by its parameters alone (RFC 9651 §4.2.2)"
-                )))
+                )));
             }
         };
 

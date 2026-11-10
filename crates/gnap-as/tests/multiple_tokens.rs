@@ -5,13 +5,13 @@ use gnap_as::{
     MemoryStorage, Nonces, Policy, TokenApproval, TokenEncoder, TokenEncodingContext,
     TokenEncodingError,
 };
-use gnap_client::{sign_request, HttpRequest, HttpResponse};
+use gnap_client::{HttpRequest, HttpResponse, sign_request};
 use gnap_crypto::{
     proof::Verifier,
     ps256::{Ps256Signer, Ps256Verifier},
 };
 use gnap_types::{access::AccessItem, client::Client, message::GrantRequest, token::TokenValue};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
@@ -260,11 +260,13 @@ fn an_encoder_failure_or_duplicate_native_id_publishes_nothing() {
         assert_eq!(calls.get(), 2);
         assert!(server.storage().is_empty().unwrap());
         for value in ["first", "second", "same", "nonce1", "nonce4"] {
-            assert!(server
-                .storage()
-                .lookup(GrantSelector::AccessToken(value))
-                .unwrap()
-                .is_none());
+            assert!(
+                server
+                    .storage()
+                    .lookup(GrantSelector::AccessToken(value))
+                    .unwrap()
+                    .is_none()
+            );
         }
     }
 }
@@ -294,13 +296,15 @@ fn rotation_and_revocation_leave_the_sibling_unchanged() {
     let rotated: Value = serde_json::from_slice(&response.body).unwrap();
     assert!(rotated["access_token"].is_object());
     assert_eq!(rotated["access_token"]["label"], "reports");
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::AccessToken(
-            reports["value"].as_str().unwrap()
-        ))
-        .unwrap()
-        .is_none());
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::AccessToken(
+                reports["value"].as_str().unwrap()
+            ))
+            .unwrap()
+            .is_none()
+    );
     let management = &rotated["access_token"]["manage"];
     assert_eq!(
         send(
@@ -456,22 +460,28 @@ fn successful_reapproval_replaces_the_whole_lot_in_one_revision() {
         .unwrap();
     assert_ne!(before.revision, after.revision);
     assert_eq!(after.aggregate.tokens.len(), 2);
-    assert!(server
-        .storage()
-        .lookup(GrantSelector::Continuation(credential))
-        .unwrap()
-        .is_none());
+    assert!(
+        server
+            .storage()
+            .lookup(GrantSelector::Continuation(credential))
+            .unwrap()
+            .is_none()
+    );
     for (handle, old) in before.aggregate.tokens {
         assert!(!after.aggregate.tokens.contains_key(&handle));
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::AccessToken(old.token.value.as_str()))
-            .unwrap()
-            .is_none());
-        assert!(server
-            .storage()
-            .lookup(GrantSelector::Management(&handle))
-            .unwrap()
-            .is_none());
+        assert!(
+            server
+                .storage()
+                .lookup(GrantSelector::AccessToken(old.token.value.as_str()))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            server
+                .storage()
+                .lookup(GrantSelector::Management(&handle))
+                .unwrap()
+                .is_none()
+        );
     }
 }

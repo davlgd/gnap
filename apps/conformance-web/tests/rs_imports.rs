@@ -1,10 +1,10 @@
 //! Synthetic wire fixtures and independent expected outcomes, not live evidence.
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use gnap_conformance_web::{analyze, app, Import, Report, Status, MAX_UPLOAD};
-use serde_json::{json, Value};
+use gnap_conformance_web::{Import, MAX_UPLOAD, Report, Status, analyze, app};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 fn report(kind: &str, body: Value, context: Option<Value>) -> Report {
@@ -178,13 +178,14 @@ fn request_recommendation_optional_access_and_unknown_extensions_are_not_must_fa
     let r = report("introspection_request", body, None);
     assert_eq!(status(&r, "introspection-request-proof"), Status::NotTested);
     assert_eq!(status(&r, "rs-extension-semantics"), Status::NotTested);
-    assert!(r
-        .checks
-        .iter()
-        .find(|c| c.id == "rs-extension-semantics")
-        .unwrap()
-        .detail
-        .contains("Additional members"));
+    assert!(
+        r.checks
+            .iter()
+            .find(|c| c.id == "rs-extension-semantics")
+            .unwrap()
+            .detail
+            .contains("Additional members")
+    );
 }
 
 #[test]
@@ -386,10 +387,11 @@ fn duplicate_members_at_any_depth_are_inconclusive_without_last_wins() {
             serde_json::from_value(json!({"kind":"introspection_response","body":body})).unwrap();
         let r = analyze(input).unwrap();
         assert_eq!(status(&r, "rs-json-unambiguous"), Status::NotTested);
-        assert!(!r
-            .checks
-            .iter()
-            .any(|c| c.id == "introspection-response-active"));
+        assert!(
+            !r.checks
+                .iter()
+                .any(|c| c.id == "introspection-response-active")
+        );
     }
 }
 
@@ -506,10 +508,11 @@ fn json_parser_range_and_depth_limits_are_not_normative_shape_failures() {
             analyze(serde_json::from_value(json!({"kind":"rs_discovery","body":body})).unwrap())
                 .unwrap();
         assert_eq!(status(&r, "rs-message-json-object"), Status::NotTested);
-        assert!(!r
-            .checks
-            .iter()
-            .any(|c| c.id == "rs-discovery-grant-endpoint"));
+        assert!(
+            !r.checks
+                .iter()
+                .any(|c| c.id == "rs-discovery-grant-endpoint")
+        );
     }
 }
 

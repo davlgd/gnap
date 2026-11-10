@@ -2,10 +2,10 @@
 
 mod derivation;
 
-use crate::{check, observation, Check, Import, MessageKind, Report};
+use crate::{Check, Import, MessageKind, Report, check, observation};
 use serde::{
-    de::{MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer,
+    de::{MapAccess, SeqAccess, Visitor},
 };
 use serde_json::{Map, Value};
 
@@ -228,15 +228,37 @@ fn add_uri(
         })
     });
     if userinfo {
-        add(checks, id, Some(false), "Safe discovery profile: userinfo (including an empty userinfo before @) is rejected. RFC 9110 section 4.2.4 recommends that recipients treat userinfo in an untrusted received URI as an error (SHOULD). This is not an additional GNAP MUST or an assertion that JSON members are HTTP field values.", "https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.4");
+        add(
+            checks,
+            id,
+            Some(false),
+            "Safe discovery profile: userinfo (including an empty userinfo before @) is rejected. RFC 9110 section 4.2.4 recommends that recipients treat userinfo in an untrusted received URI as an error (SHOULD). This is not an additional GNAP MUST or an assertion that JSON members are HTTP field values.",
+            "https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.4",
+        );
     } else {
         add(checks, id, outcome, detail, reference);
     }
 }
 
 fn discovery(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<Check>) {
-    add_uri(checks, "rs-discovery-grant-endpoint", uri_field(o, "grant_request_endpoint"), o.get("grant_request_endpoint").and_then(Value::as_str), "Required string endpoint: selected raw HTTPS/host/no-fragment URI checks. URL parser limitations are inconclusive; no URL is fetched.", DISCOVERY);
-    add(checks, "rs-discovery-grant-identity", c.and_then(|c| c.grant_request_endpoint.as_ref()).map(|expected| o.get("grant_request_endpoint").and_then(Value::as_str) == Some(expected.as_str())), "Exact equality with caller-declared client grant endpoint, if supplied. This cannot attest which endpoint clients really use.", DISCOVERY);
+    add_uri(
+        checks,
+        "rs-discovery-grant-endpoint",
+        uri_field(o, "grant_request_endpoint"),
+        o.get("grant_request_endpoint").and_then(Value::as_str),
+        "Required string endpoint: selected raw HTTPS/host/no-fragment URI checks. URL parser limitations are inconclusive; no URL is fetched.",
+        DISCOVERY,
+    );
+    add(
+        checks,
+        "rs-discovery-grant-identity",
+        c.and_then(|c| c.grant_request_endpoint.as_ref())
+            .map(|expected| {
+                o.get("grant_request_endpoint").and_then(Value::as_str) == Some(expected.as_str())
+            }),
+        "Exact equality with caller-declared client grant endpoint, if supplied. This cannot attest which endpoint clients really use.",
+        DISCOVERY,
+    );
     // RFC 9767 §3.1: "A GNAP AS offering RS-facing services can publish its
     // features on a well-known discovery document at the URL with the same
     // schema and authority as the grant request endpoint URL, at the path
@@ -265,7 +287,14 @@ fn discovery(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<Check
                     && url.fragment().is_none(),
             )
         });
-    add_uri(checks, "rs-discovery-declared-location", location, c.and_then(|c| c.discovery_url.as_deref()), "Compare the caller-declared location to the same scheme/authority and /.well-known/gnap-as-rs path. No request or actual publication has been observed.", DISCOVERY);
+    add_uri(
+        checks,
+        "rs-discovery-declared-location",
+        location,
+        c.and_then(|c| c.discovery_url.as_deref()),
+        "Compare the caller-declared location to the same scheme/authority and /.well-known/gnap-as-rs path. No request or actual publication has been observed.",
+        DISCOVERY,
+    );
     for (field, id) in [
         (
             "introspection_endpoint",
@@ -304,26 +333,66 @@ fn discovery(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<Check
             gnap_registry::KeyProofingMethod::REGISTERED,
         ),
     ] {
-        add(checks, id, o.get(field).and_then(|v| registered_list(v, registry)), "Optional string array. Known names match the vendored GNAP registry; unknown names need external registry review. Absence is optional/not announced, not a missing required field. Membership does not prove support.", DISCOVERY);
+        add(
+            checks,
+            id,
+            o.get(field).and_then(|v| registered_list(v, registry)),
+            "Optional string array. Known names match the vendored GNAP registry; unknown names need external registry review. Absence is optional/not announced, not a missing required field. Membership does not prove support.",
+            DISCOVERY,
+        );
     }
 }
 
 fn request(o: &Map<String, Value>, checks: &mut Vec<Check>) {
-    add(checks, "introspection-request-token", Some(o.get("access_token").is_some_and(Value::is_string)), "access_token is a required string: the exact token presented to the RS. Equality to the original presentation is not tested.", INTRO);
-    add(checks, "introspection-request-rs", Some(o.get("resource_server").is_some_and(|v| v.is_string() || v.as_object().is_some_and(|o| o.get("key").is_some_and(key_shape)))), "Required RS identity reference or object with key. Only outer shape: no key resolution, key presentation validation, signature or RS authorization.", "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.2");
+    add(
+        checks,
+        "introspection-request-token",
+        Some(o.get("access_token").is_some_and(Value::is_string)),
+        "access_token is a required string: the exact token presented to the RS. Equality to the original presentation is not tested.",
+        INTRO,
+    );
+    add(
+        checks,
+        "introspection-request-rs",
+        Some(o.get("resource_server").is_some_and(|v| {
+            v.is_string()
+                || v.as_object()
+                    .is_some_and(|o| o.get("key").is_some_and(key_shape))
+        })),
+        "Required RS identity reference or object with key. Only outer shape: no key resolution, key presentation validation, signature or RS authorization.",
+        "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.2",
+    );
     let proof = o.get("proof").and_then(|v| match v.as_str() {
         None => Some(false),
         Some(s) => gnap_registry::KeyProofingMethod::REGISTERED
             .contains(&s)
             .then_some(true),
     });
-    add(checks, "introspection-request-proof", proof, "proof is RECOMMENDED, not REQUIRED. If supplied it must be a string naming a registered method. Absence needs recommendation/context review; an unknown name needs external registry review. This describes the client's proof, not the RS's signature.", INTRO);
-    add(checks, "introspection-request-access", o.get("access").map(access_shape), "Optional minimum access: array of references or objects with string type and selected standard dimensions. Absence is allowed. This is shape, not rights semantics or proof that the AS understood every parameter.", ACCESS);
+    add(
+        checks,
+        "introspection-request-proof",
+        proof,
+        "proof is RECOMMENDED, not REQUIRED. If supplied it must be a string naming a registered method. Absence needs recommendation/context review; an unknown name needs external registry review. This describes the client's proof, not the RS's signature.",
+        INTRO,
+    );
+    add(
+        checks,
+        "introspection-request-access",
+        o.get("access").map(access_shape),
+        "Optional minimum access: array of references or objects with string type and selected standard dimensions. Absence is allowed. This is shape, not rights semantics or proof that the AS understood every parameter.",
+        ACCESS,
+    );
 }
 
 fn response(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<Check>) {
     let active = o.get("active").and_then(Value::as_bool);
-    add(checks, "introspection-response-active", Some(active.is_some()), "active is REQUIRED and boolean. A true value is only an imported declaration, not verified token state.", INTRO);
+    add(
+        checks,
+        "introspection-response-active",
+        Some(active.is_some()),
+        "active is REQUIRED and boolean. A true value is only an imported declaration, not verified token state.",
+        INTRO,
+    );
     add(
         checks,
         "introspection-response-no-value",
@@ -331,13 +400,38 @@ fn response(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<Check>
         "The response MUST NOT include the access token value member.",
         INTRO,
     );
-    add(checks, "introspection-inactive-only", active.filter(|v| !v).map(|_| o.len() == 1), "When active is false, all other fields must be omitted, including extensions. Not applicable to an active response.", INTRO);
+    add(
+        checks,
+        "introspection-inactive-only",
+        active.filter(|v| !v).map(|_| o.len() == 1),
+        "When active is false, all other fields must be omitted, including extensions. Not applicable to an active response.",
+        INTRO,
+    );
     if active != Some(true) {
         return;
     }
-    add(checks, "introspection-active-access", Some(o.get("access").is_some_and(access_shape)), "An active response requires access in GNAP array form. An empty array is explicitly permitted; actual rights are not verified.", INTRO);
-    add_uri(checks, "introspection-active-issuer", uri_field(o, "iss"), o.get("iss").and_then(Value::as_str), "An active response requires iss, the issuer's grant endpoint URL, even though the RFC example omits it. Selected URL syntax only; issuer identity/trust is not verified.", INTRO);
-    add(checks, "introspection-key-shape", o.get("key").map(key_shape), "When supplied, key is an object or reference string. Its contents, cryptographic validity and binding to the token are not tested.", INTRO);
+    add(
+        checks,
+        "introspection-active-access",
+        Some(o.get("access").is_some_and(access_shape)),
+        "An active response requires access in GNAP array form. An empty array is explicitly permitted; actual rights are not verified.",
+        INTRO,
+    );
+    add_uri(
+        checks,
+        "introspection-active-issuer",
+        uri_field(o, "iss"),
+        o.get("iss").and_then(Value::as_str),
+        "An active response requires iss, the issuer's grant endpoint URL, even though the RFC example omits it. Selected URL syntax only; issuer identity/trust is not verified.",
+        INTRO,
+    );
+    add(
+        checks,
+        "introspection-key-shape",
+        o.get("key").map(key_shape),
+        "When supplied, key is an object or reference string. Its contents, cryptographic validity and binding to the token are not tested.",
+        INTRO,
+    );
     let flags = o.get("flags");
     let bearer = flags
         .and_then(Value::as_array)
@@ -353,7 +447,13 @@ fn response(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<Check>
             })
             .or_else(|| bearer.then_some(!key))
     };
-    add(checks, "introspection-key-condition", binding, "A bound token requires key; a bearer token forbids it. Bearer plus key is a message contradiction regardless of caller context. Otherwise the condition uses declared token_binding, not verified token properties; absent context can be inconclusive.", INTRO);
+    add(
+        checks,
+        "introspection-key-condition",
+        binding,
+        "A bound token requires key; a bearer token forbids it. Bearer plus key is a message contradiction regardless of caller context. Otherwise the condition uses declared token_binding, not verified token properties; absent context can be inconclusive.",
+        INTRO,
+    );
     let optional_shape = ["exp", "iat", "nbf"]
         .iter()
         .all(|k| o.get(*k).is_none_or(|v| v.is_i64() || v.is_u64()))
@@ -365,7 +465,13 @@ fn response(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<Check>
     let present = ["exp", "iat", "nbf", "flags", "aud", "sub", "instance_id"]
         .iter()
         .any(|k| o.contains_key(*k));
-    add(checks, "introspection-optional-metadata", present.then_some(optional_shape), "Selected optional metadata types only: integer timestamps, string/array audience, string identifiers and string-array flags. Missing optional metadata is allowed; times, audiences and subjects are not authenticated.", INTRO);
+    add(
+        checks,
+        "introspection-optional-metadata",
+        present.then_some(optional_shape),
+        "Selected optional metadata types only: integer timestamps, string/array audience, string identifiers and string-array flags. Missing optional metadata is allowed; times, audiences and subjects are not authenticated.",
+        INTRO,
+    );
 }
 
 fn error_response(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<Check>) {
@@ -378,22 +484,91 @@ fn error_response(o: &Map<String, Value>, c: Option<&Context>, checks: &mut Vec<
                 || v.as_object()
                     .is_some_and(|o| o.get("description").is_none_or(Value::is_string))
         });
-    add(checks, "rs-error-shape", Some(shape), "RS-facing error: a single error member, string code or object with ASCII string code and optional string description. This is not the core AS error registry.", ERROR);
-    add(checks, "rs-error-code", code.and_then(|s| gnap_registry::RsErrorCode::REGISTERED.contains(&s).then_some(true)), "Known code in the vendored RS-facing registry. Unknown codes need external registry/extension review, not silent acceptance or a claim that registrations cannot change.", ERROR);
-    add(checks, "rs-error-http-status", c.and_then(|c| c.http_status).map(|s| s == 400), "RFC 9767 section 3.5 specifies HTTP 400 for RS-facing API errors. This compares only caller-declared status; without it HTTP is not tested.", ERROR);
+    add(
+        checks,
+        "rs-error-shape",
+        Some(shape),
+        "RS-facing error: a single error member, string code or object with ASCII string code and optional string description. This is not the core AS error registry.",
+        ERROR,
+    );
+    add(
+        checks,
+        "rs-error-code",
+        code.and_then(|s| {
+            gnap_registry::RsErrorCode::REGISTERED
+                .contains(&s)
+                .then_some(true)
+        }),
+        "Known code in the vendored RS-facing registry. Unknown codes need external registry/extension review, not silent acceptance or a claim that registrations cannot change.",
+        ERROR,
+    );
+    add(
+        checks,
+        "rs-error-http-status",
+        c.and_then(|c| c.http_status).map(|s| s == 400),
+        "RFC 9767 section 3.5 specifies HTTP 400 for RS-facing API errors. This compares only caller-declared status; without it HTTP is not tested.",
+        ERROR,
+    );
 }
 
 fn registration_request(o: &Map<String, Value>, checks: &mut Vec<Check>) {
-    add(checks, "registration-request-access", Some(o.get("access").is_some_and(access_shape)), "access is REQUIRED: an array of reference strings or GNAP access objects with string type and selected standard dimensions. Empty arrays are not prohibited here. Resource-type semantics, reference resolution and the AS's actual interpretation are not tested.", ACCESS);
-    add(checks, "registration-request-rs", Some(o.get("resource_server").is_some_and(|v| v.is_string() || v.as_object().is_some_and(|o| o.get("key").is_some_and(key_shape)))), "resource_server is REQUIRED: an identity reference string or object containing key as object/reference. Only outer presentation is checked; key contents, mathematical validity, ownership, signature and RS authorization are not verified.", "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.2");
-    add(checks, "registration-request-token-formats", o.get("token_formats_supported").and_then(|v| registered_list(v, gnap_registry::TokenFormat::REGISTERED)), "Optional string array whose values MUST be registered in the GNAP Token Formats registry. Known values match this build's registry snapshot; unknown values need external registry review and are inconclusive. Absence leaves the format to the AS. An empty array establishes no compatible format.", REGISTRATION);
-    add(checks, "registration-request-introspection-required", o.get("token_introspection_required").map(Value::is_boolean), "Optional boolean: true declares that the RS expects to introspect these tokens; absent or false declares that it does not anticipate needing introspection. This does not establish the AS's support for this RS.", REGISTRATION);
+    add(
+        checks,
+        "registration-request-access",
+        Some(o.get("access").is_some_and(access_shape)),
+        "access is REQUIRED: an array of reference strings or GNAP access objects with string type and selected standard dimensions. Empty arrays are not prohibited here. Resource-type semantics, reference resolution and the AS's actual interpretation are not tested.",
+        ACCESS,
+    );
+    add(
+        checks,
+        "registration-request-rs",
+        Some(o.get("resource_server").is_some_and(|v| {
+            v.is_string()
+                || v.as_object()
+                    .is_some_and(|o| o.get("key").is_some_and(key_shape))
+        })),
+        "resource_server is REQUIRED: an identity reference string or object containing key as object/reference. Only outer presentation is checked; key contents, mathematical validity, ownership, signature and RS authorization are not verified.",
+        "https://www.rfc-editor.org/rfc/rfc9767.html#section-3.2",
+    );
+    add(
+        checks,
+        "registration-request-token-formats",
+        o.get("token_formats_supported")
+            .and_then(|v| registered_list(v, gnap_registry::TokenFormat::REGISTERED)),
+        "Optional string array whose values MUST be registered in the GNAP Token Formats registry. Known values match this build's registry snapshot; unknown values need external registry review and are inconclusive. Absence leaves the format to the AS. An empty array establishes no compatible format.",
+        REGISTRATION,
+    );
+    add(
+        checks,
+        "registration-request-introspection-required",
+        o.get("token_introspection_required").map(Value::is_boolean),
+        "Optional boolean: true declares that the RS expects to introspect these tokens; absent or false declares that it does not anticipate needing introspection. This does not establish the AS's support for this RS.",
+        REGISTRATION,
+    );
 }
 
 fn registration_response(o: &Map<String, Value>, checks: &mut Vec<Check>) {
-    add(checks, "registration-response-reference", Some(o.get("resource_reference").is_some_and(Value::is_string)), "resource_reference is a REQUIRED string representing the registered resource list, not an access token. No token-value, nonempty or ASCII restriction is imposed. Whether this reference identifies the submitted resources is not tested.", REGISTRATION);
-    add(checks, "registration-response-instance-id", o.get("instance_id").map(Value::is_string), "Optional string RS instance identifier. Its assignment, persistence, resolution and binding to the RS are not tested.", REGISTRATION);
-    add(checks, "registration-response-introspection-endpoint", o.get("introspection_endpoint").map(Value::is_string), "Optional string naming the AS introspection endpoint. Only its JSON type is checked here; URI syntax, transport, ownership and actual introspection are not verified. No URL is fetched and discovery-specific URI rules are not transposed to this field.", REGISTRATION);
+    add(
+        checks,
+        "registration-response-reference",
+        Some(o.get("resource_reference").is_some_and(Value::is_string)),
+        "resource_reference is a REQUIRED string representing the registered resource list, not an access token. No token-value, nonempty or ASCII restriction is imposed. Whether this reference identifies the submitted resources is not tested.",
+        REGISTRATION,
+    );
+    add(
+        checks,
+        "registration-response-instance-id",
+        o.get("instance_id").map(Value::is_string),
+        "Optional string RS instance identifier. Its assignment, persistence, resolution and binding to the RS are not tested.",
+        REGISTRATION,
+    );
+    add(
+        checks,
+        "registration-response-introspection-endpoint",
+        o.get("introspection_endpoint").map(Value::is_string),
+        "Optional string naming the AS introspection endpoint. Only its JSON type is checked here; URI syntax, transport, ownership and actual introspection are not verified. No URL is fetched and discovery-specific URI rules are not transposed to this field.",
+        REGISTRATION,
+    );
 }
 
 pub fn analyze(input: &Import) -> Result<Report, &'static str> {
@@ -499,7 +674,13 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
         "Selected RFC 9767 messages are JSON objects. No SDK message validator is used. Parser number-range/depth limits are inconclusive, not proof of invalid JSON.",
         reference,
     );
-    add(&mut checks, "rs-json-unambiguous", unique.filter(|u| *u), "Duplicate JSON members at any depth make interpretation inconclusive; no last-wins checks are applied. This is not a GNAP MUST for unique names.", "https://www.rfc-editor.org/rfc/rfc8259.html#section-4");
+    add(
+        &mut checks,
+        "rs-json-unambiguous",
+        unique.filter(|u| *u),
+        "Duplicate JSON members at any depth make interpretation inconclusive; no last-wins checks are applied. This is not a GNAP MUST for unique names.",
+        "https://www.rfc-editor.org/rfc/rfc8259.html#section-4",
+    );
     if let Some(o) = object.filter(|_| unique == Some(true)) {
         match input.kind {
             MessageKind::RsDiscovery => discovery(o, input.rs_context.as_ref(), &mut checks),
@@ -539,9 +720,27 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
         input.kind,
         MessageKind::ResourceRegistrationRequest | MessageKind::ResourceRegistrationResponse
     ) {
-        add(&mut checks, "registration-format-compatibility", None, "Not tested: if the AS supports none of the requested token formats, it MUST return an error. Registry membership, an omitted list or an empty list cannot establish an AS/RS format intersection or actual error behavior.", REGISTRATION);
-        add(&mut checks, "registration-introspection-support", None, "Not tested: when introspection is required by the RS, the AS must support it for this RS or return an error. An imported declaration or endpoint string cannot establish that support or the AS's error behavior.", REGISTRATION);
-        add(&mut checks, "registration-authentication-and-state", None, "Not tested: the RS MUST identify itself with its own key and sign the request. Key ownership, signature, authorization, resource registration, reference persistence/resolution and request-response correspondence require an authenticated exchange and state. Never upload private keys.", REGISTRATION);
+        add(
+            &mut checks,
+            "registration-format-compatibility",
+            None,
+            "Not tested: if the AS supports none of the requested token formats, it MUST return an error. Registry membership, an omitted list or an empty list cannot establish an AS/RS format intersection or actual error behavior.",
+            REGISTRATION,
+        );
+        add(
+            &mut checks,
+            "registration-introspection-support",
+            None,
+            "Not tested: when introspection is required by the RS, the AS must support it for this RS or return an error. An imported declaration or endpoint string cannot establish that support or the AS's error behavior.",
+            REGISTRATION,
+        );
+        add(
+            &mut checks,
+            "registration-authentication-and-state",
+            None,
+            "Not tested: the RS MUST identify itself with its own key and sign the request. Key ownership, signature, authorization, resource registration, reference persistence/resolution and request-response correspondence require an authenticated exchange and state. Never upload private keys.",
+            REGISTRATION,
+        );
     }
     if matches!(
         input.kind,
@@ -549,8 +748,37 @@ pub fn analyze(input: &Import) -> Result<Report, &'static str> {
     ) {
         derivation::unobservable(&mut checks);
     }
-    add(&mut checks, "content-digest", input.content_digest.as_ref().map(|d| gnap_crypto::verify_content_digest(input.body.as_bytes(), d).is_ok()), "Separate shared gnap-crypto digest check against exact body bytes, if supplied. Not a signature or HTTP authentication check.", "https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.1");
-    add(&mut checks, "rs-authentication-and-state", None, "Not tested: RS signature/authorization, client proof/key binding, issuer trust, actual token value, active state, expiration, revocation, audience, permissions or final resource decision. Never send private keys or production tokens.", INTRO);
-    add(&mut checks, "rs-http-and-discovery-publication", None, "No network operation: actual HTTP status/media, TLS, well-known publication and announced capability execution are not verified. Imported headers do not establish these facts; no HTTP 200 or single-header rule is imposed.", DISCOVERY);
-    Ok(Report { schema_version: 1, profile, kind: input.kind, certification: false, independence: "RFC 9767 JSON assertions use serde_json directly, not gnap-types validators. Registry membership reuses gnap-registry data; the optional digest check reuses gnap-crypto. Not an independent protocol implementation or certification.", observation: observation("import"), checks })
+    add(
+        &mut checks,
+        "content-digest",
+        input
+            .content_digest
+            .as_ref()
+            .map(|d| gnap_crypto::verify_content_digest(input.body.as_bytes(), d).is_ok()),
+        "Separate shared gnap-crypto digest check against exact body bytes, if supplied. Not a signature or HTTP authentication check.",
+        "https://www.rfc-editor.org/rfc/rfc9635.html#section-7.3.1",
+    );
+    add(
+        &mut checks,
+        "rs-authentication-and-state",
+        None,
+        "Not tested: RS signature/authorization, client proof/key binding, issuer trust, actual token value, active state, expiration, revocation, audience, permissions or final resource decision. Never send private keys or production tokens.",
+        INTRO,
+    );
+    add(
+        &mut checks,
+        "rs-http-and-discovery-publication",
+        None,
+        "No network operation: actual HTTP status/media, TLS, well-known publication and announced capability execution are not verified. Imported headers do not establish these facts; no HTTP 200 or single-header rule is imposed.",
+        DISCOVERY,
+    );
+    Ok(Report {
+        schema_version: 1,
+        profile,
+        kind: input.kind,
+        certification: false,
+        independence: "RFC 9767 JSON assertions use serde_json directly, not gnap-types validators. Registry membership reuses gnap-registry data; the optional digest check reuses gnap-crypto. Not an independent protocol implementation or certification.",
+        observation: observation("import"),
+        checks,
+    })
 }

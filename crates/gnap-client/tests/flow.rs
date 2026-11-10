@@ -5,7 +5,7 @@
 
 use gnap_client::{ClientError, HttpRequest, HttpResponse, HttpTransport, Session, Step};
 use gnap_core::State;
-use gnap_crypto::hash::{interaction_hash, HashMethod, InteractionHashInput};
+use gnap_crypto::hash::{HashMethod, InteractionHashInput, interaction_hash};
 use gnap_crypto::ps256::Ps256Signer;
 use gnap_registry::ErrorCode;
 use gnap_types::interact::InteractCallback;
@@ -123,9 +123,11 @@ fn empty_503_keeps_a_modification_retryable() {
     let mut session = Session::new(&as_, &sk, ENDPOINT);
     session.start(&request(), 1_000).unwrap();
     let continuation = session.continuation().cloned();
-    assert!(session
-        .modify_grant(&ContinueRequest::default(), 1_001)
-        .is_err());
+    assert!(
+        session
+            .modify_grant(&ContinueRequest::default(), 1_001)
+            .is_err()
+    );
     assert_eq!(session.state(), State::Pending);
     assert_eq!(session.continuation(), continuation.as_ref());
     assert!(matches!(
@@ -1251,9 +1253,11 @@ fn interaction_expiration_omission_zero_and_overflow_are_explicit() {
     let as_ = FakeAs::with(vec![&overflow]);
     let mut session = Session::new(&as_, &sk, ENDPOINT);
     session.start(&request(), 0).unwrap();
-    assert!(session
-        .accept_callback(&valid_callback(), u64::MAX)
-        .is_err());
+    assert!(
+        session
+            .accept_callback(&valid_callback(), u64::MAX)
+            .is_err()
+    );
 }
 
 #[test]

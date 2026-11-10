@@ -588,9 +588,10 @@ fn a_modification_is_re_evaluated() {
     let updated: gnap_types::message::GrantResponse =
         serde_json::from_slice(&response.body).unwrap();
     let redirect = updated.interact.unwrap().redirect.unwrap();
-    assert!(as_
-        .complete_interaction(redirect.rsplit('/').next().unwrap(), 1_011)
-        .is_ok());
+    assert!(
+        as_.complete_interaction(redirect.rsplit('/').next().unwrap(), 1_011)
+            .is_ok()
+    );
 }
 
 /// Builds a signed continuation call, with or without a body.
@@ -606,8 +607,8 @@ fn signed_continuation(
     body: Option<Vec<u8>>,
     now: u64,
 ) -> HttpRequest {
-    use gnap_crypto::digest::{content_digest, DigestAlgorithm};
-    use gnap_crypto::httpsig::{sign, Component, Message, SignatureInput, Tag};
+    use gnap_crypto::digest::{DigestAlgorithm, content_digest};
+    use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, sign};
     use gnap_crypto::proof::Signer;
 
     let authorization = format!("GNAP {token}");
@@ -882,8 +883,8 @@ fn no_usable_interaction_mechanism_is_refused() {
 // never send.
 // ---------------------------------------------------------------------------
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use gnap_crypto::httpsig::{signature_base, Component, Message, SignatureInput, Tag};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, signature_base};
 use gnap_crypto::proof::Signer as _;
 
 /// Signs a request with an arbitrary set of covered components and parameters.
@@ -2872,9 +2873,10 @@ fn an_interaction_is_used_once_and_does_not_keep() {
     );
 
     // Within the window, it works exactly once (§4-M04, §4.1-M03).
-    assert!(as_
-        .complete_interaction(&handle, 1_000 + lifetime - 1)
-        .is_ok());
+    assert!(
+        as_.complete_interaction(&handle, 1_000 + lifetime - 1)
+            .is_ok()
+    );
     assert_eq!(
         as_.complete_interaction(&handle, 1_000 + lifetime - 1),
         Err(InteractionError::UnknownInteraction),

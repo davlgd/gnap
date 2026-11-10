@@ -3,8 +3,8 @@
 //! RFC 9635 §2.2, §2.4 and §3.4.
 
 use crate::object_or_reference;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use gnap_registry::AssertionFormat;
 use serde::{Deserialize, Serialize};
 use std::fmt;

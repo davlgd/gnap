@@ -5,7 +5,7 @@
 //! decided. It never says that a server conforms to GNAP: the checks are a
 //! selection, documented one by one with the clause they rely on.
 
-use crate::{discovery, probe, Check, Status};
+use crate::{Check, Status, discovery, probe};
 use gnap_client::{HttpRequest, HttpTransport};
 use serde::Serialize;
 
@@ -310,10 +310,12 @@ mod tests {
             ENDPOINT,
             1,
         );
-        assert!(elsewhere
-            .findings
-            .iter()
-            .any(|f| f.id == "discovery-endpoint-match" && f.outcome == Outcome::Failed));
+        assert!(
+            elsewhere
+                .findings
+                .iter()
+                .any(|f| f.id == "discovery-endpoint-match" && f.outcome == Outcome::Failed)
+        );
         assert_eq!(elsewhere.exit_code(), 1);
 
         let unreachable = discover(&Scripted(None), ENDPOINT, 1);

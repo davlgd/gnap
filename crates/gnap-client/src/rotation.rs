@@ -9,14 +9,14 @@
 
 use crate::session::SessionProof;
 use crate::{ClientError, HttpRequest};
+use gnap_crypto::PublicKey;
 use gnap_crypto::httpsig::{
-    fresh_nonce, parse_signatures, sign, signature_base, Component, Message, SignatureInput, Tag,
+    Component, Message, SignatureInput, Tag, fresh_nonce, parse_signatures, sign, signature_base,
 };
 use gnap_crypto::jws::{
-    sign_jws_rotation, verify_jws_rotation, JwsKey, JwsMethod, JwsParams, ReplayId,
+    JwsKey, JwsMethod, JwsParams, ReplayId, sign_jws_rotation, verify_jws_rotation,
 };
 use gnap_crypto::proof::{Signer, Verifier};
-use gnap_crypto::PublicKey;
 use gnap_registry::KeyProofingMethod;
 use gnap_types::key::{Key, KeyObject};
 use gnap_types::token::TokenValue;

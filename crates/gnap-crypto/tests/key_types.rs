@@ -1,12 +1,12 @@
 //! Ed25519 and ES256 keys: published vectors, JWK import, and refusals.
 
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use gnap_crypto::{
     Ed25519Signer, Ed25519Verifier, Es256Signer, Es256Verifier, JwkSigner, Ps256Signer, PublicKey,
     Rs256Signer, Signer, Verifier,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 // Public test material from RFC 9421 Appendices B.1.2 to B.1.4; never a deployment key.
 const RSA_PKCS1: &str = include_str!("rfc9421-b12.pkcs1.pem");
@@ -267,19 +267,21 @@ fn signatures_in_another_encoding_or_length_are_refused() {
     ed25519.verifier().verify(b"payload", &tampered).unwrap();
     tampered[63] ^= 0x80;
     assert!(ed25519.verifier().verify(b"payload", &tampered).is_err());
-    assert!(ed25519
-        .verifier()
-        .verify(b"payload", &tampered[..63])
-        .is_err());
+    assert!(
+        ed25519
+            .verifier()
+            .verify(b"payload", &tampered[..63])
+            .is_err()
+    );
 }
 
 /// A GNAP request signed with each supported key verifies through the shared
 /// request verifier, and only under its own key.
 #[test]
 fn every_key_type_signs_and_verifies_a_gnap_request() {
-    use gnap_crypto::digest::{content_digest, DigestAlgorithm};
-    use gnap_crypto::httpsig::{sign, Component, Message, SignatureInput, Tag};
-    use gnap_crypto::verify::{verify_request, Expectations, SignedRequest};
+    use gnap_crypto::digest::{DigestAlgorithm, content_digest};
+    use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, sign};
+    use gnap_crypto::verify::{Expectations, SignedRequest, verify_request};
 
     const URL: &str = "https://as.example/gnap";
     const NOW: u64 = 1_700_000_000;
@@ -398,7 +400,7 @@ fn every_import_refuses_the_private_members_of_any_key_type() {
 /// key, and the strict one this crate uses refuses it.
 #[test]
 fn ed25519_verification_is_strict_even_for_a_valid_key() {
-    use curve25519_dalek::scalar::{clamp_integer, Scalar};
+    use curve25519_dalek::scalar::{Scalar, clamp_integer};
     use ed25519_dalek::Verifier as _;
     use sha2::{Digest as _, Sha512};
 

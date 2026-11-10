@@ -1,16 +1,17 @@
 //! JOSE proofs, `jws` and `jwsd`: RFC vectors, round trips, key rotation,
 //! replay protection, and every refusal of the profile.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use gnap_crypto::jws::{DETACHED_JWS_HEADER, JOSE_MEDIA_TYPE, MAX_DETACHED_JWS_BYTES};
 use gnap_crypto::{
-    sign_jws, sign_jws_rotation, unverified_attached_payload, unverified_rotation_content,
-    verify_jws_request, verify_jws_rotation, Ed25519Signer, Es256Signer, Expectations, JwkSigner,
-    JwsKey, JwsMethod, JwsParams, JwsProof, JwsReplayMemory, Ps256Signer, PublicKey, ReplayCache,
-    ReplayId, Rs256Signer, Rs256Verifier, SignedRequest, Signer, Verifier, VerifyError,
+    Ed25519Signer, Es256Signer, Expectations, JwkSigner, JwsKey, JwsMethod, JwsParams, JwsProof,
+    JwsReplayMemory, Ps256Signer, PublicKey, ReplayCache, ReplayId, Rs256Signer, Rs256Verifier,
+    SignedRequest, Signer, Verifier, VerifyError, sign_jws, sign_jws_rotation,
+    unverified_attached_payload, unverified_rotation_content, verify_jws_request,
+    verify_jws_rotation,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use std::sync::{Barrier, Mutex};
 
@@ -615,13 +616,15 @@ fn the_protected_header_is_a_closed_profile() {
         CONTENT,
         None,
     );
-    assert!(verify_jws_request(
-        JwsMethod::Jwsd,
-        &wire.request(),
-        &key(&public, "client"),
-        &forgetful()
-    )
-    .is_err());
+    assert!(
+        verify_jws_request(
+            JwsMethod::Jwsd,
+            &wire.request(),
+            &key(&public, "client"),
+            &forgetful()
+        )
+        .is_err()
+    );
 }
 
 /// The `kid` must name the key whenever the key or the caller names one.
@@ -833,13 +836,15 @@ fn malformed_compact_serializations_are_refused() {
         "x".repeat(MAX_DETACHED_JWS_BYTES + 1),
     ] {
         let wire = Wire::new(JwsProof::Detached(compact), CONTENT, None);
-        assert!(verify_jws_request(
-            JwsMethod::Jwsd,
-            &wire.request(),
-            &key(&public, "client"),
-            &forgetful()
-        )
-        .is_err());
+        assert!(
+            verify_jws_request(
+                JwsMethod::Jwsd,
+                &wire.request(),
+                &key(&public, "client"),
+                &forgetful()
+            )
+            .is_err()
+        );
     }
 }
 
@@ -948,14 +953,16 @@ fn signing_refuses_what_the_profile_excludes() {
     }
     assert!(sign_jws_rotation(JwsMethod::Jws, &params(None), b"", &signer, &es256()).is_err());
     assert!(sign_jws(JwsMethod::Jws, &params(None), b"not json", &signer).is_err());
-    assert!(sign_jws_rotation(
-        JwsMethod::Jws,
-        &params(None),
-        b"not json",
-        &signer,
-        &es256()
-    )
-    .is_err());
+    assert!(
+        sign_jws_rotation(
+            JwsMethod::Jws,
+            &params(None),
+            b"not json",
+            &signer,
+            &es256()
+        )
+        .is_err()
+    );
     sign_jws(JwsMethod::Jwsd, &params(None), b"not json", &signer).expect("jwsd signs any bytes");
 }
 

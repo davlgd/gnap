@@ -35,14 +35,18 @@ fn signed(app: &App, body: &GrantRequest, key: &Ps256Signer) -> HttpRequest {
 #[test]
 fn configuration_is_all_or_nothing_and_never_reflects_material() {
     let callback = "https://workbench.example/lifecycle/callback";
-    assert!(Registry::parse(None, "https://demo.example")
-        .unwrap()
-        .allowed
-        .is_empty());
-    assert!(Registry::parse(Some("[]"), "https://demo.example")
-        .unwrap()
-        .allowed
-        .is_empty());
+    assert!(
+        Registry::parse(None, "https://demo.example")
+            .unwrap()
+            .allowed
+            .is_empty()
+    );
+    assert!(
+        Registry::parse(Some("[]"), "https://demo.example")
+            .unwrap()
+            .allowed
+            .is_empty()
+    );
     assert_eq!(
         Registry::parse(Some(&configuration(callback)), "https://demo.example")
             .unwrap()
@@ -65,30 +69,38 @@ fn configuration_is_all_or_nothing_and_never_reflects_material() {
         assert_eq!(error, "GNAP_EXTERNAL_CLIENTS: invalid entry at index 0");
         assert!(!error.contains(callback));
     }
-    assert!(Registry::parse(
-        Some(&configuration("http://127.0.0.1:1234/lifecycle/callback")),
-        "http://127.0.0.1:5678"
-    )
-    .is_ok());
-    assert!(Registry::parse(
-        Some(&configuration("http://evil.example/lifecycle/callback")),
-        "http://127.0.0.1:5678"
-    )
-    .is_err());
+    assert!(
+        Registry::parse(
+            Some(&configuration("http://127.0.0.1:1234/lifecycle/callback")),
+            "http://127.0.0.1:5678"
+        )
+        .is_ok()
+    );
+    assert!(
+        Registry::parse(
+            Some(&configuration("http://evil.example/lifecycle/callback")),
+            "http://127.0.0.1:5678"
+        )
+        .is_err()
+    );
     for raw in ["null", "{}", "not json"] {
         assert!(Registry::parse(Some(raw), "https://demo.example").is_err());
     }
     let entry: Value = serde_json::from_str::<Value>(&configuration(callback)).unwrap()[0].clone();
-    assert!(Registry::parse(
-        Some(&serde_json::to_string(&vec![entry.clone(); 9]).unwrap()),
-        "https://demo.example"
-    )
-    .is_err());
-    assert!(Registry::parse(
-        Some(&serde_json::to_string(&vec![entry.clone(); 2]).unwrap()),
-        "https://demo.example"
-    )
-    .is_err());
+    assert!(
+        Registry::parse(
+            Some(&serde_json::to_string(&vec![entry.clone(); 9]).unwrap()),
+            "https://demo.example"
+        )
+        .is_err()
+    );
+    assert!(
+        Registry::parse(
+            Some(&serde_json::to_string(&vec![entry.clone(); 2]).unwrap()),
+            "https://demo.example"
+        )
+        .is_err()
+    );
     for mutation in 0..4 {
         let mut entry = entry.clone();
         match mutation {
@@ -521,11 +533,12 @@ fn store_caps_include_closed_token_bearing_grants_and_release_expired_ones() {
     app.storage
         .create(candidate)
         .expect("expired closed grant releases both quotas");
-    assert!(app
-        .storage
-        .lookup(GrantSelector::Id(expired.id))
-        .unwrap()
-        .is_none());
+    assert!(
+        app.storage
+            .lookup(GrantSelector::Id(expired.id))
+            .unwrap()
+            .is_none()
+    );
 }
 
 struct Network(reqwest::blocking::Client);

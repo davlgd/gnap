@@ -3,12 +3,12 @@ use crate::{
     authorization::Store,
     http::{self, Network, Origin},
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use gnap_biscuit::LiveDecision;
 use gnap_client::{HttpRequest, HttpResponse, HttpTransport};
 use gnap_crypto::{
-    parse_signature_params, parse_signatures, verify_request_with_policy, Expectations,
-    NonceMemory, Ps256Signer, Ps256Verifier, ReceivedParams,
+    Expectations, NonceMemory, Ps256Signer, Ps256Verifier, ReceivedParams, parse_signature_params,
+    parse_signatures, verify_request_with_policy,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -319,12 +319,14 @@ mod nonce_tests {
         assert!(!memory.remember_nonce("last-b", 100));
         let poisoned = Arc::new(Nonces::default());
         let worker = poisoned.clone();
-        assert!(std::thread::spawn(move || {
-            let _guard = worker.0.lock().unwrap();
-            panic!("poison the test nonce store");
-        })
-        .join()
-        .is_err());
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = worker.0.lock().unwrap();
+                panic!("poison the test nonce store");
+            })
+            .join()
+            .is_err()
+        );
         assert!(!poisoned.remember_nonce("ordinary", 100));
         assert!(!poisoned.remember_pair(Some("old"), Some("new"), 100));
     }

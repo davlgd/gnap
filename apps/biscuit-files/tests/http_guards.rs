@@ -1,14 +1,14 @@
 use axum::{
+    Router,
     body::Body,
     http::{Request, Version},
     routing::get,
-    Router,
 };
 use gnap_biscuit_files::http::{self, Origin};
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -17,7 +17,7 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn body_read_failures_have_distinct_statuses_and_release_admission() {
-    use axum::body::{to_bytes, Bytes};
+    use axum::body::{Bytes, to_bytes};
     use futures_util::stream;
     let workers = Arc::new(Semaphore::new(1));
     let origin = Origin::parse("http://127.0.0.1:18080").unwrap();
@@ -46,10 +46,12 @@ async fn body_read_failures_have_distinct_statuses_and_release_admission() {
         .await
         .unwrap();
         assert_eq!(response.status(), expected);
-        assert!(to_bytes(response.into_body(), 1024)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(workers.available_permits(), 1);
     }
     let response = http::dispatch(

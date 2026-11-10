@@ -27,8 +27,8 @@ pub mod response;
 pub mod state;
 
 pub use event::Event;
-pub use grant::{Allowed, Grant, TransitionError, DEFAULT_WAIT};
-pub use response::{check_response, Violation};
+pub use grant::{Allowed, DEFAULT_WAIT, Grant, TransitionError};
+pub use response::{Violation, check_response};
 pub use state::State;
 
 pub use gnap_types::unix_now;

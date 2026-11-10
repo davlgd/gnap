@@ -20,10 +20,10 @@ mod replay;
 
 pub use replay::{JwsReplayMemory, ReplayCache, ReplayId};
 
-use crate::jwk::{PublicKey, JWS_ALGORITHMS, MAX_KEY_ID_BYTES};
+use crate::jwk::{JWS_ALGORITHMS, MAX_KEY_ID_BYTES, PublicKey};
 use crate::proof::{ProofError, Signer, Verifier};
 use crate::verify::{Expectations, SignedRequest, VerifyError};
-use compact::{decode, encode, typ, Header, Role, Segments};
+use compact::{Header, Role, Segments, decode, encode, typ};
 use gnap_types::token::TokenValue;
 use gnap_types::uri;
 use sha2::{Digest as _, Sha256};

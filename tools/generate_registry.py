@@ -154,7 +154,7 @@ def main():
     # Format before replacing the artifact: a missing or failing formatter must
     # not leave a partially regenerated file behind.
     formatted = subprocess.run(
-        ["rustfmt", "--edition", "2021", "--emit", "stdout"],
+        ["rustfmt", "--edition", "2024", "--emit", "stdout"],
         input="\n".join(L) + "\n", text=True, capture_output=True, check=True,
     ).stdout
     OUT.parent.mkdir(parents=True, exist_ok=True)

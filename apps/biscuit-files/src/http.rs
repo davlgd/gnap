@@ -1,11 +1,11 @@
 //! Fixed-origin transport and bounded, off-runtime HTTP dispatch.
 use axum::{
-    body::{to_bytes, Body},
+    Router,
+    body::{Body, to_bytes},
     extract::{Request, State},
-    http::{uri::Authority, StatusCode, Version},
+    http::{StatusCode, Version, uri::Authority},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    Router,
 };
 use gnap_client::{HttpRequest, HttpResponse, HttpTransport};
 use std::{

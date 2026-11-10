@@ -5,7 +5,7 @@ use super::{
     JwsReplayStore, NonceStore, Revision, RotationNonceStore, StoreError, UserCodeStore,
 };
 use crate::derivation::{
-    ParentToken, MAX_DERIVED_CHILDREN, MAX_DERIVED_GRANTS, MAX_DERIVED_LIFETIME,
+    MAX_DERIVED_CHILDREN, MAX_DERIVED_GRANTS, MAX_DERIVED_LIFETIME, ParentToken,
 };
 use crate::server::MAX_CLOCK_SKEW;
 use gnap_crypto::jws::{JwsReplayMemory as _, ReplayCache, ReplayId};
@@ -453,12 +453,12 @@ impl GrantStore for MemoryStorage {
         for child in cascade {
             state.publish(child, Indices::default());
         }
-        if let Some(parent) = state.derived_origins.remove(&id) {
-            if let Some(children) = state.children.get_mut(&parent) {
-                children.remove(&id);
-                if children.is_empty() {
-                    state.children.remove(&parent);
-                }
+        if let Some(parent) = state.derived_origins.remove(&id)
+            && let Some(children) = state.children.get_mut(&parent)
+        {
+            children.remove(&id);
+            if children.is_empty() {
+                state.children.remove(&parent);
             }
         }
         state.indices.replace(id, Indices::default());
@@ -684,10 +684,12 @@ mod tests {
             storage.create(aggregate()),
             Err(StoreError::Exhausted)
         ));
-        assert!(storage
-            .lookup(GrantSelector::Continuation("continuation"))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .lookup(GrantSelector::Continuation("continuation"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -716,10 +718,12 @@ mod tests {
                 .revision,
             Revision(u64::MAX)
         );
-        assert!(storage
-            .lookup(GrantSelector::Continuation("replacement"))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .lookup(GrantSelector::Continuation("replacement"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

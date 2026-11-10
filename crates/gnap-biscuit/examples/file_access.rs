@@ -5,7 +5,7 @@ use biscuit_auth::KeyPair;
 use gnap_biscuit::{
     Error, FileAction, FileRight, Issuer, LiveDecision, RequestContext, VerifiedToken,
 };
-use gnap_client::{sign_request, HttpRequest};
+use gnap_client::{HttpRequest, sign_request};
 use gnap_crypto::{Ps256Signer, SignedRequest};
 use std::{
     cell::RefCell,

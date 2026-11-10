@@ -5,7 +5,7 @@ use gnap_biscuit_files::{
     resource_check,
 };
 use gnap_client::HttpTransport;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     net::TcpListener,
     path::PathBuf,

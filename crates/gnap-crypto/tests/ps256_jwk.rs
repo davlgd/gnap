@@ -1,11 +1,11 @@
 //! Public JWK import/export, including hostile metadata and bounded RSA inputs.
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use gnap_crypto::httpsig::{sign, Component, Message, SignatureInput, Tag};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use gnap_crypto::httpsig::{Component, Message, SignatureInput, Tag, sign};
 use gnap_crypto::{
-    verify_request, Expectations, Ps256Signer, Ps256Verifier, SignedRequest, Signer, Verifier,
+    Expectations, Ps256Signer, Ps256Verifier, SignedRequest, Signer, Verifier, verify_request,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 // Public test material from RFC 9421 Appendix B.1.2; never a deployment key.
 const PRIVATE: &str = include_str!("rfc9421-b12.pkcs1.pem");
@@ -101,13 +101,15 @@ fn imported_kid_is_enforced_by_the_http_request_verifier() {
     )
     .unwrap();
     public.insert("kid".into(), json!("another-client"));
-    assert!(verify_request(
-        &request,
-        &Ps256Verifier::from_public_jwk(&public).unwrap(),
-        &expectations,
-        &unused_nonce
-    )
-    .is_err());
+    assert!(
+        verify_request(
+            &request,
+            &Ps256Verifier::from_public_jwk(&public).unwrap(),
+            &expectations,
+            &unused_nonce
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -120,10 +122,12 @@ fn ps256_rejects_a_pss_signature_with_a_non_sha256_length_salt() {
     let signature = wrong_salt
         .try_sign_with_rng(&mut getrandom::SysRng, b"salt length matters")
         .unwrap();
-    assert!(Ps256Verifier::from_public_jwk(&jwk())
-        .unwrap()
-        .verify(b"salt length matters", &signature.to_vec())
-        .is_err());
+    assert!(
+        Ps256Verifier::from_public_jwk(&jwk())
+            .unwrap()
+            .verify(b"salt length matters", &signature.to_vec())
+            .is_err()
+    );
 }
 
 #[test]
@@ -299,14 +303,18 @@ fn metadata_limits_apply_before_cloning_or_unbounded_work() {
     assert!(Ps256Verifier::from_public_jwk(&public).is_ok());
     public.insert("kid".into(), json!("k".repeat(1025)));
     rejects(&public);
-    assert!(Ps256Signer::from_pkcs1_pem(PRIVATE, "")
-        .unwrap()
-        .public_jwk()
-        .is_err());
-    assert!(Ps256Signer::from_pkcs1_pem(PRIVATE, "k".repeat(1025))
-        .unwrap()
-        .public_jwk()
-        .is_err());
+    assert!(
+        Ps256Signer::from_pkcs1_pem(PRIVATE, "")
+            .unwrap()
+            .public_jwk()
+            .is_err()
+    );
+    assert!(
+        Ps256Signer::from_pkcs1_pem(PRIVATE, "k".repeat(1025))
+            .unwrap()
+            .public_jwk()
+            .is_err()
+    );
     public.insert("kid".into(), json!("bounded"));
     public.insert("key_ops".into(), json!(vec!["verify"; 33]));
     rejects(&public);

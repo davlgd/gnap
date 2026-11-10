@@ -1,7 +1,7 @@
 use super::*;
 use crate::net::Destinations as _;
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::Request,
 };
 use std::sync::OnceLock;
@@ -303,9 +303,11 @@ async fn bounded_network_runs_on_a_dedicated_thread_and_rejects_redirects_and_ov
         let result = tokio::task::spawn_blocking(move || {
             let network = network::Network::new(target, true, runtime);
             let response = network.send(HttpRequest::new("GET", &network.target.resource));
-            assert!(network
-                .send(HttpRequest::new("GET", "http://169.254.169.254/secret"))
-                .is_err());
+            assert!(
+                network
+                    .send(HttpRequest::new("GET", "http://169.254.169.254/secret"))
+                    .is_err()
+            );
             assert!(
                 network.last().is_none(),
                 "failure clears previous captured response"

@@ -16,8 +16,8 @@
 
 use crate::digest::verify_content_digest;
 use crate::httpsig::{
-    parse_covered_components, parse_signature_params, parse_signatures, signature_base, Component,
-    LabelledSignature, Message, ReceivedParams, Tag,
+    Component, LabelledSignature, Message, ReceivedParams, Tag, parse_covered_components,
+    parse_signature_params, parse_signatures, signature_base,
 };
 use crate::proof::Verifier;
 use core::fmt;
@@ -41,7 +41,7 @@ pub struct SignedRequest<'a> {
 
 impl SignedRequest<'_> {
     /// Every instance of a field, in message order (RFC 9421 §2.1).
-    pub(crate) fn header_values(&self, name: &str) -> impl Iterator<Item = &str> {
+    pub(crate) fn header_values(&self, name: &str) -> impl Iterator<Item = &str> + use<'_> {
         let name = name.to_ascii_lowercase();
         self.headers
             .iter()
@@ -389,13 +389,13 @@ fn remember_signature_nonce(
     // otherwise anyone could burn a nonce by replaying it with a forged
     // signature, and a second candidate in the same message would then be
     // refused as a replay of the first.
-    if let Some(nonce) = &params.nonce {
-        if !nonces.remember_nonce(nonce, now) {
-            return Err(format!(
-                "the signature nonce `{nonce}` has already been seen; it MUST be \
+    if let Some(nonce) = &params.nonce
+        && !nonces.remember_nonce(nonce, now)
+    {
+        return Err(format!(
+            "the signature nonce `{nonce}` has already been seen; it MUST be \
                  unique (RFC 9635 §7.3.1)"
-            ));
-        }
+        ));
     }
 
     Ok(())

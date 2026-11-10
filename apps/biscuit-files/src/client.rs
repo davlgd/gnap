@@ -1,28 +1,28 @@
 //! Browser-facing client; private keys, GNAP tokens and session objects stay here.
 use crate::{
+    MAX_KEY_ATTEMPTS, MAX_RECORDS, MAX_RESTRICTIONS, TTL,
     authorization::rights,
     config::Config,
     http::{self, Network, Origin},
-    MAX_KEY_ATTEMPTS, MAX_RECORDS, MAX_RESTRICTIONS, TTL,
 };
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use biscuit_auth::PublicKey;
 use gnap_biscuit::VerifiedToken;
 use gnap_client::{HttpRequest, HttpTransport, Session};
-use gnap_crypto::{httpsig::fresh_nonce, Ps256Signer, Signer};
+use gnap_crypto::{Ps256Signer, Signer, httpsig::fresh_nonce};
 use gnap_types::{message::GrantRequest, token::TokenValue};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    sync::mpsc::{self, SyncSender},
     sync::Arc,
+    sync::mpsc::{self, SyncSender},
     time::{Duration, Instant},
 };
 
@@ -480,7 +480,7 @@ pub fn router(app: App) -> Router {
 mod tests {
     use super::*;
     use axum::{
-        body::{to_bytes, Body},
+        body::{Body, to_bytes},
         http::Request,
     };
     use tower::ServiceExt;

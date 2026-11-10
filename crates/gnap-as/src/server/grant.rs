@@ -1,9 +1,9 @@
 //! Grant requests: classification, policy evaluation, issuance, and interaction offers.
 
 use super::{
-    error, is_jose_content, method_not_allowed, misconfigured, modifies, not_found, ok,
-    require_json_content, signed_request, storage_failure, unsupported_media_type,
-    unsupported_proof, AuthorizationServer, INTERACTION_LIFETIME,
+    AuthorizationServer, INTERACTION_LIFETIME, error, is_jose_content, method_not_allowed,
+    misconfigured, modifies, not_found, ok, require_json_content, signed_request, storage_failure,
+    unsupported_media_type, unsupported_proof,
 };
 use crate::encoding::TokenEncoder;
 use crate::nonce::Nonces;
@@ -69,26 +69,26 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
         // §7.1 — a key sent by value is presented in exactly one format, and a
         // JWK carries `alg` and `kid`. The AS checks that before trying to use
         // it: a key it cannot read is a request it cannot verify.
-        if let Some(key) = presented_key(&body.client) {
-            if let Err(e) = key.validate() {
-                return error(ErrorCode::InvalidClient, &e.to_string());
-            }
+        if let Some(key) = presented_key(&body.client)
+            && let Err(e) = key.validate()
+        {
+            return error(ErrorCode::InvalidClient, &e.to_string());
         }
 
         // §2.3.2 — the display information is shown to the RO on a page the AS
         // serves, so its URIs have to stand on their own.
-        if let Some(display) = body.client.as_value().and_then(|c| c.display.as_ref()) {
-            if let Err(e) = display.validate() {
-                return error(ErrorCode::InvalidClient, &e.to_string());
-            }
+        if let Some(display) = body.client.as_value().and_then(|c| c.display.as_ref())
+            && let Err(e) = display.validate()
+        {
+            return error(ErrorCode::InvalidClient, &e.to_string());
         }
 
         // §2.5.2 — a callback the AS cannot use is refused now, not at the end
         // of an interaction the RO has already been through.
-        if let Some(finish) = body.interact.as_ref().and_then(|i| i.finish.as_ref()) {
-            if let Err(reason) = supported_finish(finish) {
-                return error(ErrorCode::InvalidRequest, &reason);
-            }
+        if let Some(finish) = body.interact.as_ref().and_then(|i| i.finish.as_ref())
+            && let Err(reason) = supported_finish(finish)
+        {
+            return error(ErrorCode::InvalidRequest, &reason);
         }
 
         // §2.3 — the client identifies itself, and the AS resolves its key.
@@ -122,13 +122,12 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             .user
             .as_ref()
             .and_then(gnap_types::user::User::as_reference)
+            && !self.policy.recognises_user(reference)
         {
-            if !self.policy.recognises_user(reference) {
-                return error(
-                    ErrorCode::UnknownUser,
-                    "the user reference is not one this AS recognises (RFC 9635 §2.4.1)",
-                );
-            }
+            return error(
+                ErrorCode::UnknownUser,
+                "the user reference is not one this AS recognises (RFC 9635 §2.4.1)",
+            );
         }
 
         let decision = self
@@ -146,10 +145,10 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
             interaction_completed: false,
         });
         let response = self.settle(&mut aggregate, decision, now, None);
-        if aggregate.record.continuation_token.is_some() || !aggregate.tokens.is_empty() {
-            if let Err(failure) = self.storage.create(aggregate) {
-                return storage_failure(failure);
-            }
+        if (aggregate.record.continuation_token.is_some() || !aggregate.tokens.is_empty())
+            && let Err(failure) = self.storage.create(aggregate)
+        {
+            return storage_failure(failure);
         }
         response
     }
@@ -189,25 +188,26 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                     .access_token
                     .as_ref()
                     .map(|a| a.tokens.as_slice());
-                let tokens =
-                    match slots {
-                        // §2: a client that only wants subject information omits
-                        // `access_token`, and gets no token.
-                        None if access.is_empty() => Vec::new(),
-                        None => return misconfigured(
+                let tokens = match slots {
+                    // §2: a client that only wants subject information omits
+                    // `access_token`, and gets no token.
+                    None if access.is_empty() => Vec::new(),
+                    None => {
+                        return misconfigured(
                             "Decision::Approve grants rights to a request that asks for no token",
-                        ),
-                        Some([slot]) => vec![TokenApproval {
-                            requested_label: slot.label.clone(),
-                            access,
-                        }],
-                        Some(_) => {
-                            return misconfigured(
-                                "Decision::Approve needs exactly one requested token; \
+                        );
+                    }
+                    Some([slot]) => vec![TokenApproval {
+                        requested_label: slot.label.clone(),
+                        access,
+                    }],
+                    Some(_) => {
+                        return misconfigured(
+                            "Decision::Approve needs exactly one requested token; \
                              select tokens with Decision::ApproveTokens",
-                            )
-                        }
-                    };
+                        );
+                    }
+                };
                 self.approve_selected(aggregate, tokens, subject, now, authenticated)
             }
             Decision::ApproveTokens { tokens, subject } => {

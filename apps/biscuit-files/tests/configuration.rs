@@ -86,9 +86,11 @@ fn complete_environment_configuration_loads_only_its_role_and_never_uses_disk() 
             .iter()
             .filter(|name| name.starts_with("BISCUIT_"))
         {
-            assert!(role_materials(role)
-                .iter()
-                .any(|(expected, _)| expected == name));
+            assert!(
+                role_materials(role)
+                    .iter()
+                    .any(|(expected, _)| expected == name)
+            );
         }
         match role {
             Role::As => {
@@ -168,9 +170,11 @@ fn directory_mode_reads_only_required_files_and_has_no_secret_environment_fallba
         .unwrap();
         assert_eq!(reads.borrow().len(), role_materials(role).len());
         for file in reads.borrow().iter() {
-            assert!(role_materials(role)
-                .iter()
-                .any(|(_, expected)| expected == file));
+            assert!(
+                role_materials(role)
+                    .iter()
+                    .any(|(_, expected)| expected == file)
+            );
         }
         let missing = Config::load_with(
             role,

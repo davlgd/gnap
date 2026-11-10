@@ -5,10 +5,10 @@
 
 use crate::access::AccessItem;
 use crate::key::Key;
-use crate::message::{validate_discovery_endpoint, DiscoveryError};
+use crate::message::{DiscoveryError, validate_discovery_endpoint};
 use crate::token::TokenValue;
 use gnap_registry::{AccessTokenFlag, KeyProofingMethod, RsErrorCode, TokenFormat};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::{Map, Value};
 
 /// An RS presenting a key by value or by a prearranged reference (§3.2).
@@ -278,7 +278,9 @@ impl ActiveIntrospection {
             .as_ref()
             .is_some_and(|flags| flags.contains(&AccessTokenFlag::Bearer));
         if bearer == self.key.is_some() {
-            return Err("introspection.key: required for bound tokens, forbidden for bearer tokens (RFC 9767 §3.3)");
+            return Err(
+                "introspection.key: required for bound tokens, forbidden for bearer tokens (RFC 9767 §3.3)",
+            );
         }
         if [
             "active", "access", "iss", "key", "flags", "exp", "iat", "value", "manage", "continue",
@@ -345,13 +347,19 @@ impl<'de> Deserialize<'de> for IntrospectionResponse {
                     }
                 }
                 match object.remove("active") {
-                    Some(Value::Bool(false)) if object.is_empty() => Ok(IntrospectionResponse::Inactive),
+                    Some(Value::Bool(false)) if object.is_empty() => {
+                        Ok(IntrospectionResponse::Inactive)
+                    }
                     Some(Value::Bool(true)) => {
-                        let token: ActiveIntrospection = serde_json::from_value(Value::Object(object)).map_err(de::Error::custom)?;
+                        let token: ActiveIntrospection =
+                            serde_json::from_value(Value::Object(object))
+                                .map_err(de::Error::custom)?;
                         token.validate().map_err(de::Error::custom)?;
                         Ok(IntrospectionResponse::Active(token))
                     }
-                    _ => Err(de::Error::custom("introspection.active: required boolean; inactive responses carry no other fields (RFC 9767 §3.3)")),
+                    _ => Err(de::Error::custom(
+                        "introspection.active: required boolean; inactive responses carry no other fields (RFC 9767 §3.3)",
+                    )),
                 }
             }
         }

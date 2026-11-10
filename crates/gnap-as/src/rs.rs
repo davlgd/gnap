@@ -7,10 +7,10 @@
 //! issue RS management credentials, or implement trust-on-first-use.
 
 use crate::{
-    GrantSelector, NonceStore, Nonces, ResourceSetError, ResourceSetStore, RsId, Storage,
-    TokenRecord, MAX_CLOCK_SKEW,
+    GrantSelector, MAX_CLOCK_SKEW, NonceStore, Nonces, ResourceSetError, ResourceSetStore, RsId,
+    Storage, TokenRecord,
 };
-use gnap_crypto::verify::{verify_request_with_policy, Expectations, SignedRequest};
+use gnap_crypto::verify::{Expectations, SignedRequest, verify_request_with_policy};
 use gnap_registry::{AccessTokenFlag, KeyProofingMethod, RsErrorCode};
 use gnap_types::{
     access::AccessItem,
@@ -244,10 +244,10 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
             }
             return response;
         }
-        if let Some(registration) = &self.registration {
-            if request.url == registration.endpoint {
-                return self.register(request, now, registration);
-            }
+        if let Some(registration) = &self.registration
+            && request.url == registration.endpoint
+        {
+            return self.register(request, now, registration);
         }
         if request.url != self.endpoint {
             return HttpResponse {
@@ -303,7 +303,7 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
             {
                 Ok(record) => record,
                 Err(ResourceSetError::InvalidAccessInput) => {
-                    return rs_error(RsErrorCode::InvalidRequest)
+                    return rs_error(RsErrorCode::InvalidRequest);
                 }
                 Err(_) => {
                     // A failed local allocation/commit is not a malformed RS request.
@@ -406,7 +406,7 @@ impl<'a, R: ResourceServerResolver, P: IntrospectionPolicy, S: Storage>
             {
                 IntrospectionDecision::Inactive => return inactive(),
                 IntrospectionDecision::InvalidAccess => {
-                    return rs_error(RsErrorCode::InvalidAccess)
+                    return rs_error(RsErrorCode::InvalidAccess);
                 }
                 IntrospectionDecision::Active { access, key } => (access, key),
             };
@@ -459,10 +459,10 @@ pub(crate) fn authenticate_rs(
     let key = &resolved.key;
     // The RS proves itself with `httpsig`, the method discovery announces.
     let verifier = rs_verifier(key)?;
-    if let Some(presented) = identity.as_value().and_then(|rs| rs.key.as_value()) {
-        if presented != key {
-            return None;
-        }
+    if let Some(presented) = identity.as_value().and_then(|rs| rs.key.as_value())
+        && presented != key
+    {
+        return None;
     }
     let signed = SignedRequest {
         method: &request.method,

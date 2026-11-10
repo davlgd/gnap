@@ -6,7 +6,7 @@ use crate::nonce::Nonces;
 use crate::policy::{KeyResolver, Policy};
 use crate::storage::{GrantRecord, GrantSelector, Storage};
 use gnap_core::State;
-use gnap_crypto::hash::{interaction_hash_named, InteractionHashInput};
+use gnap_crypto::hash::{InteractionHashInput, interaction_hash_named};
 use gnap_registry::InteractionFinishMethod;
 use gnap_types::interact::InteractCallback;
 
@@ -138,7 +138,7 @@ impl<P: Policy, K: KeyResolver, S: Storage, N: Nonces, E: TokenEncoder>
                 match finish.method {
                     InteractionFinishMethod::Redirect | InteractionFinishMethod::Push => {}
                     InteractionFinishMethod::Unregistered(ref name) => {
-                        return Err(InteractionError::UnsupportedFinish(name.clone()))
+                        return Err(InteractionError::UnsupportedFinish(name.clone()));
                     }
                 }
                 Some((finish, uri.to_owned()))

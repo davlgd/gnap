@@ -1,9 +1,9 @@
 //! Independent wire assertions for RFC 9635 section 9, not SDK message validation.
 
-use crate::{check, Check};
+use crate::{Check, check};
 use serde::{
-    de::{MapAccess, Visitor},
     Deserialize, Deserializer,
+    de::{MapAccess, Visitor},
 };
 use serde_json::Value;
 
@@ -184,29 +184,71 @@ pub fn checks(
         .and_then(Value::as_str);
     let userinfo = endpoint.is_some_and(has_userinfo);
     let mut checks = vec![
-        check("discovery-http-200", status.map(|s| s == 200), "OPTIONS success profile expects HTTP 200 without credentials. Section 9 does not explicitly mandate this status code. Missing captured status is not tested; redirects are not followed.", RFC),
-        check("discovery-media-type", headers.map(json_media), "Captured HTTP response has one application/json Content-Type. Missing captured headers are not tested; an empty captured list fails.", RFC),
-        check("discovery-json-object", Some(object.is_some()), "Response bytes parse as one JSON object. This assertion is independent of SDK message deserialization.", RFC),
-        check("discovery-duplicate-members", unique, "Diagnostic profile: top-level member names must be unambiguous. RFC 8259 recommends unique names; duplicates are not interpreted with last-wins semantics here.", "https://www.rfc-editor.org/rfc/rfc8259.html#section-4"),
-        check("discovery-endpoint", document.and_then(|_| endpoint.map_or(Some(false), https_endpoint)), if userinfo { "Safe discovery profile: userinfo (including an empty userinfo before @) is rejected. RFC 9110 section 4.2.4 recommends that recipients treat userinfo in an untrusted received URI as an error (SHOULD). This is not an additional GNAP MUST or an assertion that JSON members are HTTP field values." } else if endpoint.is_some_and(|e| https_endpoint(e).is_none()) { "Not tested: endpoint passes raw URI syntax prechecks but its interpretation is unsupported by this URL parser (for example IPvFuture, oversized numeric port or a registered name). This coverage limit is neither a normative failure nor full URI validation; host encoding/production semantics remain unresolved. Exact endpoint identity is checked separately." } else { "Required grant_request_endpoint is a string containing an absolute HTTPS URL with a host, valid URL syntax and no fragment. HTTP loopback remains nonconformant, even if labelled development-only." }, if userinfo { "https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.4" } else { RFC }),
-        check("discovery-endpoint-match", document.and_then(|_| queried_endpoint.map(|queried| endpoint == Some(queried))), "Compare the announced URL with the exact URL queried, without normalization. No imported URL is fetched. Missing queried_endpoint means this contextual check is not tested.", RFC),
+        check(
+            "discovery-http-200",
+            status.map(|s| s == 200),
+            "OPTIONS success profile expects HTTP 200 without credentials. Section 9 does not explicitly mandate this status code. Missing captured status is not tested; redirects are not followed.",
+            RFC,
+        ),
+        check(
+            "discovery-media-type",
+            headers.map(json_media),
+            "Captured HTTP response has one application/json Content-Type. Missing captured headers are not tested; an empty captured list fails.",
+            RFC,
+        ),
+        check(
+            "discovery-json-object",
+            Some(object.is_some()),
+            "Response bytes parse as one JSON object. This assertion is independent of SDK message deserialization.",
+            RFC,
+        ),
+        check(
+            "discovery-duplicate-members",
+            unique,
+            "Diagnostic profile: top-level member names must be unambiguous. RFC 8259 recommends unique names; duplicates are not interpreted with last-wins semantics here.",
+            "https://www.rfc-editor.org/rfc/rfc8259.html#section-4",
+        ),
+        check(
+            "discovery-endpoint",
+            document.and_then(|_| endpoint.map_or(Some(false), https_endpoint)),
+            if userinfo {
+                "Safe discovery profile: userinfo (including an empty userinfo before @) is rejected. RFC 9110 section 4.2.4 recommends that recipients treat userinfo in an untrusted received URI as an error (SHOULD). This is not an additional GNAP MUST or an assertion that JSON members are HTTP field values."
+            } else if endpoint.is_some_and(|e| https_endpoint(e).is_none()) {
+                "Not tested: endpoint passes raw URI syntax prechecks but its interpretation is unsupported by this URL parser (for example IPvFuture, oversized numeric port or a registered name). This coverage limit is neither a normative failure nor full URI validation; host encoding/production semantics remain unresolved. Exact endpoint identity is checked separately."
+            } else {
+                "Required grant_request_endpoint is a string containing an absolute HTTPS URL with a host, valid URL syntax and no fragment. HTTP loopback remains nonconformant, even if labelled development-only."
+            },
+            if userinfo {
+                "https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.4"
+            } else {
+                RFC
+            },
+        ),
+        check(
+            "discovery-endpoint-match",
+            document.and_then(|_| queried_endpoint.map(|queried| endpoint == Some(queried))),
+            "Compare the announced URL with the exact URL queried, without normalization. No imported URL is fetched. Missing queried_endpoint means this contextual check is not tested.",
+            RFC,
+        ),
     ];
     // A syntax this parser can't interpret leaves the endpoint undecided.
-    if document.is_some() && endpoint.is_some_and(|e| https_endpoint(e).is_none()) && !userinfo {
-        if let Some(finding) = checks
+    if document.is_some()
+        && endpoint.is_some_and(|e| https_endpoint(e).is_none())
+        && !userinfo
+        && let Some(finding) = checks
             .iter_mut()
             .find(|finding| finding.id == "discovery-endpoint")
-        {
-            finding.undecided = true;
-        }
+    {
+        finding.undecided = true;
     }
-    if userinfo {
-        if let Some(finding) = checks
+    if userinfo
+        && let Some(finding) = checks
             .iter_mut()
             .find(|finding| finding.id == "discovery-endpoint")
-        {
-            finding.remediation = Some("Remove userinfo and its @ delimiter from the announced endpoint. This diagnostic profile never needs or accepts embedded credentials.");
-        }
+    {
+        finding.remediation = Some(
+            "Remove userinfo and its @ delimiter from the announced endpoint. This diagnostic profile never needs or accepts embedded credentials.",
+        );
     }
     for (field, registered) in [
         (
@@ -235,18 +277,53 @@ pub fn checks(
     ] {
         let value = document.and_then(|o| o.get(field));
         let (outcome, detail, remediation, undecided) = match value {
-            None if document.is_none() => (None, "Not tested: no unambiguous discovery object is available to inspect this capability list.", None, false),
-            None => (None, "Optional capability list not announced. Omission is not a protocol failure and does not establish supported capabilities.", None, false),
+            None if document.is_none() => (
+                None,
+                "Not tested: no unambiguous discovery object is available to inspect this capability list.",
+                None,
+                false,
+            ),
+            None => (
+                None,
+                "Optional capability list not announced. Omission is not a protocol failure and does not establish supported capabilities.",
+                None,
+                false,
+            ),
             Some(Value::Array(values)) if values.iter().all(Value::is_string) => {
                 if values.is_empty() {
-                    (None, "Optional capability list is a correctly typed empty array: no capability is announced or exercised.", None, false)
-                } else if values.iter().all(|v| registered(v.as_str().unwrap_or_default())) {
-                    (Some(true), "All announced names occur in this build's registry snapshot. This verifies names only, not whether these capabilities actually work or are allowed for a particular client.", None, false)
+                    (
+                        None,
+                        "Optional capability list is a correctly typed empty array: no capability is announced or exercised.",
+                        None,
+                        false,
+                    )
+                } else if values
+                    .iter()
+                    .all(|v| registered(v.as_str().unwrap_or_default()))
+                {
+                    (
+                        Some(true),
+                        "All announced names occur in this build's registry snapshot. This verifies names only, not whether these capabilities actually work or are allowed for a particular client.",
+                        None,
+                        false,
+                    )
                 } else {
-                    (None, "At least one name is unknown to this build's registry snapshot. Registration is unresolved, not accepted or certified; submitted values are not echoed.", Some("Check the current IANA registry linked in the page references and README before deciding whether the name is registered; update the snapshot or correct the announcement."), true)
+                    (
+                        None,
+                        "At least one name is unknown to this build's registry snapshot. Registration is unresolved, not accepted or certified; submitted values are not echoed.",
+                        Some(
+                            "Check the current IANA registry linked in the page references and README before deciding whether the name is registered; update the snapshot or correct the announcement.",
+                        ),
+                        true,
+                    )
                 }
             }
-            Some(_) => (Some(false), "When announced, this capability must be an array containing only JSON strings; null is not omission.", Some("Use an array of registered string names, or omit this optional field."), false),
+            Some(_) => (
+                Some(false),
+                "When announced, this capability must be an array containing only JSON strings; null is not omission.",
+                Some("Use an array of registered string names, or omit this optional field."),
+                false,
+            ),
         };
         let mut finding = check(field, outcome, detail, RFC);
         finding.remediation = remediation;
@@ -259,10 +336,18 @@ pub fn checks(
         "Not tested: no unambiguous discovery object is available to inspect the key rotation declaration."
     } else {
         match rotation {
-            None => "Optional field not announced; section 9 defines omission as key rotation unsupported. This is not a failure.",
-            Some(Value::Bool(false)) => "AS declares key rotation unsupported. This pass checks the boolean declaration only; no key rotation request was executed.",
-            Some(Value::Bool(true)) => "AS declares key rotation supported. This pass checks the boolean declaration only; it does not prove rotation works or that any particular client is authorized.",
-            Some(_) => "When present, the key rotation declaration must be a JSON boolean, not a string, number or null.",
+            None => {
+                "Optional field not announced; section 9 defines omission as key rotation unsupported. This is not a failure."
+            }
+            Some(Value::Bool(false)) => {
+                "AS declares key rotation unsupported. This pass checks the boolean declaration only; no key rotation request was executed."
+            }
+            Some(Value::Bool(true)) => {
+                "AS declares key rotation supported. This pass checks the boolean declaration only; it does not prove rotation works or that any particular client is authorized."
+            }
+            Some(_) => {
+                "When present, the key rotation declaration must be a JSON boolean, not a string, number or null."
+            }
         }
     };
     checks.push(check(

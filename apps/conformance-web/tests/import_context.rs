@@ -1,9 +1,9 @@
 //! Integration boundaries between AS discovery and the RS-facing import kinds.
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use gnap_conformance_web::{analyze, app, Import};
+use gnap_conformance_web::{Import, analyze, app};
 use serde_json::json;
 use tower::ServiceExt;
 
