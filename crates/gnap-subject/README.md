@@ -2,6 +2,8 @@
 
 Issue and verify the PS256-signed `id_token` assertions that a GNAP subject response carries ([RFC 9635 §3.4](https://www.rfc-editor.org/rfc/rfc9635.html#section-3.4)). The crate reuses the RSA-PSS implementation of `gnap-crypto`, and isn't an OpenID Provider.
 
+Add it with `cargo add gnap-subject`. Its [API documentation](https://docs.rs/gnap-subject) is on docs.rs.
+
 ## Verify a subject response
 
 Configure a `Trust` that pairs the authorization server's grant endpoint, the issuer, and the issuer's public key, then call `Trust::verify_subject` on the response. The key comes from your configuration, never from the JWT. The verifier checks the signature, issuer, audience, session nonce, and time bounds before it returns an identity, and its errors contain no claim or token value.

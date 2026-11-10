@@ -2,6 +2,8 @@
 
 The GNAP grant-state machine: transitions, guards and response constraints without HTTP, cryptography or storage I/O.
 
+Add it with `cargo add gnap-core`. Its [API documentation](https://docs.rs/gnap-core) is on docs.rs.
+
 ## Apply a transition
 
 ```rust

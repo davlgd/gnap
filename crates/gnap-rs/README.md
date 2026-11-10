@@ -2,6 +2,8 @@
 
 Check opaque GNAP access tokens on a resource server. `gnap-rs` asks a trusted authorization server about the token through authenticated introspection ([RFC 9767](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.3)), then verifies the client's proof on the actual resource request. It needs neither an authorization-server store nor a particular HTTP framework.
 
+Add it with `cargo add gnap-rs`. Its [API documentation](https://docs.rs/gnap-rs) is on docs.rs.
+
 ## Integrate a resource endpoint
 
 1. Configure `TrustedAs::new` with the exact HTTPS grant and introspection endpoints your deployment approves

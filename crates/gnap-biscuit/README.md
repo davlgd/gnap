@@ -2,6 +2,8 @@
 
 This crate issues real Biscuit tokens, lets their holders attenuate them locally, and verifies GNAP HTTP Message Signatures before authorizing file requests. It implements the application profile `gnap-biscuit-file-v1`, not the whole Biscuit language.
 
+Add it with `cargo add gnap-biscuit`. Its [API documentation](https://docs.rs/gnap-biscuit) is on docs.rs.
+
 Run the in-process token-issuance and resource-authorization example with:
 
 ```bash

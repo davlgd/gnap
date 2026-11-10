@@ -2,6 +2,8 @@
 
 The 23 IANA registries defined for GNAP by RFC 9635 and RFC 9767, generated from vendored official CSV files. Value registries provide enums; field-name registries provide slices of field names.
 
+Add it with `cargo add gnap-registry`. Its [API documentation](https://docs.rs/gnap-registry) is on docs.rs.
+
 ## Use a registry value
 
 ```rust
