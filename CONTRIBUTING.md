@@ -12,7 +12,7 @@ This document explains how to propose, check, and submit a change to the GNAP li
 
 ## Propose a change
 
-Describe the task you were trying to complete, what went wrong, and how to reproduce it. An integration report helps most with the revision you used, a minimal example, the expected and the observed behavior, and enough context to tell a protocol rule from an application policy. Use synthetic data, and remove credentials before you share anything.
+Describe the task you were attempting, what went wrong, and how to reproduce it. An integration report helps most with the revision you used, a minimal example, the expected and observed behavior, and enough context to tell a protocol rule from an application policy. Use synthetic data, and remove credentials before sharing.
 
 Keep each pull request focused on one change: the quality of a review drops as its size grows. Explain why the change is useful, add a regression test for each failure you fix, and update the guides and support claims it affects.
 
@@ -27,7 +27,7 @@ cargo test --workspace --locked
 mise run lint:docs
 ```
 
-A check that passes doesn't prove everything. A change that touches the network needs both a successful and a refused request, not only unit tests. Report local, CI, and hosted results separately, and don't present one as another.
+A passing check doesn't prove everything. A change that touches the network needs both a successful and a refused request, not only unit tests. Report local, CI, and hosted results apart, never one as another.
 
 ## Code quality
 
@@ -35,16 +35,16 @@ The code aims for what an experienced Rust reviewer expects to find, so that a r
 
 - Idiomatic, current Rust within the declared minimum version, with no warnings
 - No dead code, commented-out code, or abstraction without a second use
-- One responsibility per module, small traits, and transport, storage, time, and randomness injected rather than hardcoded
+- One responsibility per module, small traits, and injected transport, storage, time, and randomness
 - Typed errors, and no panic on input that comes from outside the process
 - The smallest public API that serves the use case, every public item documented
 - A test for each behavior, with the refusal cases next to the successful ones
 
-The pages of the applications build their nodes with the DOM APIs and render every string from a response as text, without parsing HTML, under a content security policy that allows no inline code. Words for closed values come from the page's own tables, looked up as own properties, and a value the page doesn't know shows as unknown. A page runs one action at a time, never polls in a way that exhausts a session's quota, and tells a refusal of access from a server failure.
+Application pages build their nodes with the DOM APIs and render every string from a response as text, without parsing HTML, under a content security policy that allows no inline code. Words for closed values come from the page's own tables, looked up as own properties, and a value the page doesn't know shows as unknown. A page runs one action at a time, never polls away a session's quota, and tells a refusal of access from a server failure.
 
 Comments explain why the code does something non-obvious, not what it does. References to the RFCs, such as `GNAP-9635-§7.3.1`, and the literal quotations next to them, are the project's normative traceability: keep them, and keep the quotations exact, because CI compares them with the vendored RFC text.
 
-A change to the public API of a crate adds its entry to the [changelog](CHANGELOG.md), with what a user must change. Own the security bounds you enforce, such as a key size or a decoded length, as named constants of this project. A limit borrowed from a dependency changes silently when the dependency does. Depend only on published crate releases, never on a Git revision, and explain in the pull request why each new dependency is needed.
+A public API change adds its entry to the [changelog](CHANGELOG.md), with what a user must change. Own each security bound you enforce, such as a key size or a decoded length, as a named constant. A limit borrowed from a dependency changes silently when the dependency does. Depend only on published crate releases, never on a Git revision, and explain in the pull request why each new dependency is needed.
 
 ## Write documentation
 
@@ -59,9 +59,9 @@ Give each fact one home and link to it from elsewhere:
 - The [support matrix](docs/support-matrix.md) is the inventory of capabilities and limits
 - Dated validation records keep their original content and location
 
-Each crate README is the page readers see on crates.io, so it stays self-contained and can repeat the minimum Rust version.
+A crate README is its crates.io page: it stays self-contained, and may repeat the minimum Rust version.
 
-State what the code does, not what it should do. A claim of support links to the test that shows it, and nothing is called conformant without that evidence. Run every command you document, show its real output, and give every code block a language. To check a page, push your branch and read the file on GitHub, whose file view is 1,012 pixels wide: a list item shouldn't wrap, and the last line of a paragraph shouldn't hold only a few words.
+State what the code does, not what it should do. A claim of support links to the test that shows it, and nothing is called conformant without that evidence. Run every command you document, show its real output, and give every code block a language. To check a page, push your branch and read it on GitHub: the repository home shows the README and this guide 838 pixels wide, and the file view other pages 1,012 pixels wide: a list item shouldn't wrap, and the last line of a paragraph shouldn't hold only a few words.
 
 ## Commit messages
 
@@ -76,7 +76,7 @@ chore(deps): upgrade the RustCrypto stack
 
 The type is one of `feat`, `fix`, `docs`, `refactor`, `test`, `perf`, `build`, `ci`, `chore`, or `revert`. Start the subject with a lowercase imperative verb, keep the header to 100 characters, and don't end it with a period. Run `mise run lint:commits` to check the commits of your branch; CI checks those of each pull request with the rules of [`commitlint.config.mjs`](commitlint.config.mjs).
 
-Name the branch after the type of its main change, such as `feat/ed25519-signatures` or `docs/contributing-guide`.
+Name a branch after its type, such as `feat/ed25519-signatures` or `docs/contributing-guide`.
 
 ## Open a pull request
 
@@ -86,13 +86,13 @@ Address each finding with a correction, or with reproducible evidence when you d
 
 ## Review and merge
 
-Judge the work, not the author, with the same criteria for every contribution. When you ask for a change, show it and explain why.
+Judge the work, not the author, with the same criteria for all. Show each change you ask for, and why.
 
 Maintainers merge a pull request once CI passes on its latest commit, with a regular merge commit. The [evidence ledger](conformance/README.md) records commit identifiers, and a squash or a rebase that drops one of them makes its receipts unverifiable, so never rebase a branch that carries receipts.
 
 ## Safety
 
-A contribution doesn't authorize a deployment or a change to an external service: a hosted test needs explicit permission for its target and its side effects. Never commit private keys, credentials, or real user data. Mark public test fixtures as such, and keep the third-party notices that come with them.
+A contribution doesn't authorize a deployment or an external change: a hosted test needs explicit permission for its target and side effects. Never commit private keys, credentials, or real user data. Mark public test fixtures as such, and keep their third-party notices.
 
 ## License
 

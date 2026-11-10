@@ -1,6 +1,6 @@
 # Conformance ledger
 
-The ledger is a reproducible **inventory of the RFC sources, with an account of the evidence** against each of them. It doesn't assert that the workspace completes GNAP. Start with [the generated report](REPORT.md). The ledger covers the official source material of RFC 9635 and RFC 9767, including recommendations, optional mechanisms and the complete capability lists of C1/C2. It doesn't shrink the inventory to the features already implemented.
+The ledger is a reproducible **inventory of the RFC sources, with an account of the evidence** against each of them. It doesn't claim the workspace completes GNAP. Start with [the generated report](REPORT.md). The ledger covers the official source material of RFC 9635 and RFC 9767, including recommendations, optional mechanisms and the full C1/C2 capability lists. It doesn't shrink the inventory to implemented features.
 
 ## Reproduce and verify
 
@@ -25,7 +25,7 @@ python3 -B tools/conformance_ledger.py fetch
 python3 -B tools/conformance_ledger.py check
 ```
 
-`fetch` only retrieves the two exact RFC Editor URLs in [sources.lock.json](sources.lock.json), with TLS, no redirects and a 4 MB/source limit. Both downloads must match the pinned SHA-256 values before either source is replaced. It doesn't update the lock, apply errata, or make a changed upstream document silently become the new standard. Review a source-lock update as a separate change. `report` prints the current generated report to stdout.
+`fetch` only retrieves the two exact RFC Editor URLs in [sources.lock.json](sources.lock.json), with TLS, no redirects and a 4 MB/source limit. Both downloads must match the pinned SHA-256 values before either source is replaced. It doesn't update the lock, apply errata, or silently adopt a changed upstream document. Review a source-lock update as a separate change. `report` prints the generated report.
 
 ## Data and counting model
 
@@ -47,7 +47,7 @@ This does **not** prove that markup alone captures every normative implication. 
 
 ## Applicability isn't evidence
 
-Two decisions now contextualize the AS discovery response. A reviewed decision has this shape (the example is explanatory and isn't installed as a real decision):
+Two decisions contextualize the AS discovery response. A reviewed decision has this shape, for illustration only:
 
 ```json
 {
@@ -67,7 +67,7 @@ Appendix C permits a functioning client subset in its stated circumstances; it d
 
 ## Real execution receipts, not comments as evidence
 
-`run-tests` uses Python unittest discovery and records every named result: `pass`, `fail`, `error`, `skipped`, `expected_failure`, `unexpected_success`. An empty suite, missing outcome, source outside the repository or duplicate case ID fails closed. A class/module setup failure that prevents complete accounting doesn't produce a valid receipt. The receipt records source-module/tool hashes, Git revision and dirty-worktree flag, plus UTC Unix start/end times. It contains no raw failure output; the console output of the tests should still use synthetic data only.
+`run-tests` uses Python unittest discovery and records every named result: `pass`, `fail`, `error`, `skipped`, `expected_failure`, `unexpected_success`. An empty suite, missing outcome, source outside the repository or duplicate case ID fails closed. A class or module setup failure that prevents full accounting yields no valid receipt. The receipt records source-module/tool hashes, Git revision and dirty-worktree flag, plus UTC Unix start/end times. It contains no raw failure output; test console output should use synthetic data only.
 
 Future independently authored Python wire scenarios can live under `conformance/scenarios/` and use the same real runner:
 
@@ -101,7 +101,7 @@ It executes six directly declared tests in `conformance/scenarios/test_as_discov
 
 The endpoint block contains four BCP14 occurrences and its string type comes from field context. They aren't collapsed into a completed atomic obligation. The first block retains the client's MAY separately from the AS response MUST. Both decisions contextualize AS applicability only; the extraction's block review state and all other section 9 blocks remain unresolved. Required field checks don't assert that every optional discovery capability works.
 
-HTTP 200 is **not** one of these six normative assertions. Duplicate JSON names make dependent interpretation inconclusive, as `skipped`, not an invented GNAP MUST failure. The JSON object and `Content-Type: application/json` requirements are explicit in [RFC 9635 section 9, paragraph 2](https://www.rfc-editor.org/rfc/rfc9635.html#section-9-2) (vendored XML lines 7216–7220), not inferred from a diagnostic profile. Missing Content-Type fails; repeated Content-Type metadata is ambiguous and therefore skipped, without asserting a separate GNAP header-cardinality MUST. URI grammar doesn't impose the web diagnostic's separate userinfo safety policy. Registry/capability lists, optional rotation metadata, capability execution, sections 9.1/9.2, transport conformance and C1/C2 completion are outside this slice; none is silently excluded from the full inventory of source blocks.
+HTTP 200 isn't among these six normative assertions. Duplicate JSON names make dependent interpretation inconclusive, as `skipped`, not an invented GNAP MUST failure. The JSON object and `Content-Type: application/json` requirements are explicit in [RFC 9635 section 9, paragraph 2](https://www.rfc-editor.org/rfc/rfc9635.html#section-9-2) (vendored XML lines 7216–7220), not inferred from a diagnostic profile. Missing Content-Type fails; repeated Content-Type metadata is ambiguous, so skipped, without asserting a separate GNAP header-cardinality MUST. URI grammar doesn't impose the web diagnostic's separate userinfo safety policy. Registry/capability lists, optional rotation metadata, capability execution, sections 9.1/9.2, transport conformance and C1/C2 completion are outside this slice; none is silently excluded from the inventory.
 
 ### Operator-only capture, explicitly opt-in
 
@@ -135,7 +135,7 @@ Receipts bind the capture file hash, original body hash, exact endpoint, capture
 
 Publication deliberately takes two commits, coordinated by the maintainer:
 
-1. Review the capture, place it under `conformance/captures/`, and commit it with the final scenario, helper, and runner sources, without any evidence claim
+1. Commit the reviewed capture in `conformance/captures/` with the final sources, and no evidence claim
 2. From that clean commit, replay and emit the public receipt:
 
    ```sh
@@ -152,7 +152,7 @@ The archived [receipt](archive/receipts/gnap-delegation-discovery-2026-09-05.jso
 
 The earlier [replay receipt](archive/receipts/gnap-delegation-discovery-replay-2026-09-06.json) was produced on 6 September from the corrected scenario at clean commit `a470b42c9915130dcf086d3d7730afb71ea0c803`. It reuses the exact same capture from 5 September: no new network observation was made. It remains preserved, but its cases are no longer the active mappings in `evidence.json`.
 
-That older body contains only the public grant endpoint, announced `httpsig` proof and `key_rotation_supported: false`. The six response assertions don't establish capability execution or the remote source revision. A passing replay is only `passing_observation_not_completion`, contextualized by its capture time and endpoint; the ledger still gives no global percentage, and no certification of any kind.
+That older body holds only the public grant endpoint, announced `httpsig` proof and `key_rotation_supported: false`. The six response assertions don't establish capability execution or the remote revision. A passing replay is only `passing_observation_not_completion`, contextualized by its capture time and endpoint; the ledger still gives no global percentage, nor certification.
 
 The [receipt](archive/receipts/gnap-delegation-discovery-2026-09-06.json) of 6 September replays a [new live capture](captures/gnap-delegation-discovery-2026-09-06.json), acquired at UTC Unix `1788712167` after the two applications were redeployed. The body also announces the `redirect`, `user_code` and `user_code_uri` start modes. Six cases ran from clean commit `18987d2dcecb5695b8f947cae5b4aca4c24f0896` and supported the same six assertions on the same two blocks; no additional obligation was counted as completed. It is preserved byte for byte, like the earlier replay receipt, since the report generator changed on 10 November.
 

@@ -27,7 +27,7 @@ The hypothesis of this project is that GNAP's integrated grant lifecycle can mak
 
 ## Application experiments
 
-Each experiment states what an application should show, including its refusals, and what it still needs. Use synthetic data and isolated test credentials throughout.
+Each experiment states what an application should show, including its refusals, and what it still needs. Use synthetic data and isolated test credentials throughout, never production ones.
 
 | Experiment                                     | Success and refusal cases to observe                                                                                                                                                           | What it still needs                                                                                                                                                            |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

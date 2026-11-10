@@ -11,7 +11,7 @@ GNAP is its own delegated-authorization protocol, not an OAuth-compatible API. T
 
 The libraries sign and verify requests with HTTP Message Signatures, the `httpsig` proof method, with PS256, ES256, or Ed25519 keys, and with the `jws` and `jwsd` proof methods, with RS256, ES256, or EdDSA keys. Both GNAP conformance profiles require `httpsig` with PS256. The libraries issue opaque reference tokens, which a resource server checks through authenticated introspection, and an attenuable Biscuit token profile for file access.
 
-The [support matrix](docs/support-matrix.md) lists each capability with its state, its limits, and the tests that show it, including the proof methods and algorithms the libraries don't implement.
+The [support matrix](docs/support-matrix.md) gives the state, limits, and tests of each capability, and what the libraries leave out.
 
 ## Try the applications
 
@@ -39,7 +39,7 @@ The SDK workspace requires Rust 1.95 or newer. The applications have their own t
 
 ## Use the libraries
 
-Choose the crate for the protocol role you need. The client and the authorization server impose neither an HTTP framework nor an async runtime: your application supplies the transport, the trust decisions, and the authorization policy. The in-memory stores serve the examples, while persistent storage and real user authentication belong to your deployment.
+Choose the crate for your protocol role. The client and the authorization server impose neither an HTTP framework nor an async runtime: your application supplies the transport, trust decisions, and authorization policy. The in-memory stores serve the examples; persistent storage and user authentication belong to your deployment.
 
 | Crate                                   | Purpose                                                                             |
 | --------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -62,7 +62,7 @@ cargo doc --workspace --no-deps --open --locked
 
 ## Documentation
 
-The [documentation index](docs/README.md) groups the guides by task: interaction, multiple tokens, resource authorization, downstream delegation, identity assertions, and diagnostics. The [evidence ledger](conformance/README.md) maps RFC requirements to reproducible tests, without claiming overall conformance. The [changelog](CHANGELOG.md) lists the API changes that affect you, with what to change.
+The [documentation index](docs/README.md) groups the guides by task: interaction, multiple tokens, resource authorization, downstream delegation, identity assertions, and diagnostics. The [evidence ledger](conformance/README.md) maps RFC requirements to reproducible tests, without claiming overall conformance. The [changelog](CHANGELOG.md) lists the changes of each release.
 
 ## Contribute
 

@@ -25,6 +25,6 @@ Unregistered values are retained rather than discarded. Recognizing a name doesn
 cargo test -p gnap-registry --locked
 ```
 
-Generated Rust is included in the package; consumers don't need to download IANA data or run the generator. Maintainers can reproduce it using the [registry workflow](https://github.com/davlgd/gnap/blob/main/docs/verification.md#iana-registries).
+Generated Rust is included in the package; consumers don't need to download IANA data or run the generator. Maintainers can reproduce it, byte for byte, using the [registry workflow](https://github.com/davlgd/gnap/blob/main/docs/verification.md#iana-registries).
 
 Part of [gnap](https://github.com/davlgd/gnap). Rust 1.95 or newer; Apache-2.0.

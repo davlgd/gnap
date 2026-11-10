@@ -28,7 +28,7 @@ The evidence receipts in `conformance/` record the digests of the sources they r
 ## Before you report a change as done
 
 - Run the [checks](CONTRIBUTING.md#check-your-change), and the full set in the [verification guide](docs/verification.md) when you touch an application, a generator, or the ledger
-- Read each Markdown file you change as GitHub renders it, at its file view width of 1,012 pixels
+- Read each changed Markdown file as GitHub renders it: 838 pixels wide on the repository home, 1,012 elsewhere
 - Verify that the remote branch holds your commit after you push it, before you report the change or reply to a review
 - Write each commit subject with the [commit conventions](CONTRIBUTING.md#commit-messages), and check it with `mise run lint:commits`
 - Keep documentation, structural, and behavioral changes in separate commits when you can

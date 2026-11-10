@@ -2,7 +2,7 @@
 
 A real HTTP consumer of this workspace: a web client asks an authorization server for read access to a synthetic folder and archive, the visitor explicitly consents, and a resource server verifies a live key-bound token before returning documents. Rotation and revocation can then be checked by presenting the retired token with a **fresh valid signature**, which the resource server must reject. Approval leaves the grant open: poll it, reduce its rights, request more with new consent, or revoke it through its continuation endpoint.
 
-This is a public teaching sandbox, not an authenticated document service or a claim of full GNAP conformance. No personal data or private key fixtures are used.
+A public teaching sandbox, not a document service or a conformance claim, with no personal data or private key fixtures.
 
 Try the [hosted lab](https://gnap-delegation.cleverapps.io), or run it locally as described below. The [documentation index](../../docs/README.md) links the library guides for multiple tokens, resource servers, push callbacks, and identity assertions.
 
@@ -84,7 +84,7 @@ Local consent expires five minutes after the initial grant, even though the SDK'
 
 `APP_ORIGIN`: exact externally visible HTTPS origin, no trailing slash, path, userinfo, query or fragment. Use its canonical spelling: lowercase hostname, without an explicit default port. HTTP is accepted only for localhost development. In that mode the app explicitly enables nonstandard HTTP-loopback discovery; OPTIONS responses carry `GNAP-Development-Only: insecure-loopback-discovery`. Public HTTPS deployments use the strict RFC 9635 discovery checks. RS discovery has the same explicit local exception to RFC 9767's HTTPS rule; its local responses carry `GNAP-Development-Only: insecure-loopback-discovery`. HTTP origins with `127.0.0.1` or `localhost` bind only `127.0.0.1`; `[::1]` binds only `::1`, without resolving DNS to choose an interface. Prefer the explicit IPv4 address in local examples; `localhost` clients must fall back to IPv4 if they try IPv6 first. A local proxy must connect through loopback. HTTPS origins bind `0.0.0.0` for the upstream TLS proxy. The app itself serves HTTP: the proxy and deployment firewall must block untrusted direct backend access. The Host/authority guard isn't a network-access boundary or TLS. No environment variable overrides this listening policy.
 
-Binary: `gnap-delegation-demo`; `GET /health` is a liveness probe returning HTTP 200 with `status: "ok"` and `bootstrap: "starting"`, `"ready"` or `"failed"`. Readiness requires `bootstrap: "ready"`, not HTTP 200 alone. `/api/start` returns 503 before readiness, without creating a cookie or grant.
+Binary: `gnap-delegation-demo`; `GET /health` is a liveness probe: HTTP 200 with `status: "ok"` and `bootstrap: "starting"`, `"ready"` or `"failed"`. Readiness needs `bootstrap: "ready"`; until then, `/api/start` returns 503 and creates no cookie or grant.
 
 Clever Cloud: use this app directory as `APP_FOLDER`, a **Build M** instance, and exactly one runtime instance. Set `APP_ORIGIN` to its public HTTPS origin. The crate has its own `[workspace]` and lockfile; its path dependencies need the whole repository at build time.
 

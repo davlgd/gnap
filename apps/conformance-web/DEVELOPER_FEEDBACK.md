@@ -1,6 +1,6 @@
 # Diagnostic workbench: developer feedback
 
-This feedback comes from implementing a real HTTP consumer, not a claim that an independent implementation has passed GNAP interoperability tests.
+This feedback comes from a real HTTP consumer, not from independent GNAP interoperability tests.
 
 ## What worked
 
@@ -18,7 +18,7 @@ Errors are excellent for local debugging but some embed URIs or values. A web se
 
 `KeyObject::validate()` verifies selected presentation constraints, not mathematical public-key/certificate validity or all private parameter cases. Expose validation scope clearly so UI authors can't equate `Ok(())` with a usable and safely presented key.
 
-Message shape alone doesn't check request/response cardinality, state, semantics of rights or elapsed time. An importable bounded trace format with explicit role, endpoint, exact bytes, observations and redaction would enable more useful black-box scenario tests without reconstructing SDK state.
+Message shape doesn't check request/response cardinality, state, semantics of rights or elapsed time. A bounded, importable trace with explicit role, endpoint, exact bytes, observations and redaction would enable black-box scenario tests without rebuilding SDK state.
 
 SDK shared checks can reproduce SDK bugs. Keep these diagnostics labelled; grow independently authored wire-level assertions, published vectors, and a second implementation before claiming interoperability or certification.
 
@@ -44,7 +44,7 @@ The workbench independently checks selected JSON rules for RS-facing AS discover
 
 RS-facing errors need their own registry and §3.5 response convention, not accidental reuse of core AS errors.
 
-The normative `iss` requirement must outrank the example that omits it. Conversely, an example mustn't create a requirement for HTTP 200, or for a single header.
+The normative `iss` requirement outranks the example that omits it. No example may require HTTP 200 or a single header.
 
 Request `proof` is recommended and `access` optional. A context-free validator mustn't invent mandatory fields for convenience.
 
@@ -52,9 +52,9 @@ Bound/bearer rules need conditional assertions. Caller-declared `RsContext` perm
 
 Unknown extensions and resource-type semantics remain untested; membership in a registry can't establish the full processing of a parameter, or the effective rights it grants.
 
-Lossy JSON maps and URL normalization can hide ambiguity. Duplicate members and parser limitations remain inconclusive; identity compares original strings.
+Lossy JSON maps and URL normalization can hide ambiguity. Duplicate members and parser limitations remain inconclusive, and identity compares the original strings.
 
-Next evidence requires real signed RS requests with the RS's own key, working tokens and negative tests for revocation, audience and rights. An application's `/resource-check` isn't automatically RFC 9767 introspection. This increment introduces no private-key upload or public credentialed probe.
+Next evidence needs requests signed with the RS's own key, working tokens and refusal tests for revocation, audience and rights. An application's `/resource-check` isn't by itself RFC 9767 introspection. This work adds no private-key upload or public credentialed probe.
 
 ### Resource registration
 
@@ -78,9 +78,9 @@ A diagnostic can select token requests without making `access_token` mandatory f
 
 The grant response has no dedicated proof-of-derivation field. Its string token value and rights can't demonstrate parent-child lineage, downscope, downstream audience, consent or linked revocation. Those require an actual authenticated scenario, and local token attenuation is an entirely separate path.
 
-Independent assertions need precise names and limits. The response value assertion checks only string shape; its token68 encoding obligation stays explicitly untested. Outer key, management, continuation, interaction and error types likewise don't validate their contents or protocol applicability.
+Independent assertions need precise names and limits. The value assertion checks only string shape; its token68 encoding stays explicitly untested. Outer key, management, continuation, interaction and error types don't validate contents or protocol applicability either.
 
-Request and response arrays have their own label requirements. A single imported response can't establish label correspondence or matching cardinality. Empty arrays mustn't produce fictitious per-token passes. Responses with no access token don't establish an issuance observation.
+Request and response arrays have their own label rules. One imported response can't establish label correspondence or matching cardinality. Empty arrays mustn't produce fictitious per-token passes. A response without an access token observes no issuance.
 
 The new fixtures and offline tests exercise these distinctions without querying an AS. They upload no private proof material, infer no network authority from declared context and leave the existing probe/consent/allowlist policy unchanged.
 

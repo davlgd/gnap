@@ -42,7 +42,7 @@ Run the same command with `--maintenance` in an interactive terminal during an a
 2. Stop only the authorization server, check that it's unavailable, then confirm
 3. Restart the authorization server with the same configuration, wait until it's ready, then confirm
 
-After the first step, a fresh request with the existing authority must succeed. After the second, an otherwise authorized resource operation must report the resource server's status 503. After the third, the old volatile authority must be refused, and a new grant must succeed before the final revocation.
+After the first step, a fresh request with the same authority must succeed. After the second, an otherwise authorized operation must report the RS's status 503. After the third, the old authority must be refused, and a new grant must succeed before the final revocation.
 
 Each confirmation allows five minutes. The driver checks a fifteen-minute scenario budget, shorter than the twenty-minute parent lifetime. Exceeding a timing limit is inconclusive. If interrupted, restore the AS and RS, inspect deployment status, and account for any unconfirmed cleanup; don't leave the shared sandbox stopped. This mode checks a fresh request after RS restart, not replay of identical signed bytes. Exact-request replay across restart and racing RS instances is covered separately by the local Rust process tests.
 

@@ -119,4 +119,4 @@ Each application has its own manifest:
 cargo run --manifest-path apps/delegation-demo/Cargo.toml --locked
 ```
 
-Open the address that the application prints. The [delegation lab](../apps/delegation-demo/README.md#run), the [workbench](../apps/conformance-web/README.md#run-and-test), and [Biscuit files](../apps/biscuit-files/README.md#run-locally) explain their configuration; use only synthetic data with them.
+Open the address that the application prints. The [delegation lab](../apps/delegation-demo/README.md#run), the [workbench](../apps/conformance-web/README.md#run-and-test), and [Biscuit files](../apps/biscuit-files/README.md#run-locally) explain their configuration. Use only synthetic data with any of them.

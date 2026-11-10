@@ -1,6 +1,6 @@
 # Cryptographic test fixtures
 
-`rfc9421-b12.pkcs1.pem` contains the example RSA private key published in [RFC 9421, Appendix B.1.2](https://www.rfc-editor.org/rfc/rfc9421.html#appendix-B.1.2). It is converted to PKCS#1 for the test implementation.
+`rfc9421-b12.pkcs1.pem` holds the example RSA private key of [RFC 9421, Appendix B.1.2](https://www.rfc-editor.org/rfc/rfc9421.html#appendix-B.1.2). It is converted to PKCS#1 for the tests.
 
 This private key is deliberately public. It is test material, not a deployment credential, and must never protect real data. The HTTP delegation application generates its own key at startup and does not load these fixtures.
 

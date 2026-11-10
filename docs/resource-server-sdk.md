@@ -41,7 +41,7 @@ The authorization server and the resource server agree on audience identifiers, 
 
 ## Handle the result
 
-`Denied` covers a malformed presentation, an inactive introspection result, missing rights, a wrong audience, an invalid time or proof, a replay, and a policy refusal. `Unavailable` covers transport errors, unusable responses, an incompatible profile, and a policy that can't decide. Neither carries an upstream body, credential, or transport message. You choose the HTTP status to return, as the delegation lab does with 401 and 503.
+`Denied` covers a malformed presentation, an inactive introspection, missing rights, a wrong audience, an invalid time or proof, a replay, and a policy refusal. `Unavailable` covers transport errors, unusable responses, an incompatible profile, and an undecided policy. Neither carries an upstream body, credential, or transport message. You choose the HTTP status, as the delegation lab does with 401 and 503.
 
 An inactive result can mean that the authorization server couldn't determine the token's validity, not that the token is invalid.
 
@@ -57,7 +57,7 @@ The SDK decodes `aud`, `nbf`, `sub`, and `instance_id` strictly: `nbf` is an inc
 
 The transport must authenticate HTTPS, keep the signed URI and bytes intact, refuse redirects, unwanted proxies, and unapproved destinations, and bound buffering, connection time, and total execution. The SDK checks its 8,192-byte limit after receipt, which can't stop an adapter from first allocating a larger body.
 
-The replay memories must reserve atomically, nonces for `httpsig` and proof identifiers for `jws` and `jwsd`, for the whole acceptance window of the verifier. Use a shared or durable store when replicas or restart recovery are part of your guarantees: the SDK provides neither a permissive no-op store nor an in-memory default. Keep this namespace apart from the one the authorization server uses to verify introspection requests.
+The replay memories must reserve atomically, nonces for `httpsig` and proof identifiers for `jws` and `jwsd`, for the verifier's whole acceptance window. Use a shared or durable store when replicas or restart recovery are part of your guarantees: the SDK provides neither a permissive no-op store nor an in-memory default. Keep this namespace apart from the one the AS uses for introspection requests.
 
 A revocation can race a decision already made, and the next request always gets a fresh one: the SDK reuses no positive result and retries no failure. `TrustedAs::for_local_development` allows plain HTTP on the loopback interface for local tests, as a development exception that keeps exact endpoint matching and never allows HTTP elsewhere.
 

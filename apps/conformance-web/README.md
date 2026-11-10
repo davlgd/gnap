@@ -8,7 +8,7 @@ The opt-in [authenticated lifecycle scenario](../../docs/authenticated-workbench
 
 ## Run and test
 
-Run from the repository root. Rust 1.98 is the tested toolchain for this app; the SDK's MSRV isn't a promise for this independently locked HTTP application.
+Run from the repository root. This independently locked app is tested with Rust 1.98, not the SDK's MSRV.
 
 ```bash
 cargo test --manifest-path apps/conformance-web/Cargo.toml --locked
@@ -68,13 +68,13 @@ The endpoint is HTTPS on port 443 with a public DNS name, without credentials, q
 
 ## Tested scope and its limits
 
-The three core message kinds reuse `gnap-types` deserialization and explicitly selected `validate()` methods, plus `gnap-crypto` Content-Digest verification:
+The three core message kinds reuse `gnap-types` deserialization and validators, plus the `gnap-crypto` Content-Digest check:
 
 - JSON shape and polymorphism; no repeated `client` in continuation requests.
 - Selected key presentation, display URI, interaction finish, continuation URI, token, and subject-identifier consistency rules.
 - Captured AS response `Cache-Control: no-store` and optional body digest.
 
-These are **shared implementation checks, not an independent oracle**. There is no claim that these imports establish complete key validity, extension validation, stateful flow correctness, signatures, replay detection, assertion authenticity, RS rights enforcement, authenticated RFC 9767 introspection, or interoperability with another vendor. Even an empty grant response can pass the JSON shape check; whether it is appropriate in a particular exchange is outside an isolated message check. Missing optional material is `not_tested`, never a vacuous pass.
+These are **shared implementation checks, not an independent oracle**. There is no claim that these imports establish complete key validity, extension validation, stateful flow correctness, signatures, replay detection, assertion authenticity, RS rights enforcement, authenticated RFC 9767 introspection, or interoperability with another vendor. Even an empty grant response can pass the JSON shape check; whether it suits a particular exchange is outside an isolated message check. Missing optional material is `not_tested`, never a vacuous pass.
 
 The optional lifecycle scenario tests selected live outcomes separately; it doesn't turn an imported message into authenticated evidence.
 
@@ -112,13 +112,13 @@ These HTTP/JSON/URL assertions are authored independently of the SDK's `AsDiscov
 
 Discovery import reports use `gnap-as-discovery-diagnostics-v1`, the `Report` envelope with `kind` and `independence`. Live OPTIONS reports use `gnap-as-discovery-probe-v1`, the `ProbeReport` envelope with `target_id`, `role`, `operation` and `limitations`. These distinct identifiers let consumers select the correct response shape; both reuse the same discovery checks. Executing declared capabilities and a client discovery helper remain untested. RS discovery and introspection under RFC 9767 are inspected only as imported message shapes in the next section, never as authenticated behavior. Synthetic fixtures and response-adapter tests aren't evidence that a deployed AS or the complete protocol has passed.
 
-A separate [manual network smoke](LIVE_SMOKE.md) records the actual local workbench → deployed HTTPS AS path, observed per-check results, shared cooldown, reproduction commands and the remaining fixture-only limits. It is a dated observation, not a source-revision attestation or certification receipt.
+A separate [manual network smoke](LIVE_SMOKE.md) records the local workbench → deployed HTTPS AS path, observed per-check results, shared cooldown, reproduction commands and remaining fixture-only limits. It is a dated observation, not a revision attestation or certification.
 
 References: [RFC 9635](https://www.rfc-editor.org/rfc/rfc9635.html), [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767.html).
 
 ## RFC 9767 imported-message diagnostics
 
-These eight kinds use direct `serde_json` assertions, **not SDK message validators**. Only registry data comes from `gnap-registry`; the separately named, optional digest check still uses `gnap-crypto`. No new network probe or private-key input is included. No report certifies an AS, RS or client.
+These eight kinds use direct `serde_json` assertions, **not SDK message validators**. Only registry data comes from `gnap-registry`; the optional digest check uses `gnap-crypto`. It adds no network probe or private-key input. No report certifies an AS, RS or client.
 
 | Import kind | Report profile | Optional `rs_context` fields |
 | --- | --- | --- |
@@ -137,7 +137,7 @@ These eight kinds use direct `serde_json` assertions, **not SDK message validato
 
 **Introspection request**, [§§3.2–3.3](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.2): required token string and RS identity outer shape, optional access shape and recommended `proof` name. Missing `proof` isn't a missing-MUST failure; missing `access` is allowed. No signature or equality to the original client token presentation is verified. Unknown extensions/rights semantics remain `not_tested`: a real AS unable to process a supplied request parameter mustn't declare the token active.
 
-**Introspection response**, [§3.3](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.3): required boolean `active`; inactive responses omit every other member. Active responses require `access` (an empty array is valid) and `iss`, despite the example omitting it. Token `value` is forbidden. Bound tokens require `key`, bearer tokens forbid it. The condition is `not_tested` when it can't be determined from a bearer flag or caller context. Bearer plus key always fails, regardless of context. Keys are checked only for object/reference shape; optional metadata only for selected types, not validity of their claims.
+**Introspection response**, [§3.3](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.3): required boolean `active`; inactive responses omit every other member. Active responses require `access` (an empty array is valid) and `iss`, though the example omits it. Token `value` is forbidden. Bound tokens require `key`, bearer tokens forbid it. The condition is `not_tested` when neither a bearer flag nor caller context decides it. Bearer plus key always fails, whatever the context. Keys are checked only for object/reference shape; optional metadata only for selected types, not their claims' validity.
 
 **RS-facing error**, [§3.5](https://www.rfc-editor.org/rfc/rfc9767.html#section-3.5): a single `error` member, string code or object/ASCII code with optional string description, the distinct RS error registry, and HTTP 400 compared only when declared in context. These aren't core AS errors.
 
@@ -161,12 +161,12 @@ The following checks always remain `not_tested` on both profiles:
 
 - `derivation-proof-and-parent-validity`: key ownership, signature/replay and parent validity/equality to the original presentation.
 - `derivation-parent-rs-suitability`: the AS's mandatory RS1 suitability decision.
-- `derivation-effective-rights-and-audience`: actual authority, consent and downstream audience. No universal subset policy is inferred from a demo.
-
-`derivation-revocation-and-lineage`: parent-child relationships and later expiry/revocation. Cascading revocation isn't imposed as a blanket §4 rule.
-
-- `derivation-grant-exchange`: state, matching, interaction, continuation, errors, nested keys/management, token formats and extension semantics.
+- `derivation-effective-rights-and-audience`: actual authority, consent and downstream audience.
+- `derivation-revocation-and-lineage`: parent-child relationships and later expiry/revocation.
+- `derivation-grant-exchange`: state, matching, interaction, continuation, errors, keys, formats, extensions.
 - `derivation-token-value-encoding`: token68 and token content validation.
+
+No universal subset policy is inferred from a demo, and cascading revocation isn't imposed as a blanket §4 rule.
 
 Additional members, including an unrecognized `type_token`, aren't prohibited or interpreted as format negotiation. No comparison context, private-key input, new HTTP assertion or network probe is added. Imported headers don't authenticate these messages. Existing size, duplicate-name and parser limits apply unchanged.
 
@@ -180,7 +180,7 @@ The independent JSON comparison checks the shape of each `access_token` field, u
 
 Absent fields and empty arrays don't establish issuance. An empty array has an observable array shape but no token labels to compare. Ambiguous JSON members and parser limits remain inconclusive. Invalid labels are reported separately from correspondence, which can't be checked against invalid input. Token values, rights, extensions, consent, signatures and lifecycle are outside this comparison. Its three always-untested checks name authenticity, authority and lifecycle; passing label checks isn't a protocol verdict.
 
-Headers, a digest and `rs_context` are rejected for this kind: the pair isn't one HTTP message whose bytes or headers could be verified. The existing 32 KiB body and 64 KiB upload limits apply. No network request is added. Use synthetic data, not production tokens or authenticated traces.
+This kind rejects headers, a digest and `rs_context`: the pair isn't one HTTP message with verifiable bytes or headers. The 32 KiB body and 64 KiB upload limits apply. No network request is added. Use synthetic data, not production tokens or authenticated traces.
 
 The browser includes a partial-approval example. Offline fixtures are `fixtures/token-exchange.json` and `fixtures/invalid-token-exchange.json`; `tests/token_exchange_imports.rs` exercises the independent comparison and its HTTP import endpoint. These are synthetic examples, not live exchange evidence.
 
@@ -200,14 +200,14 @@ Tests in `tests/rs_imports.rs`, `tests/resource_registration_imports.rs` and `te
 
 ## Bounded live AS/RS probes
 
-The **operator** may set `GNAP_TEST_TARGETS` to a JSON array of at most eight canonical, exact HTTPS grant endpoint URLs. Default: `[]` (disabled).
+By default, `GNAP_TEST_TARGETS` is `[]` and the probe is disabled. The **operator** may set it to a JSON array of at most eight canonical, exact HTTPS grant endpoint URLs.
 
 ```bash
 GNAP_TEST_TARGETS='["https://your-owned-test-as.example/gnap"]' \
   cargo run --manifest-path apps/conformance-web/Cargo.toml --locked
 ```
 
-Setting this configuration is the operator's attestation that they own or have permission to test these endpoints. There is no automated third-party ownership verification. Don't configure production endpoints. Public users choose an index returned by `GET /api/targets` and explicitly consent:
+This configuration attests that the operator owns these endpoints or may test them. There is no automated third-party ownership verification. Don't configure production endpoints. Public users choose an index returned by `GET /api/targets` and explicitly consent:
 
 ```json
 {"target_id":0,"consent":true}
@@ -221,7 +221,7 @@ For discovery on a configured **AS** target, send:
 {"target_id":0,"consent":true,"operation":"as_discovery"}
 ```
 
-This sends one OPTIONS request to the same exact configured grant endpoint, with no body, authorization, cookies, proof or Origin header. An authentication middleware denial, unsupported-method response or redirect is reported as a failed discovery status check, not worked around using credentials or another URL. The response passes through the same independent discovery assertions as imports, with actual status/headers and the configured URL as context. Redirect locations and all server response values are never echoed or followed. Omitting `operation`, or setting it to `"rejection"`, preserves the previous API behavior. An RS target with `"as_discovery"` is rejected before DNS/network activity.
+This sends one OPTIONS request to the exact configured grant endpoint, with no body, authorization, cookies, proof or Origin header. A middleware denial, unsupported method or redirect is reported as a failed discovery status check, not worked around using credentials or another URL. The response passes through the same independent discovery assertions as imports, with actual status/headers and the configured URL as context. Redirect locations and server response values are never echoed or followed. Omitting `operation`, or setting `"rejection"`, keeps the previous behavior. An RS target with `"as_discovery"` is rejected before DNS/network activity.
 
 Set `GNAP_RS_TEST_TARGETS` to an additional JSON array of at most eight exact protected resource URLs, with the same URL restrictions. A RS probe sends one credential-free GET and checks for 401 or 403. This is an operator-defined protected-resource policy test, not a claim that every GNAP resource must be private. A deny-all server also passes. Valid-token access, proof, rights, audience, introspection and lifecycle remain untested. `/api/targets` includes the server-selected `role`, `as` or `rs`, which public requests can't change. AS rejection, AS discovery and RS rejection share the same process-global cooldown and egress protections. Existing AS allowlist configuration therefore authorizes both fixed AS operations; no new caller-controlled destination is added.
 
@@ -229,7 +229,7 @@ Safety boundaries: no caller URL, no suffix/wildcard allowlist, no query, creden
 
 ## Deployment on Clever Cloud
 
-Deploy from the repository root, because dependencies use `../../crates/*`. Build this application's manifest, not the library workspace alone:
+Deploy from the repository root, since dependencies use `../../crates/*`, and build this application's manifest:
 
 ```bash
 cargo build --release --locked --manifest-path apps/conformance-web/Cargo.toml
@@ -241,6 +241,6 @@ Executable: `apps/conformance-web/target/release/gnap-conformance-web`. Use a Ru
 
 Only synthetic test data. Imports reach the application server; this isn't an offline browser validator. The application has no database, request/body logging, analytics, storage API, or persistence. Hosting access logs, platform backups, crash dumps and browser form retention are outside this guarantee. Reports avoid raw parser error strings because SDK errors can include submitted secrets.
 
-Limits: 64 KiB upload, 32 KiB body string, 64 header pairs, 128-byte header names, 4096-byte header values/digest, no CR/LF in imported headers, 16 in-flight application requests, 5-second HTTP-handler deadline. Import parsing is bounded synchronous CPU work. The opt-in lifecycle worker has a separate five-minute budget and can outlive the initiating HTTP request; closing a page doesn't cancel an authorized scenario. Its [limits](../../docs/authenticated-workbench.md#admission-and-network-limits) also bound retained sessions, credentials, reports and outgoing requests. Axum/Hyper parse HTTP. Reverse-proxy header/connection/body deadlines and rate limiting are still required against distributed flooding and slow headers; the app doesn't claim general DoS immunity.
+Limits: 64 KiB upload, 32 KiB body string, 64 header pairs, 128-byte header names, 4096-byte header values/digest, no CR/LF in imported headers, 16 in-flight requests, 5-second HTTP-handler deadline. Import parsing is bounded synchronous work. The opt-in lifecycle worker has a separate five-minute budget and can outlive its HTTP request; closing a page doesn't cancel an authorized scenario. Its [limits](../../docs/authenticated-workbench.md#admission-and-network-limits) also bound retained sessions, credentials, reports and outgoing requests. Axum/Hyper parse HTTP. Reverse-proxy header/connection/body deadlines and rate limiting are still required against flooding and slow headers; the app claims no general DoS immunity.
 
 UI uses `textContent`, no imported HTML, no externally hosted assets, restrictive CSP and `no-store`. Import and unsigned-probe requests omit credentials; the opt-in lifecycle page uses its own HttpOnly session cookie. Don't paste live tokens or private keys even though reports don't reflect their values. The clear button clears the visible fields/report, not forensic browser or hosting history.
