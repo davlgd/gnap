@@ -229,13 +229,13 @@ async fn two_sessions_record_their_own_exchanges_and_no_secret() {
         .await
         .unwrap();
     }
-    let wait =
-        dispatch(&app, a.clone(), "status".into()).await.unwrap()["continuation_wait_seconds"]
-            .as_u64()
-            .unwrap();
-    tokio::time::sleep(Duration::from_secs(wait)).await;
-    dispatch(&app, a.clone(), "continue".into()).await.unwrap();
-    dispatch(&app, b.clone(), "continue".into()).await.unwrap();
+    // Each session waits for its own continuation: B started after A, and
+    // its wait may end a second later.
+    for id in [&a, &b] {
+        tokio::time::sleep(Duration::from_secs(announced_wait(&app, id).await)).await;
+        let view = dispatch(&app, id.clone(), "continue".into()).await.unwrap();
+        assert_eq!(view["token_present"], true, "{view}");
+    }
     dispatch(&app, a.clone(), "read".into()).await.unwrap();
     dispatch(&app, a.clone(), "rotate".into()).await.unwrap();
     dispatch(&app, b.clone(), "read-archive".into())
